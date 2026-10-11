@@ -15,9 +15,10 @@ vi.mock("react-router-dom", async (original) => ({
 vi.mock("./provider", () => ({
   useNavigationDriver: () => harness.store!,
 }));
+vi.mock("./page-stack", () => ({ usePageLive: () => true }));
 import { useNav } from "@/router";
 
-const tabs: MainTab[] = ["chat", "activity", "tasks"];
+const tabs: Exclude<MainTab, "me">[] = ["chat", "activity", "tasks"];
 const utilities = ["/members", "/computers", "/settings"];
 const url = (store: NavigationStore) => {
   const { location } = store.getSnapshot();
@@ -51,45 +52,58 @@ it.each(cases)(
   },
 );
 
-it("mobile Tab restoration lands on the Tab's own page, not a More page parked on it", () => {
+it("mobile Tab restoration returns each Tab's own stack, pushed pages included", () => {
   const store = new NavigationStore("/chat/d/conversation");
   harness.store = store;
-  store.go("/settings");
   store.selectTab("tasks");
   store.go("/tasks?task=task");
-  store.go("/members");
-  useNav().toActivity();
   const nav = useNav();
-  const observations: string[] = [];
-  store.subscribe(() => observations.push(`${store.getSnapshot().tab}:${url(store)}`));
-  nav.navigate({ kind: "tab", tab: "chat" });
-  expect(observations).toEqual(["chat:/chat/d/conversation"]);
-  nav.navigate({ kind: "tab", tab: "tasks" });
-  expect(url(store)).toBe("/tasks?task=task");
-});
-
-it("selecting the current Tab from a More page returns to the Tab's page", () => {
-  const store = new NavigationStore("/tasks?task=task");
-  store.go("/members");
-  store.selectTab("tasks");
-  expect(url(store)).toBe("/tasks?task=task");
-});
-
-it("restoration leaves every stacked More page", () => {
-  const store = new NavigationStore("/activity");
+  nav.navigate({ kind: "tab", tab: "me" });
   store.go("/members");
   store.go("/members/u/person");
-  store.selectTab("chat");
-  store.selectTab("activity");
-  expect(url(store)).toBe("/activity");
+  nav.navigate({ kind: "tab", tab: "chat" });
+  expect(url(store)).toBe("/chat/d/conversation");
+  nav.navigate({ kind: "tab", tab: "tasks" });
+  expect(url(store)).toBe("/tasks?task=task");
+  nav.navigate({ kind: "tab", tab: "me" });
+  expect(url(store)).toBe("/members/u/person");
+  store.back();
+  store.back();
+  expect(url(store)).toBe("/me");
+  expect(store.getSnapshot().canBack).toBe(false);
 });
 
-it("a Tab whose only entry is a More page restores to its root", () => {
-  const store = new NavigationStore("/settings");
-  store.selectTab("tasks");
-  store.selectTab("chat");
-  expect(url(store)).toBe("/chat");
+it("selecting the current Tab on its root publishes nothing", () => {
+  const store = new NavigationStore("/me");
+  const listener = vi.fn();
+  store.subscribe(listener);
+  store.selectTab("me");
+  expect(listener).not.toHaveBeenCalled();
+});
+
+it("selecting the current Tab again pops its stack to the root", () => {
+  const store = new NavigationStore("/me");
+  store.go("/members");
+  store.go("/members/u/person");
+  store.selectTab("me");
+  expect(url(store)).toBe("/me");
   expect(store.getSnapshot().canBack).toBe(false);
+});
+
+it("a deep link with no stack beneath it still returns to the Tab root", () => {
+  const store = new NavigationStore("/computers?computer=host");
+  store.selectTab("me");
+  expect(url(store)).toBe("/me");
+});
+
+it("a Members, Computers or Settings deep link opens in Me with Me as its parent", () => {
+  for (const utility of utilities) {
+    const store = new NavigationStore(utility);
+    expect(store.getSnapshot().tab).toBe("me");
+    expect(store.getSnapshot().canBack).toBe(true);
+    store.back();
+    expect(url(store)).toBe("/me");
+  }
 });
 
 it("same-root switches publish once, while disposed section callbacks do nothing", () => {
@@ -103,4 +117,20 @@ it("same-root switches publish once, while disposed section callbacks do nothing
   store.openSection("tasks");
   expect(store.getSnapshot().tab).toBe("activity");
   expect(url(store)).toBe("/activity");
+});
+
+it("desktop utility entry lands in the Me history, so folding to phone width keeps Me", () => {
+  const store = new NavigationStore("/chat/d/conversation");
+  const listener = vi.fn();
+  store.subscribe(listener);
+  store.openSection("me", "/members");
+  expect(listener).toHaveBeenCalledTimes(1);
+  expect(store.getSnapshot().tab).toBe("me");
+  expect(url(store)).toBe("/members");
+  store.openSection("chat");
+  expect(url(store)).toBe("/chat");
+  store.openSection("me", "/settings");
+  expect(url(store)).toBe("/settings");
+  store.back();
+  expect(url(store)).toBe("/members");
 });

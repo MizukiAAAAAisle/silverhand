@@ -1,7 +1,7 @@
 import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import { SidebarReveal, SidebarRevealRow } from "@/components/layout/sidebar-reveal";
 import { useMemo } from "react";
-import { MessageIcon } from "@/icons";
+import { DirectMessageIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useDraftCounterpart } from "@/features/direct-pairs/use-draft-counterpart";
@@ -74,7 +74,7 @@ export function DirectMessagesGroup(props: {
     <SidebarSection
       label="DIRECT MESSAGES"
       labelClassName="text-xs"
-      icon={<MessageIcon className="size-3.5" />}
+      icon={<DirectMessageIcon className="size-3.5" />}
       // The count is the number of lines the section shows, draft included —
       // a count that disagreed with the visible rows would read as a bug.
       count={rows.length}

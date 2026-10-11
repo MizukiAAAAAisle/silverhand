@@ -1,5 +1,10 @@
 import { useCompactLayout } from "@/navigation/layout";
 import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
+import {
+  useNativeBar,
+  type PageBarDeclaration,
+  type PageBarHandlers,
+} from "@/components/layout/native-page-bar";
 import { ArrowLeftIcon, CloseIcon } from "@/icons";
 
 /**
@@ -17,12 +22,18 @@ import { ArrowLeftIcon, CloseIcon } from "@/icons";
  * is a card `<section>` with `--card-radius` / `--card-shadow`). Forcing one
  * frame component would degrade into a soup of element / ref / bg / card props;
  * the drift-prone thing is the header row, so that is what we hoist.
+ *
+ * On compact iOS a panel that declares `nativeBar` has its header drawn in the
+ * native bar, and a clearance takes the web row's place. Native Back leaves
+ * the panel, so the close button is not declared.
  */
 export function SidePanelHeader({
   children,
   actions,
   onClose,
   onBack,
+  nativeBar = null,
+  nativeHandlers = {},
 }: {
   /** Leading/main header content — usually an icon + `<SidePanelHeaderTitle>`,
    *  or a custom identity block (avatar + name/description). It carries the
@@ -35,10 +46,48 @@ export function SidePanelHeader({
   actions?: React.ReactNode;
   onBack?: () => void;
   onClose?: () => void;
-}): JSX.Element {
+  /** The header as the native bar draws it; null keeps the web row. */
+  nativeBar?: PageBarDeclaration | null;
+  nativeHandlers?: PageBarHandlers;
+}): JSX.Element | null {
   const compact = useCompactLayout();
   const closeButton = onClose ? <SidePanelCloseButton onClose={onClose} /> : null;
+  const native = useNativeBar(nativeBar, nativeHandlers);
 
+  if (native.active) {
+    return native.clearance;
+  }
+
+  return (
+    <>
+      <SidePanelHeaderRow compact={compact} onBack={onBack}>
+        {children}
+        {actions ? (
+          // `data-channel-actions` lays the trailing controls out only; each
+          // button declares its own poster sticker axes.
+          <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1.5">
+            {actions}
+            {closeButton}
+          </div>
+        ) : onClose ? (
+          // Close-only panels keep the button standalone (no `data-channel-actions`
+          // wrapper); `ml-auto` pins it right when there is no `flex-1` content.
+          <SidePanelCloseButton onClose={onClose} className="ml-auto" />
+        ) : null}
+      </SidePanelHeaderRow>
+    </>
+  );
+}
+
+function SidePanelHeaderRow({
+  compact,
+  onBack,
+  children,
+}: {
+  compact: boolean;
+  onBack?: () => void;
+  children: React.ReactNode;
+}): JSX.Element {
   return (
     <header
       data-side-panel-header
@@ -56,18 +105,6 @@ export function SidePanelHeader({
         </button>
       ) : null}
       {children}
-      {actions ? (
-        // `data-channel-actions` lays the trailing controls out only; each
-        // button declares its own poster sticker axes.
-        <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1.5">
-          {actions}
-          {closeButton}
-        </div>
-      ) : onClose ? (
-        // Close-only panels keep the button standalone (no `data-channel-actions`
-        // wrapper); `ml-auto` pins it right when there is no `flex-1` content.
-        <SidePanelCloseButton onClose={onClose} className="ml-auto" />
-      ) : null}
     </header>
   );
 }

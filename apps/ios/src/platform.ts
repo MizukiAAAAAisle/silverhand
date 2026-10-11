@@ -10,6 +10,8 @@ import {
 import type { NativeBridge } from "./bridge";
 import { NativeEventSocket } from "./event-socket";
 import { createIOSNavigation } from "./navigation";
+import { createIOSTitlebar } from "./titlebar";
+import { createIOSPageBar } from "./page-bar";
 import { createIOSFiles } from "./files";
 
 function parse(text?: string): unknown {
@@ -53,6 +55,8 @@ export function createIOSPlatform(
 
   return {
     navigation: createIOSNavigation(bridge),
+    titlebar: createIOSTitlebar(bridge),
+    pageBar: createIOSPageBar(bridge),
     client: {
       getConnectionPolicy: async () => ({ allow_insecure_remote: false }),
       getConnectionInfo: async () => {

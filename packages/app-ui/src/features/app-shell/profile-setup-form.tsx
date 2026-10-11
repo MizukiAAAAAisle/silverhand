@@ -6,6 +6,7 @@ import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
+import { cn } from "@/lib/cn";
 import { rejectDisplayName } from "@/features/identity/display-name";
 import { nameFormatMessage } from "@/features/identity/use-name-availability";
 
@@ -46,6 +47,9 @@ export function ProfileSetupForm({
     return () => URL.revokeObjectURL(url);
   }, [avatar]);
 
+  const previewName = displayName.trim();
+  const previewHandle = username.trim();
+
   const displayNameError = submitted ? rejectDisplayName(displayName.trim()) : null;
   const usernameError = submitted
     ? username.trim()
@@ -74,16 +78,17 @@ export function ProfileSetupForm({
       <form
         onSubmit={submit}
         data-auth-form
-        className="flex w-full max-w-90 flex-col gap-5"
+        className="flex w-full max-w-90 flex-col gap-4"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
-        <h1 className="mb-2 text-3xl font-semibold tracking-tight">Set up your profile</h1>
-        <div className="flex items-center gap-3">
+        <h1 className="mb-3 text-3xl font-semibold tracking-tight">Set up your profile</h1>
+        <div className="mb-3 flex items-center gap-3">
           <AvatarPickerButton
             size={AVATAR_PX["3xl"]}
             label={avatar ? "Edit" : "Add"}
             ariaLabel="Choose profile photo"
             disabled={pending}
+            className="border border-border-subtle"
             onPick={(file) => {
               const validation = validateAvatarFile(file);
               setAvatarError(validation?.message ?? null);
@@ -96,12 +101,22 @@ export function ProfileSetupForm({
               {avatarUrl ? (
                 <img src={avatarUrl} alt="Profile preview" className="size-full object-cover" />
               ) : (
-                <UserIcon className="size-6 text-text-muted" />
+                <UserIcon className="size-7 text-text-muted" />
               )}
             </span>
           </AvatarPickerButton>
-          <div className="flex flex-col gap-1">
-            <span className="text-sm">Profile photo</span>
+          <div className="flex min-w-0 flex-col gap-0.5">
+            <p
+              className={cn(
+                "truncate text-base font-semibold leading-tight",
+                previewName ? "text-text-primary" : "text-text-muted",
+              )}
+            >
+              {previewName || "Your name"}
+            </p>
+            <p className="truncate font-mono text-xs text-text-muted">
+              @{previewHandle || "username"}
+            </p>
             {avatar ? (
               <button
                 type="button"
@@ -112,7 +127,7 @@ export function ProfileSetupForm({
                   setAvatarError(null);
                 }}
               >
-                Remove
+                Remove photo
               </button>
             ) : null}
           </div>
@@ -130,6 +145,7 @@ export function ProfileSetupForm({
             id={`${id}-display-name`}
             autoFocus
             autoComplete="name"
+            placeholder="Ada Lovelace"
             value={displayName}
             disabled={pending}
             onChange={(event) => setDisplayName(event.target.value)}
@@ -151,6 +167,7 @@ export function ProfileSetupForm({
             autoComplete="username"
             autoCapitalize="none"
             spellCheck={false}
+            placeholder="ada"
             value={username}
             disabled={pending}
             onChange={(event) => setUsername(event.target.value)}
@@ -169,11 +186,11 @@ export function ProfileSetupForm({
           </p>
         ) : null}
         {onRetry ? (
-          <Button type="button" variant="primary" className="w-full" onClick={onRetry}>
+          <Button type="button" variant="primary" className="mt-2 w-full" onClick={onRetry}>
             Retry
           </Button>
         ) : (
-          <Button type="submit" variant="primary" className="w-full" disabled={pending}>
+          <Button type="submit" variant="primary" className="mt-2 w-full" disabled={pending}>
             {pending ? <SpinnerIcon className="size-4 animate-spin" aria-hidden /> : null}
             Continue
           </Button>

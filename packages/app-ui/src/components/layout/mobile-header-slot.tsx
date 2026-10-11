@@ -9,10 +9,12 @@ import {
 } from "react";
 import { createPortal } from "react-dom";
 import { useCompactLayout } from "@/navigation/layout";
+import { usePageLive } from "@/navigation/page-stack";
 import type { AppSection } from "./nav-rail";
 
 type Registration = { section: AppSection; node: HTMLSpanElement };
 const MobileHeaderContext = createContext<{
+  section: AppSection;
   target: HTMLSpanElement | null;
 
   register: (owner: symbol, entry: Registration | null) => void;
@@ -46,7 +48,7 @@ export function MobileHeaderProvider({
   const active = [...slots.values()].filter((entry) => entry.section === section).at(-1);
   const target = active?.node ?? null;
   return (
-    <MobileHeaderContext.Provider value={{ target, register }}>
+    <MobileHeaderContext.Provider value={{ section, target, register }}>
       <MobileHeaderActionHost section={section}>{children}</MobileHeaderActionHost>
     </MobileHeaderContext.Provider>
   );
@@ -63,7 +65,9 @@ function MobileHeaderActionHost({
   const value = useMemo(() => ({ section, target, setTarget }), [section, target]);
 
   return (
-    <MobileHeaderActionContext.Provider value={value}>{children}</MobileHeaderActionContext.Provider>
+    <MobileHeaderActionContext.Provider value={value}>
+      {children}
+    </MobileHeaderActionContext.Provider>
   );
 }
 
@@ -77,8 +81,9 @@ export function useMobileHeaderActionRef() {
 export function MobileHeaderAction({ children }: { children: ReactNode }) {
   const context = useContext(MobileHeaderActionContext);
   const section = useContext(MobileHeaderSection);
+  const live = usePageLive();
 
-  if (!context?.target || section !== context.section) {
+  if (!context?.target || section !== context.section || !live) {
     return null;
   }
 
@@ -95,6 +100,14 @@ export function MobileHeaderScope({
   return <MobileHeaderSection.Provider value={section}>{children}</MobileHeaderSection.Provider>;
 }
 
+/** Whether this subtree belongs to the section on screen. Hidden sections may
+ * stay mounted but must not publish the header. */
+export function useHeaderSectionVisible(): boolean {
+  const context = useContext(MobileHeaderContext);
+  const section = useContext(MobileHeaderSection);
+  return context !== null && section === context.section;
+}
+
 export function useMobileHeaderTarget() {
   return useContext(MobileHeaderContext)?.target ?? null;
 }
@@ -103,13 +116,14 @@ export function MobileNavigationSlot() {
   const context = useContext(MobileHeaderContext);
   const section = useContext(MobileHeaderSection);
   const compact = useCompactLayout();
+  const live = usePageLive();
   const owner = useRef(Symbol("mobile-header-slot"));
   const register = context?.register;
   const ref = useCallback(
     (node: HTMLSpanElement | null) => {
-      register?.(owner.current, node && section ? { section, node } : null);
+      register?.(owner.current, node && section && live ? { section, node } : null);
     },
-    [register, section],
+    [register, section, live],
   );
   if (!compact || !context || !section) return null;
   return <span ref={ref} data-mobile-navigation-slot className="shrink-0 empty:hidden" />;

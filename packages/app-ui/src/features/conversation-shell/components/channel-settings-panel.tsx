@@ -80,6 +80,14 @@ export function ChannelSettingsPanel({
       <SidePanelHeader
         onClose={nav.closeChannelSettings}
         onBack={membersPage ? nav.navigateBack : undefined}
+        nativeBar={{
+          title: membersPage ? "Members" : (detail.data?.channel.title ?? "Channel settings"),
+          subtitle: membersPage ? detail.data?.channel.title : undefined,
+          titleAction: null,
+          actions: [],
+          tabs: null,
+          addTabs: null,
+        }}
       >
         <SidePanelHeaderTitle
           icon={

@@ -28,7 +28,10 @@ const config: CapacitorConfig = {
   appName: "Silverhand",
   webDir: "dist",
   loggingBehavior: "none",
-  ios: { contentInset: "never", preferredContentMode: "mobile" },
+  // The page never scrolls as a whole; every pane owns its own scroller. With
+  // the keyboard up the web view's scroller would otherwise gain the keyboard's
+  // height and let a drag carry the whole page, floating headers included.
+  ios: { contentInset: "never", preferredContentMode: "mobile", scrollEnabled: false },
   plugins: {
     SilverhandClient: defaultServerURL ? { defaultServerURL } : {},
   },

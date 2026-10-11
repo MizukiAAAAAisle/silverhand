@@ -42,14 +42,11 @@ export function TaskShell({
 
   if (!mounted) return null;
 
-  // Compact presents the task as a pushed page: the board stays mounted beneath
-  // it to keep its scroll, and Back pops the same history entry that opened it.
+  // Compact presents the task as a pushed page; the page stack keeps the board
+  // beneath it.
   if (compact) {
     return (
       <SectionLayer visible={visible}>
-        <div className={pageTaskId ? "hidden" : "contents"}>
-          <TaskBoard filters={filters} onFiltersChange={setFilters} onOpenTask={openTask} />
-        </div>
         {pageTaskId ? (
           <TaskDetailPanel
             key={pageTaskId}
@@ -61,7 +58,9 @@ export function TaskShell({
               }
             }}
           />
-        ) : null}
+        ) : (
+          <TaskBoard filters={filters} onFiltersChange={setFilters} onOpenTask={openTask} />
+        )}
       </SectionLayer>
     );
   }

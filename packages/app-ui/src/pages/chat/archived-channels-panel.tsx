@@ -15,7 +15,12 @@ import {
   type WorkspaceListItem,
 } from "@/features/workspaces/hooks";
 import { FilterBlock } from "@/components/ui/filter-select";
-import { FilterPanel, FilterToggle, useFilterDisclosure } from "@/components/ui/responsive-filters";
+import {
+  FilterPanel,
+  FilterToggle,
+  filterBarAction,
+  useFilterDisclosure,
+} from "@/components/ui/responsive-filters";
 import {
   WorkspaceFilterSelect,
   workspaceFilterId,
@@ -27,7 +32,7 @@ import {
   type DateFilterValue,
 } from "@/components/ui/date-filter-select";
 import { ArchivedListSkeleton } from "./archived-list-skeleton";
-import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
+import { FloatingPaneChrome, PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 /** Archived-view filter selection. Lifted to App so it survives pane
  *  switches for the app session (shiki #task:1259) — NOT persisted, so a
@@ -86,11 +91,7 @@ export function ArchivedChannelsPanel({
   );
   const workspaceId = workspaceFilterId(workspaceFilter);
   const since = useMemo(() => dateFilterSince(dateFilter), [dateFilter]);
-  const {
-    data: channels = [],
-    isFetching,
-    isLoading,
-  } = useArchivedChannelsIndex({
+  const { data: channels = [], isLoading } = useArchivedChannelsIndex({
     workspaceId,
     since,
     workspaceScopeIds,
@@ -114,41 +115,43 @@ export function ArchivedChannelsPanel({
 
   return (
     <PaneShell>
-      <PaneHeader
-        icon={<ArchiveIcon className="size-3.5" />}
-        title="Archived"
-        count={workspaceRows.length + channels.length}
-        trailing={
-          <div className="ml-auto flex items-center gap-2">
-            {isFetching ? <span className="text-xs text-text-muted">Refreshing…</span> : null}
-            <FilterToggle disclosure={filterDisclosure} active={hasFilters} />
-          </div>
-        }
-      />
+      <FloatingPaneChrome>
+        <PaneHeader
+          icon={<ArchiveIcon className="size-3.5" />}
+          title="Archived"
+          count={workspaceRows.length + channels.length}
+          trailing={
+            <div className="ml-auto">
+              <FilterToggle disclosure={filterDisclosure} active={hasFilters} />
+            </div>
+          }
+          nativeActions={[filterBarAction(filterDisclosure, hasFilters)]}
+        />
 
-      <FilterPanel
-        disclosure={filterDisclosure}
-        className="shrink-0 border-b border-border-subtle px-4 py-3"
-      >
-        <div className="flex flex-wrap items-end gap-3">
-          <FilterBlock label="Workspace" className="w-full sm:w-72">
-            <WorkspaceFilterSelect
-              value={workspaceFilter}
-              workspaces={workspaces}
-              onChange={setWorkspaceFilter}
-              allIcon={<ArchiveIcon className="size-3.5" />}
-              showArchivedSuffix
-            />
-          </FilterBlock>
-          <FilterBlock label="Archived date" className="w-full sm:w-48">
-            <DateFilterSelect
-              value={dateFilter}
-              onChange={setDateFilter}
-              ariaLabel="Archived date filter"
-            />
-          </FilterBlock>
-        </div>
-      </FilterPanel>
+        <FilterPanel
+          disclosure={filterDisclosure}
+          className="shrink-0 border-b border-border-subtle px-4 py-3"
+        >
+          <div className="flex flex-wrap items-end gap-3">
+            <FilterBlock label="Workspace" className="w-full sm:w-72">
+              <WorkspaceFilterSelect
+                value={workspaceFilter}
+                workspaces={workspaces}
+                onChange={setWorkspaceFilter}
+                allIcon={<ArchiveIcon className="size-3.5" />}
+                showArchivedSuffix
+              />
+            </FilterBlock>
+            <FilterBlock label="Archived date" className="w-full sm:w-48">
+              <DateFilterSelect
+                value={dateFilter}
+                onChange={setDateFilter}
+                ariaLabel="Archived date filter"
+              />
+            </FilterBlock>
+          </div>
+        </FilterPanel>
+      </FloatingPaneChrome>
 
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-4 py-3">
         {/* Workspaces first: restoring a workspace is the precondition for

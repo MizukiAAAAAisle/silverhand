@@ -49,10 +49,17 @@ import {
 type ListContext = { leadingSlot?: ReactNode };
 // Component identities must stay stable across loading and scroll state changes.
 const listComponents = {
-  Header: ({ context }: { context?: ListContext }) =>
-    context?.leadingSlot ? (
-      <div className="mx-auto mb-1 max-w-300 px-4">{context.leadingSlot}</div>
-    ) : null,
+  // The spacer reserves the floating compact header's height inside the
+  // scroller, so rows scroll beneath it. It is 0 on desktop and constant
+  // while scrolling, so prepends keep their anchor.
+  Header: ({ context }: { context?: ListContext }) => (
+    <>
+      <div aria-hidden data-pane-chrome-spacer />
+      {context?.leadingSlot ? (
+        <div className="mx-auto mb-1 max-w-300 px-4">{context.leadingSlot}</div>
+      ) : null}
+    </>
+  ),
   Footer: () => <div className="h-3" />,
 };
 
@@ -847,7 +854,7 @@ export function MessageList({
           // moves every message while the reader is waiting at the top.
           <div
             role="status"
-            className="pointer-events-none absolute inset-x-0 top-0 text-center text-xs text-text-muted"
+            className="pointer-events-none absolute inset-x-0 top-(--pane-chrome-height,0px) text-center text-xs text-text-muted"
           >
             Loading earlier messages…
           </div>

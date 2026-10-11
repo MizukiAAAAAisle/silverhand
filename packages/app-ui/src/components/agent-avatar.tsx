@@ -1,4 +1,6 @@
 import type { RuntimeKind } from "@silverhand/shared";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import {
   ClaudeIcon,
   CodexIcon,
@@ -137,4 +139,28 @@ export function AgentAvatar({
       {Icon ? <Icon style={{ width: inner, height: inner }} /> : null}
     </span>
   );
+}
+
+/** The face `AgentAvatar` shows, as an image URL for surfaces drawn outside
+ * the page (the native bar); null for a runtime without a mark. */
+export function agentAvatarImage(
+  runtime: RuntimeKind,
+  avatarObjectUrl: string | null,
+): string | null {
+  const image = avatarObjectUrl ?? BRAND_LOGOS[runtime];
+  if (image) {
+    return image;
+  }
+
+  const Icon = ICONS[runtime];
+  const tint = TINTS[runtime];
+  if (!Icon || !tint) {
+    return null;
+  }
+
+  const hex = (token: string) => /#[0-9a-f]+/i.exec(token)?.[0] ?? "#000";
+  const inner = runtime === "pi" ? 1 : 0.6;
+  const mark = renderToStaticMarkup(createElement(Icon, {}));
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" style="color:${hex(tint.fg)}"><rect width="100" height="100" fill="${hex(tint.bg)}"/><svg x="${50 - inner * 50}" y="${50 - inner * 50}" width="${inner * 100}" height="${inner * 100}">${mark}</svg></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }

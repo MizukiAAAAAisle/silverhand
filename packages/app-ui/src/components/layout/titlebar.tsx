@@ -65,18 +65,13 @@ export function Titlebar({
     `calc(var(--nav-rail-width) + ${leftColumnWidth} + var(--frame-padding, 0px) * 2` +
     ` + var(--pane-gap))`;
   const toggleButton =
-    "no-drag flex size-(--titlebar-control-size,1.5rem) items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline";
+    "no-drag flex size-6 items-center justify-center rounded-[var(--control-radius)] text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline";
 
   return (
     <header
       data-titlebar="app"
-      // The iOS shell sets the inset, row height and control sizes in iPad
-      // windowed mode so the row centres on the system window controls;
-      // otherwise the bar clears the top safe area (0 on desktop).
       className={
-        "drag-region relative box-content flex shrink-0 items-center " +
-        "h-(--titlebar-row-height,var(--titlebar-height)) " +
-        "pt-(--titlebar-inset-top,env(safe-area-inset-top,0px)) " +
+        "drag-region relative flex h-(--titlebar-height) shrink-0 items-center " +
         "gap-2 border-b text-xs " +
         "bg-(--bg-app,var(--bg-primary)) " +
         "border-(--titlebar-border,var(--border-subtle))"
@@ -114,9 +109,9 @@ export function Titlebar({
               className={toggleButton}
             >
               {workspaceSidebarVisible ? (
-                <SidebarCloseIcon className="size-(--titlebar-icon-size,0.875rem)" />
+                <SidebarCloseIcon className="size-3.5" />
               ) : (
-                <SidebarOpenIcon className="size-(--titlebar-icon-size,0.875rem)" />
+                <SidebarOpenIcon className="size-3.5" />
               )}
             </button>
           ) : null}
@@ -129,13 +124,12 @@ export function Titlebar({
         </span>
       ) : null}
 
-      {/* Centered on the whole window (no-drag so the pill takes clicks). The
-       * box spans only the content row, so a top inset never shifts it off
-       * the row's centre line. It is only as wide as the pill: since
-       * Electron 44 any box over the bar, even with `pointer-events: none`,
-       * turns the `no-drag` controls beneath it back into drag area. */}
+      {/* Centered on the whole window (no-drag so the pill takes clicks). It
+       * is only as wide as the pill: since Electron 44 any box over the bar,
+       * even with `pointer-events: none`, turns the `no-drag` controls
+       * beneath it back into drag area. */}
       {search ? (
-        <div className="absolute bottom-0 left-1/2 flex h-(--titlebar-row-height,var(--titlebar-height)) w-[clamp(420px,52vw,720px)] -translate-x-1/2 items-center">
+        <div className="absolute inset-y-0 left-1/2 flex w-[clamp(420px,52vw,720px)] -translate-x-1/2 items-center">
           <div className="no-drag w-full">{search}</div>
         </div>
       ) : null}

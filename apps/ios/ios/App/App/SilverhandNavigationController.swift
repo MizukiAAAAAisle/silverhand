@@ -1,38 +1,54 @@
 import Capacitor
 import UIKit
 
-// UIKit owns only the chrome and transition pixels. All routes and tab histories
-// remain in React. The same Capacitor controller is moved between empty hosts;
-// no tab creates another WebView or an independent navigation stack.
 @MainActor
-final class SilverhandNavigationController: UITabBarController, UITabBarControllerDelegate,
-  UIGestureRecognizerDelegate
-{
+enum NavigationItemStyle {
+  static let font = UIFont.systemFont(ofSize: 12, weight: .medium)
+}
+
+// The web page owns navigation: history, the page stack, push and Back and
+// their animation, and the edge swipe. UIKit draws chrome over it and reports
+// what was tapped; it holds no navigation state of its own.
+//
+// Each tab is a navigation stack of one page, which hosts the one shared
+// Capacitor controller while its tab is selected. The chrome follows the
+// page's layout:
+// - compact (iPhone): the tab bar, at the bottom; a page that declares its
+//   header gets the navigation bar and a tab strip under it (`PageBar`);
+// - compact on iPhone Duo: the tab bar stands on a side edge as the vertical
+//   bar, and takes the page's Back and header actions (`PageBar`);
+// - wide (iPad, open iPhone Duo): no tab bar or vertical bar; the navigation
+//   bar is the window titlebar (`Titlebar`) and the page shows its own rail.
+//
+// When the page on screen changes, its bars cross-fade as the page beneath
+// them slides.
+@MainActor
+final class SilverhandNavigationController: UITabBarController, UITabBarControllerDelegate {
   let content = SilverhandViewController()
-  let moreAction = TabItemHitRegion()
-  private let names = ["chat", "activity", "tasks", "more"]
+  let titlebar = Titlebar()
+  let pageBar = PageBar()
+  var onIntent: (([String: Any]) -> Void)?
+
+  // Shared navigation state, as last synced from the page.
+  private let names = ["chat", "activity", "tasks", "me"]
   private var session = ""
   private var entryKey = ""
   private var invalidatedSessions = Set<String>()
   private var pendingBadges: (session: String, values: [Bool])?
-  private var backKey: String?
   private var modalVersion = 0
   private var blocked = false
   private var requestedVisible = false
-  private var requestedBackVisible = false
+
+  // Tab bar presence. A vertical bar stays on every page: it holds its place
+  // beside the camera as the device folds, and never costs content height.
   private var barEdge: NSDirectionalRectEdge?
-  // A vertical bar stays on every page: it holds its place beside the camera
-  // as the device folds, and never costs content height.
   private var visible: Bool { requestedVisible || verticalBarEdge != nil }
-  private var backVisible: Bool { requestedBackVisible || verticalBarEdge != nil }
-  private var images: [String: UIImage] = [:]
-  private var imageOrder: [String] = []
-  private var front: UIView?
-  private var previous: UIImageView?
-  private var gestureRequest: String?
-  private var gestureEntryKey: String?
-  private var pendingCompletion = false
-  var onIntent: (([String: Any]) -> Void)?
+  private var appliedBars: AppliedBars?
+  /// The bars as an edge swipe found them, fading with the finger.
+  private var swiping: [UIView] = []
+  /// The navigation bar's extent below the safe area, as last shown; the
+  /// system bar's at first.
+  private lazy var navigationBarHeight = UINavigationBar().sizeThatFits(view.bounds.size).height
 
   override func viewDidLoad() {
     super.viewDidLoad()
@@ -50,84 +66,229 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     tabBar.standardAppearance = appearance
     tabBar.scrollEdgeAppearance = appearance
-    let titles = ["Chats", "Activity", "Tasks", "More"]
+    let titles = ["Chats", "Activity", "Tasks", "Me"]
+    // Each tab is a navigation stack of one page, whose navigation bar
+    // carries the page's bars. Pages are pushed and popped in the web view.
     viewControllers = titles.enumerated().map { index, title in
-      let page = UIViewController()
-      page.tabBarItem = UITabBarItem(
+      let stack = UINavigationController(rootViewController: PageHost())
+      stack.setNavigationBarHidden(true, animated: false)
+      stack.navigationBar.prefersLargeTitles = true
+      stack.interactivePopGestureRecognizer?.isEnabled = false
+      if #available(iOS 26.0, *) { stack.interactiveContentPopGestureRecognizer?.isEnabled = false }
+      stack.tabBarItem = UITabBarItem(
         title: title, image: UIImage(named: "Navigation" + title),
         selectedImage: UIImage(named: "Navigation" + title + "Selected"))
-      page.tabBarItem.tag = index
-      return page
+      stack.tabBarItem.tag = index
+      return stack
     }
-    // More is an action, not a touch-selected destination. Own its hit region
-    // before UIKit begins the glass tab selection tracking animation.
-    // VoiceOver retains the system tab item; this region only routes touch input.
-    moreAction.isAccessibilityElement = false
-    moreAction.accessibilityIdentifier = "native-more-action"
-    moreAction.addAction(UIAction { [weak self] _ in self?.showMore() }, for: .touchUpInside)
-    moreAction.region = { [weak self] in self?.moreItemFrame() }
-    view.addSubview(moreAction)
-    attachContent(to: viewControllers![0])
+    if let first = page(0) { attachContent(to: first) }
     hideBar(true, animated: false)
-    let pan = UIScreenEdgePanGestureRecognizer(target: self, action: #selector(edgePan(_:)))
-    pan.edges = .left
-    pan.delegate = self
-    view.addGestureRecognizer(pan)
+    if #available(iOS 27.1, *) {
+      registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
+        self.setNeedsUpdateOfVerticalBarConfiguration()
+      }
+    }
   }
+
+  // MARK: Bars
+
+  // A wide window shows the wide layout, whose titlebar and navigation rail
+  // stand in for the vertical bar, as Safari does on an open iPhone Duo.
+  @available(iOS 27.1, *)
+  override var preferredVerticalBarBehavior: UIVerticalBarBehavior {
+    traitCollection.horizontalSizeClass == .regular ? .disabled : .automatic
+  }
+
+  @available(iOS 27.1, *)
+  override var childForPreferredVerticalBarBehavior: UIViewController? { nil }
+
+  override var keyCommands: [UIKeyCommand]? {
+    guard let state = titlebar.state, !blocked else { return nil }
+    return [
+      UIKeyCommand(
+        title: state.searchShortcut, action: #selector(focusSearch), input: "k",
+        modifierFlags: .command)
+    ]
+  }
+
+  @objc private func focusSearch() { titlebar.focusSearch() }
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
-    moreAction.frame = view.bounds
     if verticalBarEdge != barEdge {
       barEdge = verticalBarEdge
-      if front == nil, !session.isEmpty { hideBar(!visible || blocked, animated: false) }
+      if !session.isEmpty { hideBar(!visible || blocked, animated: false) }
     }
-    view.bringSubviewToFront(moreAction)
+    applyBars()
   }
 
-  /// The glass pill around the items; the bar's own frame spans the screen.
-  private func tabPillFrame() -> CGRect {
-    let bar = tabBar.convert(tabBar.bounds, to: view)
-    guard #available(iOS 17.0, *) else { return bar }
-    let items = (viewControllers ?? []).compactMap { $0.tabBarItem.frame(in: view) }
-      .filter { !$0.isEmpty }
-    guard items.count == 4 else { return bar }
-    let pill = items.dropFirst().reduce(items[0]) { $0.union($1) }
+  enum Bars: Equatable {
+    case none
+    case titlebar(TitlebarState)
+    case page(PageBarState, vertical: Bool)
+  }
+
+  private struct AppliedBars: Equatable {
+    let host: ObjectIdentifier
+    let bars: Bars
+    let width: CGFloat
+    let enabled: Bool
+  }
+
+  /// What the selected page's navigation bar carries: the titlebar in the
+  /// wide layout, else the page's declared header. The bar shows only while
+  /// it carries one of them.
+  private var bars: Bars {
+    if let state = titlebar.state { return .titlebar(state) }
+    if let state = pageBar.state { return .page(state, vertical: verticalBarEdge != nil) }
+    return .none
+  }
+
+  func applyBars() {
+    guard let stack = selectedViewController as? UINavigationController,
+      let host = stack.topViewController
+    else { return }
+    let next = AppliedBars(
+      host: ObjectIdentifier(host), bars: bars, width: view.bounds.width, enabled: !blocked)
+    // Layout passes call this too; rebuilding unchanged items would restart
+    // their glass animations.
+    guard next != appliedBars else {
+      place(next.bars, in: host, stack: stack)
+      publishBarMetrics(in: stack)
+      return
+    }
+    // Another page's bars cross-fade in: the bar appears, leaves, or names
+    // another page. Changes within a page apply in place. This reads the bars
+    // alone, which arrive apart from the navigation state.
+    let fade = appliedBars?.host == next.host && appliedBars.map {
+      Self.page(of: $0.bars) != Self.page(of: next.bars)
+    } == true && !UIAccessibility.isReduceMotionEnabled
+    appliedBars = next
+    defer { publishBarMetrics(in: stack) }
+    // The old bars stay as images and fade out over the new ones. Glass bars
+    // ignore their own alpha, so only images fade out reliably.
+    let leaving = fade ? (swiping.isEmpty ? images(of: stack) : swiping) : []
+    if !fade { endSwipe() }
+    swiping = []
+    draw(next.bars, on: host)
+    stack.setNavigationBarHidden(next.bars == .none, animated: false)
+    place(next.bars, in: host, stack: stack)
+    guard fade else { return }
+    let arriving: [UIView] = [stack.navigationBar, pageBar.accessory]
+    for view in arriving { view.layer.opacity = 0 }
+    UIView.animate(withDuration: 0.25, delay: 0, options: [.allowUserInteraction]) {
+      for view in arriving { view.layer.opacity = 1 }
+      for image in leaving { image.alpha = 0 }
+    } completion: { _ in
+      for view in arriving { view.layer.opacity = 1 }
+      for image in leaving { image.removeFromSuperview() }
+    }
+  }
+
+  /// An edge swipe carries the page `progress` of the way off: the bars fade
+  /// with it, as an image over the bars, which hide while it lasts. Null ends
+  /// the swipe with the bars back as they were.
+  func setBackProgress(_ progress: CGFloat?) {
+    guard let stack = selectedViewController as? UINavigationController else { return }
+    guard let progress else {
+      endSwipe()
+      return
+    }
+    if swiping.isEmpty {
+      swiping = images(of: stack)
+      for view in [stack.navigationBar, pageBar.accessory] { view.layer.opacity = 0 }
+    }
+    for image in swiping { image.alpha = 1 - min(1, max(0, progress)) }
+  }
+
+  private func endSwipe() {
+    guard !swiping.isEmpty, let stack = selectedViewController as? UINavigationController else {
+      return
+    }
+    for image in swiping { image.removeFromSuperview() }
+    swiping = []
+    for view in [stack.navigationBar, pageBar.accessory] { view.layer.opacity = 1 }
+  }
+
+  /// Images of the bars on screen, laid over them in the controller's view.
+  private func images(of stack: UINavigationController) -> [UIView] {
+    let shown = [stack.isNavigationBarHidden ? nil : stack.navigationBar as UIView,
+      pageBar.accessory.window == nil ? nil : pageBar.accessory as UIView].compactMap { $0 }
+    return shown.compactMap { bar in
+      guard let image = bar.snapshotView(afterScreenUpdates: false) else { return nil }
+      image.frame = bar.convert(bar.bounds, to: view)
+      image.isUserInteractionEnabled = false
+      view.insertSubview(image, belowSubview: tabBar)
+      return image
+    }
+  }
+
+  /// What a page's bars name it by, for telling one page's bars from another's.
+  private static func page(of bars: Bars) -> String? {
+    switch bars {
+    case .none: nil
+    case .titlebar: "titlebar"
+    case .page(let state, _): "page:" + state.title + "\n" + (state.subtitle ?? "")
+    }
+  }
+
+  /// Tells the page where its bars end. The bar keeps its height while
+  /// hidden, so a page lays out for its bar before it shows.
+  private func publishBarMetrics(in stack: UINavigationController) {
+    let top = view.safeAreaInsets.top
+    let bottom: CGFloat
     if verticalBarEdge != nil {
-      // The vertical glass platter measures 2pt outside its 44pt items.
-      return pill.insetBy(dx: -2, dy: -2)
+      bottom = top + 4 + PageAccessory.titleHeight
+    } else if !stack.isNavigationBarHidden {
+      bottom = stack.navigationBar.frame.maxY
+      navigationBarHeight = stack.navigationBar.frame.height
+    } else {
+      bottom = top + navigationBarHeight
     }
-    return CGRect(x: pill.minX - 4, y: bar.minY, width: pill.width + 8, height: bar.height)
+    content.publishBarMetrics(bottom: bottom, tabs: PageAccessory.tabsHeight)
   }
 
-  /// Read at touch time: a minimized tab bar relocates its items without a
-  /// controller layout pass, so a cached frame would cover content.
-  private func moreItemFrame() -> CGRect? {
-    guard !tabBar.isHidden, tabBar.alpha > 0 else { return nil }
-    if #available(iOS 17.0, *), let item = viewControllers?[3].tabBarItem,
-      let itemFrame = item.frame(in: view)
-    {
-      // Minimized, every item reports the single pill's frame. That pill
-      // expands the bar; it is not More.
-      let selected = selectedViewController?.tabBarItem.frame(in: view)
-      if itemFrame.isEmpty || (selectedIndex != 3 && selected == itemFrame) { return nil }
-      // Item frames overlap their neighbours (58pt items on a 50pt pitch in a
-      // vertical bar). Stop More at the midpoint to Tasks so the overlap goes
-      // to Tasks.
-      guard let tasks = viewControllers?[2].tabBarItem.frame(in: view), !tasks.isEmpty else {
-        return itemFrame
-      }
-      if verticalBarEdge != nil {
-        let edge = max(itemFrame.minY, (tasks.midY + itemFrame.midY) / 2)
-        return CGRect(x: itemFrame.minX, y: edge, width: itemFrame.width, height: itemFrame.maxY - edge)
-      }
-      let edge = max(itemFrame.minX, (tasks.midX + itemFrame.midX) / 2)
-      return CGRect(x: edge, y: itemFrame.minY, width: itemFrame.maxX - edge, height: itemFrame.height)
+  /// Draws `bars` into the page's navigation item. A page's bar keeps what
+  /// it already shows (`PageBar.apply`).
+  private func draw(_ bars: Bars, on page: UIViewController) {
+    let item = page.navigationItem
+    if case .page = bars {
+      pageBar.apply(to: item, vertical: verticalBarEdge != nil, enabled: !blocked)
+      return
     }
-    let actionRegion = CGRect(
-      x: tabBar.bounds.width * 0.75, y: 0,
-      width: tabBar.bounds.width * 0.25, height: tabBar.bounds.height)
-    return tabBar.convert(actionRegion, to: view)
+    pageBar.invalidate()
+    item.titleView = nil
+    item.title = nil
+    item.leftBarButtonItems = nil
+    item.rightBarButtonItems = nil
+    if #available(iOS 16.0, *) { item.trailingItemGroups = [] }
+    if #available(iOS 26.0, *) { item.subtitle = nil }
+    item.largeTitleDisplayMode = .never
+    if case .titlebar = bars {
+      titlebar.apply(to: item, width: view.bounds.width, enabled: !blocked)
+    }
+  }
+
+  /// The page's accessory (Duo title, view tabs) sits under the navigation
+  /// bar; the page clears both itself (`publishBarMetrics`). With the vertical
+  /// bar the navigation bar is empty, so the accessory starts at the top of
+  /// the screen.
+  private func place(_ bars: Bars, in page: UIViewController, stack: UINavigationController) {
+    let accessory = pageBar.accessory
+    guard case .page = bars, accessory.height > 0 else {
+      accessory.removeFromSuperview()
+      return
+    }
+    if accessory.superview !== page.view { page.view.addSubview(accessory) }
+    let top = verticalBarEdge != nil ? view.safeAreaInsets.top + 4 : stack.navigationBar.frame.maxY
+    accessory.frame = CGRect(x: 0, y: top, width: page.view.bounds.width, height: accessory.height)
+  }
+
+  // MARK: Pages
+
+  /// The tab's page.
+  private func page(_ index: Int) -> UIViewController? {
+    (viewControllers?[index] as? UINavigationController)?.topViewController
   }
 
   private func attachContent(to host: UIViewController) {
@@ -138,12 +299,11 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     host.addChild(content)
     content.view.frame = host.view.bounds
     content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-    host.view.addSubview(content.view)
+    host.view.insertSubview(content.view, at: 0)
     content.didMove(toParent: host)
   }
 
   private func hideBar(_ hidden: Bool, animated: Bool) {
-    moreAction.isHidden = hidden
     if #available(iOS 18.0, *) {
       setTabBarHidden(hidden, animated: animated)
     } else {
@@ -151,37 +311,34 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
   }
 
+  // MARK: Shared navigation state
+
   func sync(_ call: CAPPluginCall) -> CGFloat {
     let nextSession = call.getString("session") ?? ""
     guard !nextSession.isEmpty, !invalidatedSessions.contains(nextSession) else { return 0 }
     if session != nextSession {
-      clearTransition()
-      images.removeAll()
-      imageOrder.removeAll()
       session = nextSession
-      for page in viewControllers ?? [] { page.tabBarItem.badgeValue = nil }
+      for index in 0..<3 { setDot(false, at: index) }
     }
     applyBadges()
+    let previousKey = entryKey
+    let previousTab = selectedIndex
     entryKey = call.getString("key") ?? ""
-    backKey = call.getString("backKey")
     modalVersion = call.getInt("modalVersion") ?? 0
     blocked = call.getBool("blocked") ?? false
     requestedVisible = call.getBool("visible") ?? false
-    if blocked {
-      clearTransition()
-      presentedViewController?.dismiss(animated: false)
-    }
-    requestedBackVisible = call.getBool("backVisible") ?? false
-    if let index = names.firstIndex(of: call.getString("tab") ?? ""), index < 4,
-      let host = viewControllers?[index]
-    {
+    if blocked { presentedViewController?.dismiss(animated: false) }
+    if let index = names.firstIndex(of: call.getString("tab") ?? ""), let host = page(index) {
       selectedIndex = index
       attachContent(to: host)
     }
-    if front == nil { hideBar(!visible || blocked, animated: false) }
+    // A page pushed or popped within the tab takes the tab bar with it.
+    let moved = selectedIndex == previousTab && entryKey != previousKey && !previousKey.isEmpty
+    hideBar(!visible || blocked, animated: moved && !UIAccessibility.isReduceMotionEnabled)
+    applyBars()
     view.layoutIfNeeded()
     observeContentScroll()
-    return visible && verticalBarEdge == nil ? max(0, view.bounds.maxY - tabBar.frame.minY) : 0
+    return verticalBarEdge == nil ? tabBar.frame.height : 0
   }
 
   /// iPhone Duo stands the tab bar on a side edge. The page's side safe-area
@@ -191,16 +348,30 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   // WebKit backs each overflow scroller with its own UIScrollView. Handing the
   // page's main one to UIKit lets the glass tab bar minimize on scroll. WebKit
   // may replace it after layout, so look again once the page settles.
-  private func observeContentScroll() {
+  func observeContentScroll() {
     guard #available(iOS 26.0, *) else { return }
     tabBarMinimizeBehavior = visible ? .onScrollDown : .never
-    let host = selectedViewController
+    let host = page(selectedIndex)
     for delay in [0.05, 0.6] {
       DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-        guard let self, let host, host === self.selectedViewController,
+        guard let self, let host, host === self.page(self.selectedIndex),
           let root = self.content.webView?.scrollView
         else { return }
-        host.setContentScrollView(self.visible ? self.mainScroller(in: root) : nil, for: .bottom)
+        let scroller = self.mainScroller(in: root)
+        host.setContentScrollView(self.visible ? scroller : nil, for: .bottom)
+        // A declared header's bar and tab strip dissolve the page's content
+        // as it scrolls beneath them. A bar of glass capsules alone (its
+        // title one too), over a page's own backdrop, or a Tab root's large
+        // title lets the page show through instead, under the page's own
+        // wash.
+        let page = self.pageBar.state != nil
+        let clear =
+          self.pageBar.state.map {
+            $0.titleIcon != nil || $0.backdrop || ($0.largeTitle && $0.back == nil)
+          } ?? false
+        host.setContentScrollView(page ? scroller : nil, for: .top)
+        for view in [root, scroller].compactMap({ $0 }) { view.topEdgeEffect.isHidden = clear }
+        self.pageBar.accessory.observe(page ? scroller : nil)
       }
     }
   }
@@ -228,6 +399,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     reset(session: session)
   }
 
+  // MARK: Tab items
+
   func badges(_ call: CAPPluginCall) {
     guard let owner = call.getString("session"), !invalidatedSessions.contains(owner) else {
       return
@@ -239,198 +412,124 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   private func applyBadges() {
     guard let pendingBadges, pendingBadges.session == session else { return }
     for (index, value) in pendingBadges.values.enumerated() {
-      viewControllers?[index].tabBarItem.badgeValue = value ? "•" : nil
+      setDot(value, at: index)
     }
   }
+
+  /// The system badge is a count capsule of at least 18pt even when empty;
+  /// unread is an 8pt dot drawn into the tab image instead.
+  private func setDot(_ shown: Bool, at index: Int) {
+    guard let item = viewControllers?[index].tabBarItem else { return }
+    let titles = ["Chats", "Activity", "Tasks"]
+    guard index < titles.count else { return }
+    let image = UIImage(named: "Navigation" + titles[index])
+    let selected = UIImage(named: "Navigation" + titles[index] + "Selected")
+    item.image = shown ? image.map(Self.dotted) : image
+    item.selectedImage = shown ? selected.map(Self.dotted) : selected
+  }
+
+  /// Bakes the dot into the glyph's 24pt canvas, so the tab item keeps its size.
+  /// The dot sits in the top-right corner with a 2pt knockout ring. Template
+  /// tinting would paint the dot too, so each appearance is rendered in its
+  /// resolved label colour and registered on one asset.
+  private static func dotted(_ glyph: UIImage) -> UIImage {
+    let size = CGSize(width: 24, height: 24)
+    let center = CGPoint(x: size.width - 4, y: 4)
+    let asset = UIImageAsset()
+    for style in [UIUserInterfaceStyle.light, .dark] {
+      let traits = UITraitCollection(userInterfaceStyle: style)
+      let rendered = UIGraphicsImageRenderer(size: size).image { context in
+        glyph.withTintColor(UIColor.label.resolvedColor(with: traits), renderingMode: .alwaysOriginal)
+          .draw(in: CGRect(origin: .zero, size: size))
+        let cg = context.cgContext
+        cg.setBlendMode(.clear)
+        cg.fillEllipse(in: CGRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12))
+        cg.setBlendMode(.normal)
+        UIColor.systemRed.resolvedColor(with: traits).setFill()
+        cg.fillEllipse(in: CGRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8))
+      }
+      .withRenderingMode(.alwaysOriginal)
+      // Without a display scale the asset hands back a 1x image of the
+      // 3x bitmap, three times too large.
+      asset.register(
+        rendered,
+        with: UITraitCollection(traitsFrom: [
+          traits, UITraitCollection(displayScale: rendered.scale),
+        ]))
+    }
+    return asset.image(with: UITraitCollection.current)
+  }
+
+  // MARK: Session
 
   func reset(session expected: String) {
     guard expected == session else { return }
     session = ""
     pendingBadges = nil
-    for page in viewControllers ?? [] { page.tabBarItem.badgeValue = nil }
+    applyBars()
+    for index in 0..<3 { setDot(false, at: index) }
     entryKey = ""
-    backKey = nil
     requestedVisible = false
     blocked = false
-    clearTransition()
-    images.removeAll()
-    imageOrder.removeAll()
     hideBar(true, animated: false)
     presentedViewController?.dismiss(animated: false)
-  }
-
-  func capture(session expected: String, key: String) async {
-    guard expected == session, key == entryKey, front == nil, let web = content.webView else {
-      return
-    }
-    let image = try? await web.takeSnapshot(configuration: nil)
-    guard expected == session, key == entryKey, let image else { return }
-    images[key] = image
-    imageOrder.removeAll { $0 == key }
-    imageOrder.append(key)
-    // Snapshots are optional presentation caches, never history entries.
-    while imageOrder.count > 12 { images.removeValue(forKey: imageOrder.removeFirst()) }
   }
 
   func tabBarController(
     _ tabBarController: UITabBarController, shouldSelect viewController: UIViewController
   ) -> Bool {
-    guard !session.isEmpty, front == nil, !blocked else { return false }
+    guard !session.isEmpty, !blocked else { return false }
     let index = viewController.tabBarItem.tag
-    if index == 3 {
-      showMore()
-    } else {
-      onIntent?([
-        "session": session, "modalVersion": modalVersion, "kind": "tab", "target": names[index],
-      ])
-    }
+    onIntent?([
+      "session": session, "modalVersion": modalVersion, "kind": "tab", "target": names[index],
+    ])
     // Selection is acknowledged exclusively through shared state sync.
     return false
   }
 
-  private func showMore() {
-    guard !session.isEmpty, front == nil, !blocked, presentedViewController == nil else { return }
-    let originSession = session
-    let menu = NavigationMoreMenu(
-      anchor: { [weak self] in
-        guard let self else { return .zero }
-        return self.tabPillFrame()
-      },
-      edge: { [weak self] in self?.verticalBarEdge }
-    ) { [weak self] target in
-      guard let self, self.session == originSession else { return }
-      self.openMore(target)
-    }
-    present(menu, animated: true)
-  }
-
-  func openMore(_ target: String) {
-    guard !blocked, !session.isEmpty, ["members", "computers", "settings"].contains(target) else {
+  /// The Me tab shows the viewer's avatar; without one it keeps the asset glyph.
+  func setAvatar(_ image: UIImage?) {
+    guard let item = viewControllers?[3].tabBarItem else { return }
+    guard let image else {
+      item.image = UIImage(named: "NavigationMe")
+      item.selectedImage = UIImage(named: "NavigationMeSelected")
       return
     }
-    onIntent?(["session": session, "modalVersion": modalVersion, "kind": "more", "target": target])
+    let avatar = Self.circularTabImage(image)
+    item.image = avatar
+    item.selectedImage = avatar
   }
 
-  func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
-    guard !blocked, front == nil, presentedViewController == nil, !session.isEmpty,
-      let backKey, images[backKey] != nil
-    else { return false }
-    let velocity = (gestureRecognizer as? UIPanGestureRecognizer)?.velocity(in: view) ?? .zero
-    return velocity.x > abs(velocity.y)
-  }
-
-  func beginInteractiveBack() -> Bool {
-    guard !blocked, front == nil, !session.isEmpty, let backKey, let image = images[backKey],
-      let web = content.webView, let snapshot = web.snapshotView(afterScreenUpdates: false)
-    else { return false }
-    let bounds = web.convert(web.bounds, to: view)
-    let previous = UIImageView(image: image)
-    previous.frame = bounds
-    previous.contentMode = .scaleToFill
-    // The glass tab bar lives in a system container, not directly in `view`.
-    let barLayer = tabBarContainer
-    view.insertSubview(previous, belowSubview: barLayer)
-    snapshot.frame = bounds
-    snapshot.accessibilityIdentifier = "navigation-transition-front"
-    view.insertSubview(snapshot, belowSubview: barLayer)
-    self.previous = previous
-    front = snapshot
-    gestureRequest = UUID().uuidString
-    gestureEntryKey = entryKey
-    pendingCompletion = false
-    hideBar(!(visible || backVisible), animated: false)
-    tabBar.alpha = visible ? 1 : 0
-    return true
-  }
-
-  private var tabBarContainer: UIView {
-    var layer: UIView = tabBar
-    while let parent = layer.superview, parent !== view { layer = parent }
-    return layer
-  }
-
-  func updateInteractiveBack(progress raw: CGFloat) {
-    guard let front else { return }
-    let progress = min(1, max(0, raw))
-    front.transform = CGAffineTransform(translationX: view.bounds.width * progress, y: 0)
-    previous?.transform = CGAffineTransform(
-      translationX: -view.bounds.width * 0.25 * (1 - progress), y: 0)
-    tabBar.alpha =
-      visible == backVisible ? (visible ? 1 : 0) : (backVisible ? progress : 1 - progress)
-  }
-
-  func endInteractiveBack(complete: Bool) {
-    guard let request = gestureRequest, !pendingCompletion else { return }
-    if complete {
-      pendingCompletion = true
-      onIntent?([
-        "session": session, "modalVersion": modalVersion, "kind": "back", "request": request,
-        "key": gestureEntryKey ?? "",
-      ])
-    } else {
-      animateFinish(false)
+  /// UIKit tints template images; an avatar keeps its own pixels. The glass
+  /// selection platter alone marks the selected tab.
+  private static func circularTabImage(_ image: UIImage) -> UIImage {
+    let side: CGFloat = 26
+    let bounds = CGRect(x: 0, y: 0, width: side, height: side)
+    let rendered = UIGraphicsImageRenderer(size: bounds.size).image { _ in
+      UIBezierPath(ovalIn: bounds).addClip()
+      let scale = max(side / image.size.width, side / image.size.height)
+      let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+      image.draw(
+        in: CGRect(
+          x: bounds.midX - size.width / 2, y: bounds.midY - size.height / 2,
+          width: size.width, height: size.height))
     }
-  }
-
-  @objc private func edgePan(_ pan: UIScreenEdgePanGestureRecognizer) {
-    switch pan.state {
-    case .began: _ = beginInteractiveBack()
-    case .changed: updateInteractiveBack(progress: pan.translation(in: view).x / view.bounds.width)
-    case .ended:
-      endInteractiveBack(
-        complete: pan.translation(in: view).x > view.bounds.width * 0.4
-          || pan.velocity(in: view).x > 700)
-    case .cancelled, .failed: endInteractiveBack(complete: false)
-    default: break
-    }
-  }
-
-  func finish(session expected: String, request: String, accepted: Bool) {
-    guard expected == session, request == gestureRequest, pendingCompletion else { return }
-    pendingCompletion = false
-    if accepted { content.view.endEditing(true) }
-    animateFinish(accepted)
-  }
-
-  private func animateFinish(_ accepted: Bool) {
-    let owner = gestureRequest
-    let originSession = session
-    let duration = UIAccessibility.isReduceMotionEnabled ? 0 : 0.22
-    UIView.animate(
-      withDuration: duration,
-      animations: {
-        self.front?.transform =
-          accepted ? CGAffineTransform(translationX: self.view.bounds.width, y: 0) : .identity
-        self.previous?.transform =
-          accepted
-          ? .identity : CGAffineTransform(translationX: -self.view.bounds.width * 0.25, y: 0)
-        self.tabBar.alpha = self.visible ? 1 : 0
-      },
-      completion: { _ in
-        guard self.gestureRequest == owner, self.session == originSession else { return }
-        self.clearTransition()
-      })
-  }
-
-  private func clearTransition() {
-    front?.removeFromSuperview()
-    previous?.removeFromSuperview()
-    front = nil
-    previous = nil
-    gestureRequest = nil
-    gestureEntryKey = nil
-    pendingCompletion = false
-    tabBar.alpha = 1
-    hideBar(!visible || blocked, animated: false)
+    return rendered.withRenderingMode(.alwaysOriginal)
   }
 }
 
-/// Claims touches only inside `region`; everything else passes through.
-final class TabItemHitRegion: UIControl {
-  var region: () -> CGRect? = { nil }
+/// A tab's page: an empty host for the web content and its navigation item.
+final class PageHost: UIViewController {
+  init() {
+    super.init(nibName: nil, bundle: nil)
+    // Back is the page's own control; the system button never shows.
+    navigationItem.hidesBackButton = true
+  }
 
-  override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
-    guard let superview, let frame = region() else { return false }
-    return frame.contains(convert(point, to: superview))
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    view.backgroundColor = .systemBackground
   }
 }

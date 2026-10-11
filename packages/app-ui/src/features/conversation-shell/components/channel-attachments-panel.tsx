@@ -124,7 +124,17 @@ export function ChannelAttachmentsPanel({
       className="flex h-full min-h-0 w-full flex-col overflow-hidden"
       style={paneChrome}
     >
-      <SidePanelHeader onClose={onClose}>
+      <SidePanelHeader
+        onClose={onClose}
+        nativeBar={{
+          title: "Attachments",
+          subtitle: parentTitle ? `#${parentTitle}` : undefined,
+          titleAction: null,
+          actions: [],
+          tabs: null,
+          addTabs: null,
+        }}
+      >
         <SidePanelHeaderTitle
           icon={<AttachmentIcon className="size-3.5 shrink-0 text-text-muted" />}
           title="Attachments"

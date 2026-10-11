@@ -2,6 +2,8 @@ import { MobileHeaderProvider, MobileHeaderScope } from "@/components/layout/mob
 import { useAppOptions } from "./app-options";
 import { NavigationLaunch } from "@/navigation/launch";
 import { NavigationProvider } from "@/navigation/provider";
+import { PageBarHost } from "@/navigation/page-bar";
+import { PageStack } from "@/navigation/page-stack";
 import { useCompactLayout } from "@/navigation/layout";
 import { getPlatform } from "@/platform";
 import { MobileHeader, MobileTabBar } from "@/components/layout/mobile-shell";
@@ -19,13 +21,15 @@ import { Toaster } from "sonner";
 import { NavRail } from "@/components/layout/nav-rail";
 import { SectionLayer } from "@/components/layout/section-layer";
 import { Titlebar } from "@/components/layout/titlebar";
-import { TitlebarSearch } from "@/features/search/titlebar-search";
+import { TitlebarSearch, type TitlebarSearchNav } from "@/features/search/titlebar-search";
+import { NativeTitlebar } from "@/features/app-shell/native-titlebar";
 import { useAppearance } from "@/features/appearance/use-appearance";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
   isUpdateRequired,
   useRuntimeEpochPromotion,
+  useViewerAvatarObjectUrl,
   useViewerUser,
 } from "@/features/session/hooks";
 import { EmbeddedProfileSetupGate } from "@/features/app-shell/embedded-profile-setup-gate";
@@ -34,6 +38,7 @@ import { BackendUnreachableGate } from "@/features/app-shell/backend-unreachable
 import { UpdateRequiredGate } from "@/features/app-shell/update-required-gate";
 import { AppStatusBanner } from "@/features/app-shell/app-status-banner";
 import { SettingsShell } from "@/pages/settings/settings-shell";
+import { MeShell } from "@/pages/me/me-shell";
 import { shouldSecondaryFullscreen } from "@/features/conversation-shell/model/secondary-pane";
 import { LAST_CHANNEL_KEY, clearPlaceMemory } from "@/features/app-shell/place-memory";
 import { toasterTypedIcons } from "@/lib/toast-icons";
@@ -141,7 +146,9 @@ export function App({
   return (
     <EmbeddedProfileSetupGate key={viewer.data.id} viewerId={viewer.data.id}>
       <NavigationProvider launch={navigationLaunch}>
-        <RegisteredAppShell toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"} />
+        <PageBarHost>
+          <RegisteredAppShell toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"} />
+        </PageBarHost>
       </NavigationProvider>
     </EmbeddedProfileSetupGate>
   );
@@ -166,8 +173,7 @@ export function App({
  * `width: calc(100% - var(--mobile-offset-left) * 2)`, which breaks on an
  * unset var.
  */
-const TOAST_TOP =
-  "calc(var(--titlebar-row-height, var(--titlebar-height)) + var(--titlebar-inset-top, env(safe-area-inset-top, 0px)) + 8px)";
+const TOAST_TOP = "calc(var(--titlebar-height) + env(safe-area-inset-top, 0px) + 8px)";
 const TOAST_OFFSET = {
   top: TOAST_TOP,
   right: "12px",
@@ -186,6 +192,7 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
   const signals = useApplicationSignals();
   const { navRailDots } = signals;
   const conversation = useConversationShell(signals);
+  const viewerAvatarObjectUrl = useViewerAvatarObjectUrl();
   const {
     toggleWorkspaceSidebar,
     nav,
@@ -199,6 +206,19 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
     resolveNavWorkspaceId,
   } = conversation.app;
   const content = renderConversationPanes(conversation.panes);
+  const nativeTitlebar = getPlatform().titlebar;
+  const chromeMode = appSection === "activity" ? "activity" : "chat";
+  const searchNav: TitlebarSearchNav = {
+    onJumpMessage: handleJumpToMessage,
+    onOpenConversation: (workspaceId, channelId) => {
+      const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
+      if (navWorkspaceId) nav.toChannel(navWorkspaceId, channelId);
+    },
+    onOpenWorkspace: nav.toWorkspace,
+    onOpenDirectPair: nav.toDirect,
+    onOpenDirectDraft: nav.toDirectDraft,
+    onOpenAdvanced: (query) => nav.toChatSearch(query ? { q: query } : undefined),
+  };
   const fullscreen = shouldSecondaryFullscreen(
     conversation.app.secondaryDescriptor,
     conversation.app.routeFullscreen,
@@ -218,27 +238,21 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
           <MobileHeader
             hideFallback={appSection === "chat" && isChatSidebarPage(conversation.chat, content)}
           />
+        ) : nativeTitlebar ? (
+          <NativeTitlebar
+            titlebar={nativeTitlebar}
+            sidebarShown={chromeMode === "chat" ? workspaceSidebarVisible : null}
+            archived={selectedWorkspace?.archived_at != null}
+            onToggleSidebar={toggleWorkspaceSidebar}
+            searchNav={searchNav}
+          />
         ) : (
           <Titlebar
             workspaceArchivedAt={selectedWorkspace?.archived_at ?? null}
             workspaceSidebarVisible={workspaceSidebarVisible}
             onToggleWorkspaceSidebar={toggleWorkspaceSidebar}
-            chromeMode={appSection === "activity" ? "activity" : "chat"}
-            search={
-              <TitlebarSearch
-                nav={{
-                  onJumpMessage: handleJumpToMessage,
-                  onOpenConversation: (workspaceId, channelId) => {
-                    const navWorkspaceId = resolveNavWorkspaceId(workspaceId, channelId);
-                    if (navWorkspaceId) nav.toChannel(navWorkspaceId, channelId);
-                  },
-                  onOpenWorkspace: nav.toWorkspace,
-                  onOpenDirectPair: nav.toDirect,
-                  onOpenDirectDraft: nav.toDirectDraft,
-                  onOpenAdvanced: (query) => nav.toChatSearch(query ? { q: query } : undefined),
-                }}
-              />
-            }
+            chromeMode={chromeMode}
+            search={<TitlebarSearch nav={searchNav} />}
           />
         )}
         <div
@@ -260,12 +274,12 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
                   nav.toActivity();
                 } else if (section === "tasks") {
                   nav.toTasks();
-                } else if (section === "members") {
-                  nav.toMembers();
-                } else if (section === "settings") {
-                  nav.toSettings();
-                } else {
-                  nav.toComputers();
+                } else if (
+                  section === "members" ||
+                  section === "settings" ||
+                  section === "computers"
+                ) {
+                  nav.toUtilitySection(section);
                 }
               }}
             />
@@ -275,50 +289,63 @@ function RegisteredAppShell({ toasterTheme }: { toasterTheme: "light" | "dark" }
             className="flex min-w-0 flex-1"
             style={{ gap: "var(--pane-gap)" }}
           >
-            {deferredSection === "settings" && (
-              <SectionLayer visible={appSection !== "chat"}>
-                <MobileHeaderScope section="settings">
-                  <SettingsShell />
+            <PageStack>
+              <>
+                {deferredSection === "me" && (
+                  <SectionLayer visible={appSection !== "chat"}>
+                    <MobileHeaderScope section="me">
+                      <MeShell />
+                    </MobileHeaderScope>
+                  </SectionLayer>
+                )}
+                {deferredSection === "settings" && (
+                  <SectionLayer visible={appSection !== "chat"}>
+                    <MobileHeaderScope section="settings">
+                      <SettingsShell />
+                    </MobileHeaderScope>
+                  </SectionLayer>
+                )}
+                <MobileHeaderScope section="tasks">
+                  <TaskShell
+                    mounted={deferredSection === "tasks"}
+                    visible={appSection !== "chat"}
+                    onJump={handleJumpToMessage}
+                  />
                 </MobileHeaderScope>
-              </SectionLayer>
-            )}
-            <MobileHeaderScope section="tasks">
-              <TaskShell
-                mounted={deferredSection === "tasks"}
-                visible={appSection !== "chat"}
-                onJump={handleJumpToMessage}
-              />
-            </MobileHeaderScope>
-            <MobileHeaderScope section="members">
-              <AgentShell
-                mounted={deferredSection === "members"}
-                visible={appSection !== "chat"}
-                onMessageAgent={handleMessageAgent}
-                onOpenConversation={openAgentConversation}
-              />
-            </MobileHeaderScope>
-            <MobileHeaderScope section="computers">
-              <ComputerShell
-                mounted={deferredSection === "computers"}
-                visible={appSection !== "chat"}
-              />
-            </MobileHeaderScope>
-            <MobileHeaderScope section="activity">
-              <ActivityShell
-                model={conversation.activity}
-                content={content}
-                fullscreen={fullscreen}
-              />
-            </MobileHeaderScope>
-            <MobileHeaderScope section="chat">
-              <ChatShell model={conversation.chat} content={content} fullscreen={fullscreen} />
-            </MobileHeaderScope>
+                <MobileHeaderScope section="members">
+                  <AgentShell
+                    mounted={deferredSection === "members"}
+                    visible={appSection !== "chat"}
+                    onMessageAgent={handleMessageAgent}
+                    onOpenConversation={openAgentConversation}
+                  />
+                </MobileHeaderScope>
+                <MobileHeaderScope section="computers">
+                  <ComputerShell
+                    mounted={deferredSection === "computers"}
+                    visible={appSection !== "chat"}
+                  />
+                </MobileHeaderScope>
+                <MobileHeaderScope section="activity">
+                  <ActivityShell
+                    model={conversation.activity}
+                    content={content}
+                    fullscreen={fullscreen}
+                  />
+                </MobileHeaderScope>
+                <MobileHeaderScope section="chat">
+                  <ChatShell model={conversation.chat} content={content} fullscreen={fullscreen} />
+                </MobileHeaderScope>
+              </>
+            </PageStack>
           </div>
         </div>
 
         {/* With a native tab bar this renders nothing and only syncs badges,
          * which the bar needs in every layout. */}
-        {(compact || getPlatform().navigation) && <MobileTabBar dots={navRailDots} />}
+        {(compact || getPlatform().navigation) && (
+          <MobileTabBar dots={navRailDots} avatarObjectUrl={viewerAvatarObjectUrl} />
+        )}
 
         {/* Toast surface follows the active theme: `theme` picks sonner's
          * light/dark default scale, and chrome.css maps its fill / text /

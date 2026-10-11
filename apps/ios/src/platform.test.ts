@@ -13,10 +13,13 @@ import type { NativeBridge } from "./bridge";
 function harness() {
   const native = {
     navigationBadges: vi.fn(async () => {}),
-    navigationSync: vi.fn(async () => ({ bottomInset: 0 })),
-    navigationCapture: vi.fn(async () => {}),
-    navigationFinish: vi.fn(async () => {}),
+    navigationSync: vi.fn(async () => ({ tabBarHeight: 0 })),
     navigationReset: vi.fn(async () => {}),
+    navigationAvatar: vi.fn(async () => {}),
+    titlebar: vi.fn(async () => {}),
+    titlebarEndSearch: vi.fn(async () => {}),
+    pageBar: vi.fn(async () => {}),
+    pageBarBackProgress: vi.fn(async () => {}),
     getProfile: vi.fn(async () => ({ server_url: "https://server.example", updated_at: 1 })),
     authState: vi.fn(async () => ({
       serverUrl: "https://server.example",
@@ -67,24 +70,31 @@ describe("iOS platform", () => {
     expect(await platform.files.saveAttachment(input)).toEqual({ ok: false, reason: "Disk full" });
   });
 
-  it("orders native presentation commands and continues after a failed capture", async () => {
+  it("orders native presentation commands and continues after a failed sync", async () => {
     const { native, platform } = harness();
-    let rejectCapture!: (error: Error) => void;
-    native.navigationCapture.mockImplementationOnce(
+    let rejectSync!: (error: Error) => void;
+    native.navigationSync.mockImplementationOnce(
       () =>
-        new Promise<void>((_, reject) => {
-          rejectCapture = reject;
+        new Promise<{ tabBarHeight: number }>((_, reject) => {
+          rejectSync = reject;
         }),
     );
     const navigation = platform.navigation!;
-    const capture = navigation.capture({ session: "s", key: "entry" });
-    const failed = expect(capture).rejects.toThrow("snapshot failed");
+    const sync = navigation.sync({
+      session: "s",
+      key: "entry",
+      tab: "chat",
+      blocked: false,
+      modalVersion: 0,
+      visible: true,
+    });
+    const failed = expect(sync).rejects.toThrow("host unavailable");
     const reset = navigation.reset("s");
     await Promise.resolve();
-    expect(native.navigationCapture).toHaveBeenCalledOnce();
+    expect(native.navigationSync).toHaveBeenCalledOnce();
     expect(native.navigationReset).not.toHaveBeenCalled();
 
-    rejectCapture(new Error("snapshot failed"));
+    rejectSync(new Error("host unavailable"));
     await failed;
     await reset;
     expect(native.navigationReset).toHaveBeenCalledExactlyOnceWith({ session: "s" });

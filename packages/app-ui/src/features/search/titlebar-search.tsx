@@ -10,6 +10,7 @@ import {
   MessageResultIcon,
   SearchIcon,
 } from "@/icons";
+import type { TitlebarCapability } from "@silverhand/client";
 import type { AgentDto, SearchIdentity, SearchResultDto } from "@silverhand/shared";
 
 import { Button } from "@/components/ui/button";
@@ -58,12 +59,8 @@ const FILTER_TABS: Array<{ value: FilterKind; label: string }> = [
  */
 export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element {
   const [open, setOpen] = useState(false);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<FilterKind>("all");
-  const [activeIndex, setActiveIndex] = useState(0);
-
+  const search = useTitlebarSearchModel(nav, () => setOpen(false));
   const inputRef = useRef<HTMLInputElement>(null);
-  const listRef = useRef<HTMLDivElement>(null);
   const composingRef = useRef(false);
 
   useEffect(() => {
@@ -77,6 +74,173 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    // While an IME composition is active, Enter / arrows belong to the
+    // candidate window, not the result list (`keyCode === 229` covers the
+    // browsers that fire keydown before `compositionend`).
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    const key =
+      event.key === "ArrowDown"
+        ? "down"
+        : event.key === "ArrowUp"
+          ? "up"
+          : event.key === "Tab"
+            ? event.shiftKey
+              ? "backtab"
+              : "tab"
+            : event.key === "Enter"
+              ? "enter"
+              : null;
+    if (key && search.press(key)) event.preventDefault();
+  };
+
+  return (
+    <Popover.Root
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next);
+        if (!next) search.setActiveIndex(0);
+      }}
+    >
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          aria-label="Search"
+          className={cn(
+            "no-drag flex h-6 w-full items-center gap-2 rounded-(--control-radius) px-2.5 text-left text-xs outline-none",
+            "bg-text-primary/10 text-text-muted transition-colors hover:bg-text-primary/[0.14]",
+          )}
+        >
+          <SearchIcon className="size-3.5 shrink-0" />
+          <span className="min-w-0 flex-1 truncate">Search everything</span>
+          <kbd className="shrink-0 rounded-(--chip-radius) bg-text-primary/[0.16] px-1.5 py-0.5 font-sans text-(length:--text-badge) leading-none text-text-secondary">
+            ⌘K
+          </kbd>
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align="center"
+          sideOffset={6}
+          data-popover-frame
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            inputRef.current?.focus();
+          }}
+          className={RESULTS_FRAME}
+        >
+          <div
+            data-search-divider="b"
+            className="flex items-center gap-2 border-b border-border px-3 py-2.5"
+          >
+            <SearchIcon className="size-4 shrink-0 text-text-muted" />
+            <input
+              ref={inputRef}
+              value={search.query}
+              onChange={(e) => search.setQuery(e.target.value)}
+              onKeyDown={onInputKeyDown}
+              onCompositionStart={() => {
+                composingRef.current = true;
+              }}
+              onCompositionEnd={() => {
+                composingRef.current = false;
+              }}
+              placeholder="Search messages, channels, humans"
+              className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
+            />
+            {search.isFetching ? (
+              <span className="shrink-0 text-xs text-text-muted">Searching…</span>
+            ) : null}
+          </div>
+          <TitlebarSearchResults search={search} />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+/**
+ * The same search for a native titlebar (iOS wide layout): the system search
+ * field there sends its text and keys; the results open below it while the
+ * field is in use.
+ */
+export function NativeTitlebarSearch({
+  nav,
+  titlebar,
+}: {
+  nav: TitlebarSearchNav;
+  titlebar: TitlebarCapability;
+}): JSX.Element {
+  const [open, setOpen] = useState(false);
+  const close = (clear: boolean): void => {
+    setOpen(false);
+    void titlebar.endSearch({ clear }).catch(() => {});
+  };
+  const search = useTitlebarSearchModel(nav, () => close(true));
+  const pressRef = useRef(search.press);
+  pressRef.current = search.press;
+  const { setQuery } = search;
+
+  useEffect(() => {
+    const listening = titlebar.subscribe((event) => {
+      if (event.kind === "searchFocus") {
+        setOpen(true);
+      } else if (event.kind === "searchQuery") {
+        setQuery(event.query);
+        setOpen(true);
+      } else if (event.kind === "searchKey") {
+        if (event.key === "escape") {
+          setOpen(false);
+          void titlebar.endSearch({ clear: false }).catch(() => {});
+        } else {
+          pressRef.current(event.key);
+        }
+      }
+    });
+    return () => {
+      void listening.then((remove) => remove());
+    };
+  }, [titlebar, setQuery]);
+
+  return (
+    <Popover.Root
+      open={open}
+      onOpenChange={(next) => {
+        if (!next) close(false);
+      }}
+    >
+      {/* Stands where the native field ends, so the results open beneath it. */}
+      <Popover.Anchor className="pointer-events-none fixed top-[env(safe-area-inset-top,0px)] left-1/2 h-0 w-[clamp(420px,52vw,720px)] -translate-x-1/2" />
+      <Popover.Portal>
+        <Popover.Content
+          align="center"
+          sideOffset={6}
+          data-popover-frame
+          // The native field keeps the keyboard focus.
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+          className={RESULTS_FRAME}
+        >
+          <TitlebarSearchResults search={search} />
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+const RESULTS_FRAME =
+  "z-(--z-popover) w-(--radix-popover-trigger-width) overflow-hidden bg-bg-floating shadow-popover outline-none";
+
+type SearchKey = "up" | "down" | "tab" | "backtab" | "enter";
+
+type TitlebarSearchModel = ReturnType<typeof useTitlebarSearchModel>;
+
+/** Query, results and the keyboard cursor shared by both search fields. */
+function useTitlebarSearchModel(nav: TitlebarSearchNav, onDone: () => void) {
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<FilterKind>("all");
+  const [activeIndex, setActiveIndex] = useState(0);
 
   const trimmed = query.trim();
   const deferredQuery = useDeferredValue(query);
@@ -137,12 +301,12 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
     if (activeIndex >= flatRows.length) setActiveIndex(Math.max(0, flatRows.length - 1));
   }, [activeIndex, flatRows.length]);
 
-  useEffect(() => {
-    const active = listRef.current?.querySelector<HTMLElement>("[data-active]");
-    active?.scrollIntoView({ block: "nearest" });
-  }, [activeIndex]);
-
   const pairs = useDirectPairs();
+
+  const finish = (): void => {
+    setQuery("");
+    onDone();
+  };
 
   const runRow = (row: FlatRow): void => {
     if (row.kind === "message") {
@@ -181,36 +345,37 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
       else nav.onOpenDirectDraft(target);
     }
 
-    setOpen(false);
-    setQuery("");
+    finish();
   };
 
-  const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
-    // While an IME composition is active, Enter / arrows belong to the
-    // candidate window, not the result list (`keyCode === 229` covers the
-    // browsers that fire keydown before `compositionend`).
-    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
+  const openAdvanced = (): void => {
+    nav.onOpenAdvanced(trimmed);
+    finish();
+  };
+
+  /** Moves the cursor, switches the filter or opens the active row; returns
+   *  whether the key was used. */
+  const press = (key: SearchKey): boolean => {
+    if (key === "down") {
       setActiveIndex((i) => Math.min(i + 1, Math.max(0, flatRows.length - 1)));
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setActiveIndex((i) => Math.max(i - 1, 0));
-    } else if (event.key === "Tab") {
-      if (trimmed.length === 0) return;
-      event.preventDefault();
-      const current = FILTER_TABS.findIndex((tab) => tab.value === filter);
-      const step = event.shiftKey ? -1 : 1;
-      const nextIndex = (current + step + FILTER_TABS.length) % FILTER_TABS.length;
-      const nextTab = FILTER_TABS[nextIndex];
-      if (nextTab) setFilter(nextTab.value);
-    } else if (event.key === "Enter") {
-      const row = flatRows[activeIndex];
-      if (row) {
-        event.preventDefault();
-        runRow(row);
-      }
+      return true;
     }
+    if (key === "up") {
+      setActiveIndex((i) => Math.max(i - 1, 0));
+      return true;
+    }
+    if (key === "tab" || key === "backtab") {
+      if (trimmed.length === 0) return false;
+      const current = FILTER_TABS.findIndex((tab) => tab.value === filter);
+      const step = key === "backtab" ? -1 : 1;
+      const nextTab = FILTER_TABS[(current + step + FILTER_TABS.length) % FILTER_TABS.length];
+      if (nextTab) setFilter(nextTab.value);
+      return true;
+    }
+    const row = flatRows[activeIndex];
+    if (!row) return false;
+    runRow(row);
+    return true;
   };
 
   const agentsById = useMemo(() => new Map(agents.map((a) => [a.id, a])), [agents]);
@@ -224,193 +389,158 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
     identityRows.flatMap((c) => (c.kind === "agent" ? [c] : [])),
   );
 
+  return {
+    query,
+    setQuery,
+    trimmed,
+    deferredQuery,
+    filter,
+    setFilter,
+    activeIndex,
+    setActiveIndex,
+    counts: {
+      all: channels.length + workspaces.length + identityRows.length + messages.length,
+      channels: channels.length + workspaces.length,
+      people: identityRows.length,
+      messages: messages.length,
+    } satisfies Record<FilterKind, number>,
+    identities,
+    sections,
+    flatRows,
+    isFetching,
+    isError,
+    refetch,
+    runRow,
+    openAdvanced,
+    press,
+    avatars: {
+      agentsById,
+      ownerAgentAvatars,
+      agentAvatarUrls,
+      humanAvatarUrls,
+      identityHumanAvatars,
+      identityAgentAvatars,
+    },
+  };
+}
+
+/** Filter tabs, result sections and the footer below either search field. */
+function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX.Element {
+  const listRef = useRef<HTMLDivElement>(null);
+  const { activeIndex, flatRows, identities, sections, trimmed } = search;
+
+  useEffect(() => {
+    const active = listRef.current?.querySelector<HTMLElement>("[data-active]");
+    active?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex]);
+
   return (
-    <Popover.Root
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next);
-        if (!next) setActiveIndex(0);
-      }}
-    >
-      <Popover.Trigger asChild>
-        <button
-          type="button"
-          aria-label="Search"
-          className={cn(
-            "no-drag flex h-(--titlebar-control-size,1.5rem) w-full items-center gap-2 rounded-(--control-radius) px-2.5 text-left text-(length:--titlebar-text-size,0.75rem) outline-none",
-            "bg-text-primary/10 text-text-muted transition-colors hover:bg-text-primary/[0.14]",
-          )}
-        >
-          <SearchIcon className="size-(--titlebar-icon-size,0.875rem) shrink-0" />
-          <span className="min-w-0 flex-1 truncate">Search everything</span>
-          <kbd className="shrink-0 rounded-(--chip-radius) bg-text-primary/[0.16] px-1.5 py-0.5 font-sans text-(length:--text-badge) leading-none text-text-secondary">
-            ⌘K
-          </kbd>
-        </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          align="center"
-          sideOffset={6}
-          data-popover-frame
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            inputRef.current?.focus();
-          }}
-          className="z-(--z-popover) w-(--radix-popover-trigger-width) overflow-hidden bg-bg-floating shadow-popover outline-none"
-        >
-          <div
-            data-search-divider="b"
-            className="flex items-center gap-2 border-b border-border px-3 py-2.5"
-          >
-            <SearchIcon className="size-4 shrink-0 text-text-muted" />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={onInputKeyDown}
-              onCompositionStart={() => {
-                composingRef.current = true;
-              }}
-              onCompositionEnd={() => {
-                composingRef.current = false;
-              }}
-              placeholder="Search messages, channels, humans"
-              className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
-            />
-            {isFetching ? (
-              <span className="shrink-0 text-xs text-text-muted">Searching…</span>
-            ) : null}
-          </div>
-
-          {trimmed.length > 0 ? (
-            <div className="flex gap-1.5 px-3 py-2">
-              {FILTER_TABS.map((tab) => {
-                const count = countFor(
-                  tab.value,
-                  channels.length,
-                  workspaces.length,
-                  identityRows.length,
-                  messages.length,
-                );
-                return (
-                  <button
-                    key={tab.value}
-                    type="button"
-                    onClick={() => setFilter(tab.value)}
-                    className={cn(
-                      "rounded-(--pill-radius) border-(length:--control-border-width) px-2.5 py-0.5 text-xs transition-colors",
-                      filter === tab.value
-                        ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
-                        : "border-border text-text-secondary hover:border-(--border-control-hover) hover:bg-bg-hover",
-                    )}
-                  >
-                    {tab.label}
-                    <span
-                      className={cn(
-                        "ml-1 text-(length:--text-badge)",
-                        filter === tab.value ? "text-text-on-selected/70" : "text-text-muted",
-                      )}
-                    >
-                      {count}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          ) : null}
-
-          {isError ? (
-            <div role="alert" className="px-3 py-2 text-sm text-text-muted">
-              Search failed.{" "}
-              <button type="button" onClick={() => void refetch()}>
-                Retry
-              </button>
-            </div>
-          ) : null}
-          {identities && (identities.humans.truncated || identities.agents.truncated) ? (
-            <p className="px-3 py-2 text-xs text-text-muted">
-              Showing up to 20 matches per people category. Refine your search for more results.
-            </p>
-          ) : null}
-          <div
-            ref={listRef}
-            className="search-list scrollbar-hide max-h-[min(60vh,440px)] overflow-y-auto p-2"
-          >
-            {trimmed.length === 0 ? (
-              <SearchEmptyState text="Search across your workspace" />
-            ) : sections.length === 0 && !isFetching && !isError ? (
-              <SearchEmptyState text="No results" />
-            ) : (
-              sections.map((section) => (
-                <section key={section.key} className="mb-3 last:mb-0">
-                  <header className="flex items-center gap-2 px-1 pb-1.5 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
-                    {section.icon}
-                    <span>{section.label}</span>
-                    <span className="text-text-muted/70">{section.rows.length}</span>
-                  </header>
-                  <ul className="space-y-1.5">
-                    {section.rows.map((row) => {
-                      const index = flatRows.indexOf(row);
-                      return (
-                        <li key={row.key}>
-                          <TitlebarSearchRow
-                            row={row}
-                            query={deferredQuery}
-                            active={index === activeIndex}
-                            agentsById={agentsById}
-                            ownerAgentAvatars={ownerAgentAvatars}
-                            agentAvatarUrls={agentAvatarUrls}
-                            humanAvatarUrls={humanAvatarUrls}
-                            identityHumanAvatars={identityHumanAvatars}
-                            identityAgentAvatars={identityAgentAvatars}
-                            onMouseEnter={() => setActiveIndex(index)}
-                            onClick={() => runRow(row)}
-                          />
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </section>
-              ))
-            )}
-          </div>
-
-          <div
-            data-search-divider="t"
-            className="flex items-center justify-between gap-3 border-t border-border px-3 py-2 text-(length:--text-meta) text-text-muted"
-          >
-            <span className="flex items-center gap-3">
-              <FooterHint keys={[<EnterIcon className="size-3" />]} label="Open" />
-              <FooterHint
-                keys={[<ArrowUpIcon className="size-3" />, <ArrowDownIcon className="size-3" />]}
-                label="Navigate"
-              />
-              <FooterHint
-                keys={[<ArrowRightToLineIcon className="size-3" />]}
-                label="Switch type"
-              />
-              <FooterHint keys={["esc"]} label="Close" />
-            </span>
-            <Button
+    <>
+      {trimmed.length > 0 ? (
+        <div className="flex gap-1.5 px-3 py-2">
+          {FILTER_TABS.map((tab) => (
+            <button
+              key={tab.value}
               type="button"
-              variant="soft"
-              size="xs"
-              data-sticker
-              data-sticker-size="md"
-              data-sticker-tone="neutral"
-              onClick={() => {
-                nav.onOpenAdvanced(trimmed);
-                setOpen(false);
-                setQuery("");
-              }}
+              onClick={() => search.setFilter(tab.value)}
+              className={cn(
+                "rounded-(--pill-radius) border-(length:--control-border-width) px-2.5 py-0.5 text-xs transition-colors",
+                search.filter === tab.value
+                  ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
+                  : "border-border text-text-secondary hover:border-(--border-control-hover) hover:bg-bg-hover",
+              )}
             >
-              Advanced search
-            </Button>
-          </div>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+              {tab.label}
+              <span
+                className={cn(
+                  "ml-1 text-(length:--text-badge)",
+                  search.filter === tab.value ? "text-text-on-selected/70" : "text-text-muted",
+                )}
+              >
+                {search.counts[tab.value]}
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
+
+      {search.isError ? (
+        <div role="alert" className="px-3 py-2 text-sm text-text-muted">
+          Search failed.{" "}
+          <button type="button" onClick={() => void search.refetch()}>
+            Retry
+          </button>
+        </div>
+      ) : null}
+      {identities && (identities.humans.truncated || identities.agents.truncated) ? (
+        <p className="px-3 py-2 text-xs text-text-muted">
+          Showing up to 20 matches per people category. Refine your search for more results.
+        </p>
+      ) : null}
+      <div
+        ref={listRef}
+        className="search-list scrollbar-hide max-h-[min(60vh,440px)] overflow-y-auto p-2"
+      >
+        {trimmed.length === 0 ? (
+          <SearchEmptyState text="Search across your workspace" />
+        ) : sections.length === 0 && !search.isFetching && !search.isError ? (
+          <SearchEmptyState text="No results" />
+        ) : (
+          sections.map((section) => (
+            <section key={section.key} className="mb-3 last:mb-0">
+              <header className="flex items-center gap-2 px-1 pb-1.5 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
+                {section.icon}
+                <span>{section.label}</span>
+                <span className="text-text-muted/70">{section.rows.length}</span>
+              </header>
+              <ul className="space-y-1.5">
+                {section.rows.map((row) => {
+                  const index = flatRows.indexOf(row);
+                  return (
+                    <li key={row.key}>
+                      <TitlebarSearchRow
+                        row={row}
+                        query={search.deferredQuery}
+                        active={index === activeIndex}
+                        {...search.avatars}
+                        onMouseEnter={() => search.setActiveIndex(index)}
+                        onClick={() => search.runRow(row)}
+                      />
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          ))
+        )}
+      </div>
+
+      <div
+        data-search-divider="t"
+        className="flex items-center justify-between gap-3 border-t border-border px-3 py-2 text-(length:--text-meta) text-text-muted"
+      >
+        <span className="flex items-center gap-3">
+          <FooterHint keys={[<EnterIcon className="size-3" />]} label="Open" />
+          <FooterHint
+            keys={[<ArrowUpIcon className="size-3" />, <ArrowDownIcon className="size-3" />]}
+            label="Navigate"
+          />
+          <FooterHint keys={[<ArrowRightToLineIcon className="size-3" />]} label="Switch type" />
+          <FooterHint keys={["esc"]} label="Close" />
+        </span>
+        <Button
+          type="button"
+          variant="soft"
+          size="xs"
+          data-sticker
+          data-sticker-size="md"
+          data-sticker-tone="neutral"
+          onClick={search.openAdvanced}
+        >
+          Advanced search
+        </Button>
+      </div>
+    </>
   );
 }
 
@@ -506,19 +636,6 @@ function buildSections(
   }
 
   return sections;
-}
-
-function countFor(
-  value: FilterKind,
-  channels: number,
-  workspaces: number,
-  identities: number,
-  messages: number,
-): number {
-  if (value === "channels") return channels + workspaces;
-  if (value === "people") return identities;
-  if (value === "messages") return messages;
-  return channels + workspaces + identities + messages;
 }
 
 function TitlebarSearchRow({

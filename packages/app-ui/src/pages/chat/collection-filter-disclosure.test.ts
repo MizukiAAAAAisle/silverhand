@@ -6,6 +6,8 @@ import { ArchivedChannelsPanel, ARCHIVED_FILTER_DEFAULT } from "./archived-chann
 
 const state = vi.hoisted(() => ({ compact: true }));
 vi.mock("@/navigation/layout", () => ({ useCompactLayout: () => state.compact }));
+vi.mock("@/platform", () => ({ getPlatform: () => ({}) }));
+vi.mock("@/navigation/page-stack", () => ({ usePageLive: () => true }));
 vi.mock("@/features/users/hooks", () => ({
   useUsers: () => ({ data: [] }),
   useUsersById: () => new Map(),
@@ -59,7 +61,7 @@ it("preserves Saved's original no-collection behavior and desktop visibility", (
   expect(html.match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0]).not.toContain("aria-controls=");
 });
 
-it("keeps Archived loading status alongside its compact filter action", () => {
+it("starts Archived with its compact filters collapsed", () => {
   const html = renderToStaticMarkup(
     createElement(ArchivedChannelsPanel, {
       workspaces: [],
@@ -70,7 +72,6 @@ it("keeps Archived loading status alongside its compact filter action", () => {
       onOpenWorkspaceSettings: vi.fn(),
     }),
   );
-  expect(html).toContain("Refreshing…");
   expect(html).toContain('aria-label="Show filters"');
   expect(html).toContain('aria-label="Filters" hidden=""');
 });

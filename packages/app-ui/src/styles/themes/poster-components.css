@@ -176,7 +176,6 @@
 }
 
 [data-theme="poster"] aside[data-sidebar] {
-  --pane-bg: var(--poster-paper-2);
   --text-primary: var(--poster-ink);
   --text-secondary: var(--poster-ink);
   --text-muted: #6b645a;

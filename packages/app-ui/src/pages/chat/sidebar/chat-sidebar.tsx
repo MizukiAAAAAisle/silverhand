@@ -1,5 +1,6 @@
 import { useListReadingPosition } from "@/navigation/view-memory";
 import { Brandmark } from "@/components/brand/brandmark";
+import { iconMarkup, nativeActionBar, useNativeBar } from "@/components/layout/native-page-bar";
 import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMemo, type ReactNode } from "react";
@@ -132,6 +133,19 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
   };
 
   const readingPosition = useListReadingPosition("chat-list");
+  // The compact list is the Chats root, titled like the other Tab roots.
+  const [chatsBar, chatsBarHandlers] = nativeActionBar(
+    { title: "Chats", titleAction: null, largeTitle: true, tabs: null, addTabs: null },
+    [
+      {
+        id: "create-workspace",
+        label: "New workspace",
+        icon: iconMarkup(PlusIcon),
+        run: props.onCreateWorkspace,
+      },
+    ],
+  );
+  const native = useNativeBar(props.fill ? chatsBar : null, chatsBarHandlers);
   return (
     <Sidebar
       name="workspaces"
@@ -139,10 +153,14 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
       width="var(--sidebar-width)"
       sidebar={
         <>
-          <header className="chat-sidebar-brand hidden h-14 shrink-0 items-center gap-2 px-2 text-text-primary">
-            <Brandmark className="size-7 shrink-0" />
-            <h1 className="text-xl font-bold">silverhand</h1>
-          </header>
+          {native.active ? (
+            native.clearance
+          ) : (
+            <header className="chat-sidebar-brand hidden h-14 shrink-0 items-center gap-2 px-2 text-text-primary">
+              <Brandmark className="size-7 shrink-0" />
+              <h1 className="text-xl font-bold">silverhand</h1>
+            </header>
+          )}
           <nav
             {...readingPosition}
             data-scroll-root
@@ -208,21 +226,23 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
             {props.workspacesLoading && props.workspaces.length === 0 ? (
               <SidebarRowsSkeleton label="Loading workspaces" />
             ) : null}
-            <div
-              data-sidebar-cta-slot
-              className="sticky bottom-0 mt-auto shrink-0 bg-(--pane-bg,var(--bg-base)) px-1 pt-2"
-            >
-              <Button
-                type="button"
-                variant="neutral"
-                className="h-8 w-full"
-                data-sidebar-cta
-                onClick={props.onCreateWorkspace}
+            {native.active ? null : (
+              <div
+                data-sidebar-cta-slot
+                className="sticky bottom-0 mt-auto shrink-0 bg-(--pane-bg,var(--bg-base)) px-1 pt-2"
               >
-                <PlusIcon className="size-4" />
-                <span>New workspace</span>
-              </Button>
-            </div>
+                <Button
+                  type="button"
+                  variant="neutral"
+                  className="h-8 w-full"
+                  data-sidebar-cta
+                  onClick={props.onCreateWorkspace}
+                >
+                  <PlusIcon className="size-4" />
+                  <span>New workspace</span>
+                </Button>
+              </div>
+            )}
           </nav>
         </>
       }

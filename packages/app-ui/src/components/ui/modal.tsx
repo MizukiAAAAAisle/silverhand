@@ -3,7 +3,7 @@ import {
   createContext,
   useContext,
   useState,
-  useRef,
+  useLayoutEffect,
   useCallback,
   forwardRef,
   type ComponentPropsWithoutRef,
@@ -45,16 +45,26 @@ export const Content = forwardRef<
   ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
 >((props, ref) => {
   const active = useContext(ModalActiveContext);
-  const release = useRef<(() => void) | undefined>(undefined);
+  const [mounted, setMounted] = useState(false);
   const contentRef = useCallback(
     (node: HTMLDivElement | null) => {
-      release.current?.();
-      release.current = node && active ? modalScope.acquire() : undefined;
+      setMounted(node !== null);
       if (typeof ref === "function") ref(node);
       else if (ref) ref.current = node;
     },
-    [ref, active],
+    [ref],
   );
+
+  // Ownership follows mount and activity, not ref identity: React detaches and
+  // reattaches a callback ref whenever it changes, and releasing on that cycle
+  // publishes an unblocked scope that shows the native tab bar for a frame.
+  useLayoutEffect(() => {
+    if (!mounted || !active) {
+      return;
+    }
+    return modalScope.acquire();
+  }, [mounted, active]);
+
   return <DialogPrimitive.Content {...props} ref={contentRef} />;
 });
 Content.displayName = "ModalContent";

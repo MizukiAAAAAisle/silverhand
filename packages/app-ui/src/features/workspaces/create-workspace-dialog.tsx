@@ -12,6 +12,7 @@ import { Button } from "@/components/ui/button";
 import { describeApiError } from "@/lib/api-error-message";
 import {
   NameAvailabilityHint,
+  NameCheckingIcon,
   useNameAvailability,
 } from "@/features/identity/use-name-availability";
 import { useAgents } from "@/features/agents/hooks/hooks";
@@ -166,15 +167,19 @@ export function CreateWorkspaceDialog({
             <Label htmlFor="ch-name" required className="font-semibold">
               Name
             </Label>
-            <Input
-              id="ch-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              onBlur={nameCheck.markTouched}
-              aria-invalid={nameCheck.blocking || undefined}
-              placeholder="my-frontend"
-              autoFocus
-            />
+            <div className="relative">
+              <Input
+                id="ch-name"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onBlur={nameCheck.markTouched}
+                aria-invalid={nameCheck.blocking || undefined}
+                placeholder="my-frontend"
+                autoFocus
+                className="pr-8"
+              />
+              <NameCheckingIcon check={nameCheck} />
+            </div>
             <NameAvailabilityHint check={nameCheck} />
           </div>
 

@@ -1,3 +1,4 @@
+import { usePageLive } from "@/navigation/page-stack";
 import { useCompactLayout } from "@/navigation/layout";
 import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -6,6 +7,7 @@ import {
   CloseIcon,
   CollapseIcon,
   ExpandIcon,
+  MoreIcon,
   SearchIcon,
   SettingsIcon,
   ThreadIcon,
@@ -60,14 +62,34 @@ import {
   rosterQueryTarget,
 } from "@/features/conversations/pane-mode";
 import { ConversationPaneCapabilitiesProvider } from "@/features/conversations/pane-capabilities-context";
-import { ConversationHeaderIdentity } from "./channel-view/conversation-header-identity";
+import { focusAgentSideSection } from "@/features/agents/components/agent-view";
+import {
+  ConversationHeaderIdentity,
+  useHeaderIdentityIcon,
+} from "./channel-view/conversation-header-identity";
 import { paneChrome } from "../../../components/layout/pane-chrome";
-import { ConversationTabBar } from "./channel-view/conversation-tab-bar";
+import { FloatingPaneChrome } from "@/components/layout/pane-shell";
+import { cn } from "@/lib/cn";
+import {
+  ConversationTabBar,
+  PANEL_PRESENTATION,
+  tabPresentation,
+} from "./channel-view/conversation-tab-bar";
+import {
+  iconMarkup,
+  useNativeBar,
+  useNativeBarPlatform,
+  type PageBarDeclaration,
+} from "@/components/layout/native-page-bar";
 import { ChannelTasksTab } from "./channel-view/channel-tasks-tab";
 import { ChannelAttachmentTab } from "./channel-view/channel-attachment-tab";
 import { ConversationPanelTab } from "./channel-view/conversation-panel-tab";
 import { useConversationTabs } from "@/features/conversations/use-conversation-tabs";
-import { tabKey, type PanelTabKind } from "@/features/conversation-shell/model/conversation-tabs";
+import {
+  isRemovable,
+  tabKey,
+  type PanelTabKind,
+} from "@/features/conversation-shell/model/conversation-tabs";
 import {
   taskBoardContainerForPane,
   type TaskBoardContainer,
@@ -533,6 +555,7 @@ function ActiveChannelView({
   // tightening over the old "any message frame → markRead" (which marked on
   // arrival even off-tail / reply-only): see the dogfood handoff note.
   const markRead = useMarkMessageChannelRead();
+  const live = usePageLive();
   // Gate off the newest COMMITTED row — a pending optimistic tail has no
   // MessageSeq, and mark-read must advance on a real ordinal (§3.3/§3.5).
   const tailSeq = lastCommittedSeq(messages);
@@ -543,7 +566,7 @@ function ActiveChannelView({
     // never advance a read cursor / write read-state (gate.allowMemberEffects).
     // This is a BEHAVIOR gate, not a hidden control — the auto-effect itself is
     // suppressed, not merely a button.
-    if (!gate.allowMemberEffects) return;
+    if (!gate.allowMemberEffects || !live) return;
     const next = nextTailReadMark(
       lastMarkedRef.current,
       conversation.id,
@@ -561,7 +584,7 @@ function ActiveChannelView({
     );
     // mutateAsync is stable; cleanup cancels recovery if this tail is no longer visible.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversation.id, tailSeq, isAtTail, hasNewerLiveGap, gate.allowMemberEffects]);
+  }, [conversation.id, tailSeq, isAtTail, hasNewerLiveGap, gate.allowMemberEffects, live]);
 
   const { data: agents = [] } = useAgents();
   // Single batch fetch for every agent avatar in this channel — threaded
@@ -746,6 +769,181 @@ function ActiveChannelView({
     onOpen: find.openFind,
   });
 
+  // Compact iOS draws this header natively; the page keeps every state and
+  // handler, and the web header and tab strip step aside.
+  const nativeBarAvailable = useNativeBarPlatform();
+  const nativeTitle = showThreadHeader ? (parentTitle ?? conversation.title) : conversation.title;
+  const counterpart = paneMode.kind === "direct_message" ? paneMode.counterpart : null;
+  const nativeTitleIcon = useHeaderIdentityIcon(paneCaps.headerIdentity, counterpart);
+  // A pair's title opens its counterpart, as the web header's face does.
+  const openCounterpart =
+    counterpart?.status === "active"
+      ? counterpart.kind === "agent"
+        ? {
+            hint: "Opens activity",
+            run: () => {
+              focusAgentSideSection(counterpart.id, "activity");
+              nav.openAgentPanel(counterpart.id);
+            },
+          }
+        : { hint: "Opens profile", run: () => nav.openHumanPanel(counterpart.id) }
+      : null;
+  const titleAction = showThreadHeader
+    ? null
+    : canOpenSettings
+      ? "Opens channel settings"
+      : (openCounterpart?.hint ?? null);
+  const nativeBar = useMemo<PageBarDeclaration | null>(() => {
+    if (!nativeBarAvailable) {
+      return null;
+    }
+
+    const actions = [
+      findAvailable
+        ? {
+            id: "find",
+            label: "Search",
+            accessibilityLabel: "Search this channel",
+            icon: iconMarkup(SearchIcon),
+            selected: find.open,
+          }
+        : null,
+      onToggleThreadsList && gate.allowMemberEffects
+        ? {
+            id: "threads",
+            label: "Threads",
+            accessibilityLabel: hasFollowedThreadUnread ? "Threads (unread)" : undefined,
+            icon: iconMarkup(ThreadIcon),
+            selected: threadsListActive,
+            dot: hasFollowedThreadUnread,
+          }
+        : null,
+      onToggleFilesList && gate.allowMemberEffects
+        ? {
+            id: "files",
+            label: "Attachments",
+            icon: iconMarkup(AttachmentIcon),
+            selected: filesListActive,
+          }
+        : null,
+      onToggleFullscreen
+        ? {
+            id: "fullscreen",
+            label: isFullscreen ? "Exit full screen" : "Full screen",
+            icon: iconMarkup(isFullscreen ? CollapseIcon : ExpandIcon),
+          }
+        : null,
+      onCloseChild ? { id: "close", label: closeLabel, icon: iconMarkup(CloseIcon) } : null,
+    ].filter((action) => action !== null);
+
+    return {
+      title: nativeTitle,
+      subtitle: isArchived
+        ? "Archived"
+        : closed
+          ? "Closed"
+          : showThreadHeader
+            ? "Thread"
+            : undefined,
+      titleAction,
+      titleIcon: titleAction ? nativeTitleIcon : undefined,
+      actions: actions.length > 0 ? [actions] : [],
+      overflow: actions.length > 1 ? { label: "More", icon: iconMarkup(MoreIcon) } : undefined,
+      tabs: viewTabsShown
+        ? tabController.tabs.map((tab) => {
+            const key = tabKey(tab);
+            const { icon, label } = tabPresentation(tab);
+            const unread =
+              tab.kind === "panel" && tab.panel === "threads" && hasFollowedThreadUnread;
+            return {
+              id: key,
+              label,
+              accessibilityLabel: unread ? `${label} (unread)` : undefined,
+              icon: iconMarkup(icon),
+              selected: key === tabController.activeKey,
+              dot: unread,
+              closeLabel: isRemovable(tab) ? "Remove" : null,
+            };
+          })
+        : null,
+      addTabs:
+        viewTabsShown && addablePanels.length > 0
+          ? {
+              label: "Add a view",
+              items: addablePanels.map((panel) => ({
+                id: panel,
+                label: PANEL_PRESENTATION[panel].label,
+                icon: iconMarkup(PANEL_PRESENTATION[panel].icon),
+              })),
+            }
+          : null,
+    };
+  }, [
+    nativeBarAvailable,
+    nativeTitle,
+    findAvailable,
+    find.open,
+    onToggleThreadsList,
+    onToggleFilesList,
+    onToggleFullscreen,
+    onCloseChild,
+    gate.allowMemberEffects,
+    hasFollowedThreadUnread,
+    threadsListActive,
+    filesListActive,
+    isFullscreen,
+    closeLabel,
+    isArchived,
+    closed,
+    showThreadHeader,
+    titleAction,
+    nativeTitleIcon,
+    viewTabsShown,
+    tabController.tabs,
+    tabController.activeKey,
+    addablePanels,
+  ]);
+  const native = useNativeBar(nativeBar, {
+    title: () => {
+      if (canOpenSettings) {
+        nav.openChannelSettings(conversation.id);
+      } else {
+        openCounterpart?.run();
+      }
+    },
+    action: ({ id }) => {
+      if (id === "find") {
+        if (find.open) {
+          find.close();
+        } else {
+          find.openFind();
+        }
+      } else if (id === "threads") {
+        onToggleThreadsList?.();
+      } else if (id === "files") {
+        onToggleFilesList?.();
+      } else if (id === "fullscreen") {
+        onToggleFullscreen?.();
+      } else if (id === "close") {
+        onCloseChild?.();
+      }
+    },
+    tab: ({ id }) => tabController.setActive(id),
+    closeTab: ({ id }) => tabController.closeTab(id),
+    moveTab: ({ id, to }) => {
+      const from = tabController.tabs.findIndex((tab) => tabKey(tab) === id);
+      if (from >= 0 && to >= 0 && to < tabController.tabs.length) {
+        tabController.reorder(from, to);
+      }
+    },
+    addTab: ({ id }) => {
+      if (id === "attachments" || id === "threads") {
+        handleAddPanel(id);
+      }
+    },
+  });
+  const nativeHeader = native.active;
+
   return (
     <TaskRefContextProvider value={taskRefContext}>
       <ConversationPaneCapabilitiesProvider value={paneCaps}>
@@ -755,227 +953,259 @@ function ActiveChannelView({
           className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden"
           style={paneChrome}
         >
-          <header
-            data-conversation-header
-            className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4"
-          >
-            <MobileNavigationSlot />
-            {showThreadHeader ? (
-              <>
-                <ThreadIcon className="size-4 shrink-0 text-text-muted" />
-                <span
-                  data-conversation-title
-                  className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
-                >
-                  {/* A thread is a reply-cluster, not a channel: the
-                  `ThreadIcon` above is its identity glyph, so the
-                  channel `#` (`[data-conversation-hash-icon]`) does NOT
-                  belong here — only true channel/DM headers carry it
-                  (shiki, #task:1373). */}
-                  {parentTitle ?? conversation.title}
-                </span>
-                {memberStrip}
-                {!compact && addMemberWorkspaceId !== null ? (
-                  <AddConversationMemberPopover
-                    workspaceId={addMemberWorkspaceId}
-                    conversationId={conversation.id}
-                  />
-                ) : null}
-                {onJumpToOriginal && anchorMessageId ? (
-                  <button
-                    type="button"
-                    onClick={() => onJumpToOriginal(anchorMessageId)}
-                    className="text-xs text-accent hover:underline"
-                    title="Jump to the source message"
-                  >
-                    view in channel
-                  </button>
-                ) : null}
-              </>
+          <FloatingPaneChrome clearance="scroller">
+            {nativeHeader ? (
+              native.clearance
             ) : (
-              <>
-                {/* Identity by MODE, resolved in one place (#task:2039): a workspace
-                channel wears the `#` (shiki: "只要是 channel 都需要 # icon,逻辑上
-                不需要分支", #task:1373 — that ruling is about channels, and a
-                `direct_pair` is not one), a direct line wears its counterpart's
-                face. Threads take the branch above and wear the `ThreadIcon`. */}
-                <ConversationHeaderIdentity
-                  identity={paneCaps.headerIdentity}
-                  title={conversation.title}
-                  counterpart={paneMode.kind === "direct_message" ? paneMode.counterpart : null}
-                />
-                {memberStrip}
-                {!compact && addMemberWorkspaceId !== null ? (
-                  <AddConversationMemberPopover
-                    workspaceId={addMemberWorkspaceId}
-                    conversationId={conversation.id}
-                  />
-                ) : null}
-                {parentTitle ? (
-                  <span className="flex min-w-0 items-center gap-1 truncate text-xs text-text-muted">
-                    <ThreadIcon className="size-3 shrink-0 text-text-muted/60" />
-                    <span className="truncate">thread of {parentTitle}</span>
+              <header
+                data-conversation-header
+                className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4"
+              >
+                <MobileNavigationSlot />
+                {showThreadHeader ? (
+                  <>
+                    <ThreadIcon className="size-4 shrink-0 text-text-muted" />
+                    <span
+                      data-conversation-title
+                      className="min-w-0 truncate font-serif text-base font-semibold text-text-primary"
+                    >
+                      {/* A thread is a reply-cluster, not a channel: the
+                    `ThreadIcon` above is its identity glyph, so the
+                    channel `#` (`[data-conversation-hash-icon]`) does NOT
+                    belong here — only true channel/DM headers carry it
+                    (shiki, #task:1373). */}
+                      {parentTitle ?? conversation.title}
+                    </span>
+                    {memberStrip}
+                    {!compact && addMemberWorkspaceId !== null ? (
+                      <AddConversationMemberPopover
+                        workspaceId={addMemberWorkspaceId}
+                        conversationId={conversation.id}
+                      />
+                    ) : null}
+                    {onJumpToOriginal && anchorMessageId ? (
+                      <button
+                        type="button"
+                        onClick={() => onJumpToOriginal(anchorMessageId)}
+                        className="text-xs text-accent hover:underline"
+                        title="Jump to the source message"
+                      >
+                        view in channel
+                      </button>
+                    ) : null}
+                  </>
+                ) : (
+                  <>
+                    {/* Identity by MODE, resolved in one place (#task:2039): a workspace
+                  channel wears the `#` (shiki: "只要是 channel 都需要 # icon,逻辑上
+                  不需要分支", #task:1373 — that ruling is about channels, and a
+                  `direct_pair` is not one), a direct line wears its counterpart's
+                  face. Threads take the branch above and wear the `ThreadIcon`. */}
+                    {compact && canOpenSettings ? (
+                      // Compact drops the settings button: the title opens settings,
+                      // where members also live.
+                      <button
+                        type="button"
+                        data-conversation-title-button
+                        onClick={() => nav.openChannelSettings(conversation.id)}
+                        aria-label="Channel settings"
+                        className="focus-outline flex min-w-0"
+                      >
+                        <ConversationHeaderIdentity
+                          identity={paneCaps.headerIdentity}
+                          title={conversation.title}
+                          counterpart={null}
+                        />
+                      </button>
+                    ) : (
+                      <ConversationHeaderIdentity
+                        identity={paneCaps.headerIdentity}
+                        title={conversation.title}
+                        counterpart={
+                          paneMode.kind === "direct_message" ? paneMode.counterpart : null
+                        }
+                      />
+                    )}
+                    {memberStrip}
+                    {!compact && addMemberWorkspaceId !== null ? (
+                      <AddConversationMemberPopover
+                        workspaceId={addMemberWorkspaceId}
+                        conversationId={conversation.id}
+                      />
+                    ) : null}
+                    {parentTitle ? (
+                      <span className="flex min-w-0 items-center gap-1 truncate text-xs text-text-muted">
+                        <ThreadIcon className="size-3 shrink-0 text-text-muted/60" />
+                        <span className="truncate">thread of {parentTitle}</span>
+                      </span>
+                    ) : null}
+                  </>
+                )}
+                {closed ? (
+                  <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
+                    closed
                   </span>
                 ) : null}
-              </>
-            )}
-            {closed ? (
-              <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
-                closed
-              </span>
-            ) : null}
-            {isArchived ? (
-              <span className="rounded-full bg-accent-soft px-2 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-accent">
-                archived
-              </span>
-            ) : null}
+                {isArchived ? (
+                  <span className="rounded-full bg-accent-soft px-2 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-accent">
+                    archived
+                  </span>
+                ) : null}
 
-            <div data-channel-actions className="ml-auto flex shrink-0 items-center gap-1.5">
-              {findAvailable ? (
-                <button
-                  type="button"
-                  data-sticker
-                  data-sticker-size="md"
-                  data-sticker-tone="neutral"
-                  onClick={find.open ? find.close : find.openFind}
-                  aria-label="Search this channel"
-                  aria-pressed={find.open}
-                  title="Search this channel"
-                  className={
-                    "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
-                    (find.open
-                      ? "bg-bg-hover text-text-primary"
-                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
-                  }
-                >
-                  <SearchIcon className="size-3.5" />
-                </button>
-              ) : null}
-              {onToggleThreadsList && gate.allowMemberEffects ? (
-                <button
-                  type="button"
-                  data-sticker
-                  data-sticker-size="md"
-                  data-sticker-tone="neutral"
-                  onClick={onToggleThreadsList}
-                  aria-label={hasFollowedThreadUnread ? "Threads (unread)" : "Threads"}
-                  aria-pressed={threadsListActive}
-                  title="Threads"
-                  className={
-                    "relative flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
-                    (threadsListActive
-                      ? "bg-bg-hover text-text-primary"
-                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
-                  }
-                >
-                  <ThreadIcon className="size-3.5" />
-                  {hasFollowedThreadUnread ? (
-                    // #task:1773: ambient attention dot (same recipe as the NavRail
-                    // unread dot). Decorative — the unread state is already in the
-                    // aria-label — so pointer-events-none and aria-hidden.
-                    <span
-                      aria-hidden
-                      className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-(--unread)"
-                    />
-                  ) : null}
-                </button>
-              ) : null}
-              {onToggleFilesList && gate.allowMemberEffects ? (
-                <button
-                  type="button"
-                  data-sticker
-                  data-sticker-size="md"
-                  data-sticker-tone="neutral"
-                  onClick={onToggleFilesList}
-                  aria-label="Attachments"
-                  aria-pressed={filesListActive}
-                  title="Attachments"
-                  className={
-                    "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
-                    (filesListActive
-                      ? "bg-bg-hover text-text-primary"
-                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
-                  }
-                >
-                  <AttachmentIcon className="size-3.5" />
-                </button>
-              ) : null}
-              {canOpenSettings ? (
-                <button
-                  type="button"
-                  data-sticker
-                  data-sticker-size="md"
-                  data-sticker-tone="neutral"
-                  onClick={() =>
-                    settingsActive
-                      ? nav.closeChannelSettings()
-                      : nav.openChannelSettings(conversation.id)
-                  }
-                  aria-pressed={settingsActive}
-                  aria-label="Channel settings"
-                  title="Channel settings"
-                  className={
-                    "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
-                    (settingsActive
-                      ? "bg-bg-hover text-text-primary"
-                      : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
-                  }
-                >
-                  <SettingsIcon className="size-3.5" />
-                </button>
-              ) : null}
-              {onToggleFullscreen ? (
-                <button
-                  type="button"
-                  data-sticker
-                  data-sticker-size="md"
-                  data-sticker-tone="neutral"
-                  onClick={onToggleFullscreen}
-                  aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
-                  title={isFullscreen ? "Exit full screen" : "Full screen"}
-                  className="flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-                >
-                  {isFullscreen ? (
-                    <CollapseIcon className="size-3.5" />
-                  ) : (
-                    <ExpandIcon className="size-3.5" />
+                <div
+                  data-channel-actions
+                  className={cn(
+                    "ml-auto flex shrink-0 items-center gap-1.5",
+                    compact && "glass-surface",
                   )}
-                </button>
-              ) : null}
-              {onCloseChild ? (
-                <button
-                  type="button"
-                  data-sticker
-                  data-sticker-size="md"
-                  data-sticker-tone="neutral"
-                  onClick={onCloseChild}
-                  aria-label={closeLabel}
-                  title={closeLabel}
-                  className="flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 >
-                  <CloseIcon className="size-3.5" />
-                </button>
-              ) : null}
-            </div>
-          </header>
+                  {findAvailable ? (
+                    <button
+                      type="button"
+                      data-sticker
+                      data-sticker-size="md"
+                      data-sticker-tone="neutral"
+                      onClick={find.open ? find.close : find.openFind}
+                      aria-label="Search this channel"
+                      aria-pressed={find.open}
+                      title="Search this channel"
+                      className={
+                        "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
+                        (find.open
+                          ? "bg-bg-hover text-text-primary"
+                          : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
+                      }
+                    >
+                      <SearchIcon className="size-3.5" />
+                    </button>
+                  ) : null}
+                  {onToggleThreadsList && gate.allowMemberEffects ? (
+                    <button
+                      type="button"
+                      data-sticker
+                      data-sticker-size="md"
+                      data-sticker-tone="neutral"
+                      onClick={onToggleThreadsList}
+                      aria-label={hasFollowedThreadUnread ? "Threads (unread)" : "Threads"}
+                      aria-pressed={threadsListActive}
+                      title="Threads"
+                      className={
+                        "relative flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
+                        (threadsListActive
+                          ? "bg-bg-hover text-text-primary"
+                          : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
+                      }
+                    >
+                      <ThreadIcon className="size-3.5" />
+                      {hasFollowedThreadUnread ? (
+                        // #task:1773: ambient attention dot (same recipe as the NavRail
+                        // unread dot). Decorative — the unread state is already in the
+                        // aria-label — so pointer-events-none and aria-hidden.
+                        <span
+                          aria-hidden
+                          className="pointer-events-none absolute right-1 top-1 size-1.5 rounded-full bg-(--unread)"
+                        />
+                      ) : null}
+                    </button>
+                  ) : null}
+                  {onToggleFilesList && gate.allowMemberEffects ? (
+                    <button
+                      type="button"
+                      data-sticker
+                      data-sticker-size="md"
+                      data-sticker-tone="neutral"
+                      onClick={onToggleFilesList}
+                      aria-label="Attachments"
+                      aria-pressed={filesListActive}
+                      title="Attachments"
+                      className={
+                        "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
+                        (filesListActive
+                          ? "bg-bg-hover text-text-primary"
+                          : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
+                      }
+                    >
+                      <AttachmentIcon className="size-3.5" />
+                    </button>
+                  ) : null}
+                  {canOpenSettings && !compact ? (
+                    <button
+                      type="button"
+                      data-sticker
+                      data-sticker-size="md"
+                      data-sticker-tone="neutral"
+                      onClick={() =>
+                        settingsActive
+                          ? nav.closeChannelSettings()
+                          : nav.openChannelSettings(conversation.id)
+                      }
+                      aria-pressed={settingsActive}
+                      aria-label="Channel settings"
+                      title="Channel settings"
+                      className={
+                        "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
+                        (settingsActive
+                          ? "bg-bg-hover text-text-primary"
+                          : "text-text-secondary hover:bg-bg-hover hover:text-text-primary")
+                      }
+                    >
+                      <SettingsIcon className="size-3.5" />
+                    </button>
+                  ) : null}
+                  {onToggleFullscreen ? (
+                    <button
+                      type="button"
+                      data-sticker
+                      data-sticker-size="md"
+                      data-sticker-tone="neutral"
+                      onClick={onToggleFullscreen}
+                      aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
+                      title={isFullscreen ? "Exit full screen" : "Full screen"}
+                      className="flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+                    >
+                      {isFullscreen ? (
+                        <CollapseIcon className="size-3.5" />
+                      ) : (
+                        <ExpandIcon className="size-3.5" />
+                      )}
+                    </button>
+                  ) : null}
+                  {onCloseChild ? (
+                    <button
+                      type="button"
+                      data-sticker
+                      data-sticker-size="md"
+                      data-sticker-tone="neutral"
+                      onClick={onCloseChild}
+                      aria-label={closeLabel}
+                      title={closeLabel}
+                      className="flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
+                    >
+                      <CloseIcon className="size-3.5" />
+                    </button>
+                  ) : null}
+                </div>
+              </header>
+            )}
 
-          {/* Per-conversation view tabs (#task:2121) — a flex sibling under the
+            {/* Per-conversation view tabs (#task:2121) — a flex sibling under the
           header. When shown it adds the tab strip, so the find-bar overlay below
           drops from `top-12` to clear the h-12 header PLUS the strip. Strip
           height is the single `--conversation-tab-strip-height` authority the bar
           itself reads, so the two never drift. */}
-          {viewTabsShown ? (
-            <ConversationTabBar
-              tabs={tabController.tabs}
-              activeKey={tabController.activeKey}
-              onActivate={tabController.setActive}
-              onReorder={tabController.reorder}
-              onClose={tabController.closeTab}
-              addablePanels={addablePanels}
-              onAddPanel={handleAddPanel}
-              threadsUnread={hasFollowedThreadUnread}
-            />
-          ) : null}
+            {viewTabsShown && !nativeHeader ? (
+              <ConversationTabBar
+                tabs={tabController.tabs}
+                activeKey={tabController.activeKey}
+                onActivate={tabController.setActive}
+                onReorder={tabController.reorder}
+                onClose={tabController.closeTab}
+                addablePanels={addablePanels}
+                onAddPanel={handleAddPanel}
+                threadsUnread={hasFollowedThreadUnread}
+              />
+            ) : null}
+          </FloatingPaneChrome>
 
           {/* Inline find bar (#task:1335) — a header OVERLAY, not a flex sibling of
           the message list. Anchored just below the h-12 header (`top-12`, or
@@ -987,6 +1217,7 @@ function ActiveChannelView({
           match (ensure-visible below). */}
           {findAvailable && find.open && chatSurfaceActive ? (
             <div
+              data-find-overlay
               className={`absolute inset-x-0 z-(--z-sticky) ${
                 viewTabsShown ? "top-[calc(3rem+var(--conversation-tab-strip-height))]" : "top-12"
               }`}
@@ -1114,7 +1345,10 @@ function ActiveChannelView({
             pane via the same `onOpenTask` an inline `#task` chip uses. `inset-0`
             covers the whole column. */}
             {tasksTabActive && taskBoardContainer && onOpenTask ? (
-              <div className="absolute inset-0 z-(--z-raised) bg-(--pane-bg,var(--bg-base))">
+              <div
+                data-conversation-overlay
+                className="absolute inset-0 z-(--z-raised) bg-(--pane-bg,var(--bg-base))"
+              >
                 <ChannelTasksTab container={taskBoardContainer} onOpenTask={onOpenTask} />
               </div>
             ) : null}
@@ -1125,7 +1359,10 @@ function ActiveChannelView({
             attachment tabs remounts the fetch/decode rather than reusing stale
             body state. */}
             {activeAttachmentTab ? (
-              <div className="absolute inset-0 z-(--z-raised) bg-(--pane-bg,var(--bg-base))">
+              <div
+                data-conversation-overlay
+                className="absolute inset-0 z-(--z-raised) bg-(--pane-bg,var(--bg-base))"
+              >
                 <ChannelAttachmentTab
                   key={activeAttachmentTab.attachmentId}
                   attachmentId={activeAttachmentTab.attachmentId}
@@ -1140,7 +1377,10 @@ function ActiveChannelView({
             switching between two panel tabs remounts the surface's own
             filter/scroll rather than carrying one list's state into another. */}
             {activePanelTab ? (
-              <div className="absolute inset-0 z-(--z-raised) bg-(--pane-bg,var(--bg-base))">
+              <div
+                data-conversation-overlay
+                className="absolute inset-0 z-(--z-raised) bg-(--pane-bg,var(--bg-base))"
+              >
                 {activePanelHostable ? (
                   <ConversationPanelTab
                     key={activePanelTab}

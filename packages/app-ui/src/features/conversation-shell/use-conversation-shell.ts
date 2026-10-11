@@ -123,7 +123,11 @@ export function useConversationShell({
     handleJumpToMessage(target),
   );
 
-  const deferredSection = useDeferredValue(appSection);
+  // Regular width defers a section's teardown past the click (`SectionLayer`).
+  // A compact page mounts fresh and keeps the page it covers, so it renders its
+  // own section at once.
+  const deferred = useDeferredValue(appSection);
+  const deferredSection = compact ? appSection : deferred;
 
   const handleSelectWorkspace = (id: string): void => {
     // If the workspace has unread mentions, jump straight to the latest

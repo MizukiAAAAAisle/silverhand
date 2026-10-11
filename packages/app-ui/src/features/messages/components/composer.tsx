@@ -11,7 +11,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { AttachmentIcon, HashIcon, MentionIcon } from "@/icons";
+import { AttachFileIcon, HashIcon, MentionIcon } from "@/icons";
 import type { AgentDto } from "@silverhand/shared";
 import { isGenericMimeHint, mimeFromFilename } from "@silverhand/shared";
 import {
@@ -1114,7 +1114,7 @@ export function Composer({
                 title="Attach a file"
                 className={COMPOSER_TOOL_CLASS}
               >
-                <AttachmentIcon className="size-4" />
+                <AttachFileIcon className="size-4" />
               </button>
               {offersMentions ? (
                 <button

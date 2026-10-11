@@ -16,7 +16,12 @@ import { useUsers, useUsersById, makeUserNameResolver } from "@/features/users/h
 import { useSavedMessages, useUnsaveMessage } from "@/features/messages/saved";
 import type { WorkspaceListItem } from "@/features/workspaces/hooks";
 import { FilterBlock } from "@/components/ui/filter-select";
-import { FilterPanel, FilterToggle, useFilterDisclosure } from "@/components/ui/responsive-filters";
+import {
+  FilterPanel,
+  FilterToggle,
+  filterBarAction,
+  useFilterDisclosure,
+} from "@/components/ui/responsive-filters";
 import { SavedListSkeleton } from "./saved-list-skeleton";
 import {
   WorkspaceFilterSelect,
@@ -33,7 +38,7 @@ import {
   dateFilterSince,
   type DateFilterValue,
 } from "@/components/ui/date-filter-select";
-import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
+import { FloatingPaneChrome, PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 /** Saved-view filter selection. Lifted to App so it survives pane switches
  *  for the app session (shiki #task:1258 follow-up) — NOT persisted, so a
@@ -172,49 +177,52 @@ export function SavedListView({
 
   return (
     <PaneShell>
-      <PaneHeader
-        icon={<BookmarkIcon className="size-3.5 fill-current" />}
-        title="Saved"
-        count={data ? items.length : undefined}
-        trailing={
-          showFilters ? (
-            <div className="ml-auto">
-              <FilterToggle disclosure={filterDisclosure} active={hasFilters} />
-            </div>
-          ) : null
-        }
-      />
+      <FloatingPaneChrome>
+        <PaneHeader
+          icon={<BookmarkIcon className="size-3.5 fill-current" />}
+          title="Saved"
+          count={data ? items.length : undefined}
+          trailing={
+            showFilters ? (
+              <div className="ml-auto">
+                <FilterToggle disclosure={filterDisclosure} active={hasFilters} />
+              </div>
+            ) : null
+          }
+          nativeActions={[showFilters ? filterBarAction(filterDisclosure, hasFilters) : null]}
+        />
 
-      {showFilters ? (
-        <FilterPanel
-          disclosure={filterDisclosure}
-          className="shrink-0 border-b border-border-subtle px-4 py-3"
-        >
-          <div className="flex flex-wrap items-end gap-3">
-            <FilterBlock label="Workspace" className="w-full sm:w-72">
-              <WorkspaceFilterSelect
-                value={workspace}
-                workspaces={workspaces}
-                onChange={setWorkspace}
-                allIcon={<LayersIcon className="size-3.5" />}
-              />
-            </FilterBlock>
-            <FilterBlock label="Sender" className="w-full sm:w-60">
-              <SenderFilterSelect
-                value={sender}
-                agents={agents}
-                users={users}
-                userResolver={userResolver}
-                onChange={setSender}
-                ariaLabel="Saved sender filter"
-              />
-            </FilterBlock>
-            <FilterBlock label="Saved date" className="w-full sm:w-48">
-              <DateFilterSelect value={date} onChange={setDate} ariaLabel="Saved date filter" />
-            </FilterBlock>
-          </div>
-        </FilterPanel>
-      ) : null}
+        {showFilters ? (
+          <FilterPanel
+            disclosure={filterDisclosure}
+            className="shrink-0 border-b border-border-subtle px-4 py-3"
+          >
+            <div className="flex flex-wrap items-end gap-3">
+              <FilterBlock label="Workspace" className="w-full sm:w-72">
+                <WorkspaceFilterSelect
+                  value={workspace}
+                  workspaces={workspaces}
+                  onChange={setWorkspace}
+                  allIcon={<LayersIcon className="size-3.5" />}
+                />
+              </FilterBlock>
+              <FilterBlock label="Sender" className="w-full sm:w-60">
+                <SenderFilterSelect
+                  value={sender}
+                  agents={agents}
+                  users={users}
+                  userResolver={userResolver}
+                  onChange={setSender}
+                  ariaLabel="Saved sender filter"
+                />
+              </FilterBlock>
+              <FilterBlock label="Saved date" className="w-full sm:w-48">
+                <DateFilterSelect value={date} onChange={setDate} ariaLabel="Saved date filter" />
+              </FilterBlock>
+            </div>
+          </FilterPanel>
+        ) : null}
+      </FloatingPaneChrome>
 
       <div className="flex-1 overflow-y-auto px-4 py-3">
         {isLoading ? (

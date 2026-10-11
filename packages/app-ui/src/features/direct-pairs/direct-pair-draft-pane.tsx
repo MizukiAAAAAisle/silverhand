@@ -1,4 +1,5 @@
 import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
+import { useNativeBar } from "@/components/layout/native-page-bar";
 import { DirectDraftSkeleton } from "./direct-draft-skeleton";
 import { getCurrentUserId } from "@/features/session/current-user";
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
@@ -60,6 +61,9 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
   // otherwise — so the title does not change under the user on convergence.
   const title =
     counterpart?.status === "active" ? counterpart.display_name.trim() || counterpart.name : "";
+  const native = useNativeBar(
+    counterpart ? { title, titleAction: null, actions: [], tabs: null, addTabs: null } : null,
+  );
 
   const submit = (): void => {
     if (sendDisabled) return;
@@ -133,17 +137,21 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
       className="relative flex h-full min-w-0 flex-1 flex-col overflow-hidden"
       style={paneChrome}
     >
-      <header
-        data-conversation-header
-        className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4"
-      >
-        <MobileNavigationSlot />
-        <ConversationHeaderIdentity
-          identity="counterpart"
-          title={title}
-          counterpart={counterpart}
-        />
-      </header>
+      {native.active ? (
+        native.clearance
+      ) : (
+        <header
+          data-conversation-header
+          className="flex h-12 min-w-0 shrink-0 items-center gap-2 border-b border-border-subtle px-4"
+        >
+          <MobileNavigationSlot />
+          <ConversationHeaderIdentity
+            identity="counterpart"
+            title={title}
+            counterpart={counterpart}
+          />
+        </header>
+      )}
 
       <div className="relative min-h-0 flex-1">
         <EmptyConversation />

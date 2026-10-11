@@ -13,7 +13,12 @@ import {
 } from "@/icons";
 import type { AgentDto, SearchResultDto } from "@silverhand/shared";
 import { Input } from "@/components/ui/input";
-import { FilterPanel, FilterToggle, useFilterDisclosure } from "@/components/ui/responsive-filters";
+import {
+  FilterPanel,
+  FilterToggle,
+  filterBarAction,
+  useFilterDisclosure,
+} from "@/components/ui/responsive-filters";
 import {
   FilterBlock,
   FilterSelectItem as SelectItem,
@@ -34,7 +39,7 @@ import {
   type SenderFilterValue,
 } from "@/features/search/sender-filter-select";
 import { SearchResultsSkeleton } from "@/features/search/search-results-skeleton";
-import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
+import { FloatingPaneChrome, PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 interface SearchPanelProps {
   workspaces: WorkspaceListItem[];
@@ -141,7 +146,7 @@ export function SearchPanel({
 
   const hasFilters = workspaceFilter !== "all" || senderFilter !== "all" || timeRange !== "all";
   const hasIntent = query.trim().length > 0 || hasFilters;
-  const { data, isFetching, isLoading, isError, refetch } = useMessageSearch(filters);
+  const { data, isLoading, isError, refetch } = useMessageSearch(filters);
   const identities = isError ? undefined : data?.identities;
   const identityCount = identities
     ? identities.humans.results.length + identities.agents.results.length
@@ -170,73 +175,75 @@ export function SearchPanel({
 
   return (
     <PaneShell>
-      <PaneHeader
-        icon={<SearchIcon className="size-3.5" />}
-        title="Search"
-        count={hasIntent ? results.length + identityCount : undefined}
-        trailing={
-          <div className="ml-auto flex items-center gap-2">
-            {isFetching ? <span className="text-xs text-text-muted">Searching…</span> : null}
-            <FilterToggle disclosure={filterDisclosure} active={hasFilters} />
+      <FloatingPaneChrome>
+        <PaneHeader
+          icon={<SearchIcon className="size-3.5" />}
+          title="Search"
+          count={hasIntent ? results.length + identityCount : undefined}
+          trailing={
+            <div className="ml-auto">
+              <FilterToggle disclosure={filterDisclosure} active={hasFilters} />
+            </div>
+          }
+          nativeActions={[filterBarAction(filterDisclosure, hasFilters)]}
+        />
+
+        <section className="shrink-0 border-b border-border-subtle px-4 py-3">
+          <div className="relative">
+            <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-muted" />
+            <Input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape" && hasIntent) {
+                  e.preventDefault();
+                  resetFilters();
+                }
+              }}
+              placeholder="Search people, agents, messages, channels"
+              className="h-10 pl-9 pr-10"
+            />
+            <button
+              type="button"
+              onClick={resetFilters}
+              disabled={!hasIntent}
+              aria-label="Clear search"
+              title="Clear search"
+              className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-(--control-radius) text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-0"
+            >
+              <CloseIcon className="size-4" />
+            </button>
           </div>
-        }
-      />
 
-      <section className="shrink-0 border-b border-border-subtle px-4 py-3">
-        <div className="relative">
-          <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-muted" />
-          <Input
-            autoFocus
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape" && hasIntent) {
-                e.preventDefault();
-                resetFilters();
-              }
-            }}
-            placeholder="Search people, agents, messages, channels"
-            className="h-10 pl-9 pr-10"
-          />
-          <button
-            type="button"
-            onClick={resetFilters}
-            disabled={!hasIntent}
-            aria-label="Clear search"
-            title="Clear search"
-            className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-(--control-radius) text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-0"
-          >
-            <CloseIcon className="size-4" />
-          </button>
-        </div>
+          <FilterPanel disclosure={filterDisclosure} className="mt-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <FilterBlock label="Workspace" className="w-full sm:w-72">
+                <WorkspaceFilterSelect
+                  value={workspaceFilter}
+                  workspaces={workspaces}
+                  agents={agents}
+                  onChange={setWorkspaceFilter}
+                />
+              </FilterBlock>
 
-        <FilterPanel disclosure={filterDisclosure} className="mt-3">
-          <div className="flex flex-wrap items-end gap-3">
-            <FilterBlock label="Workspace" className="w-full sm:w-72">
-              <WorkspaceFilterSelect
-                value={workspaceFilter}
-                workspaces={workspaces}
-                agents={agents}
-                onChange={setWorkspaceFilter}
-              />
-            </FilterBlock>
+              <FilterBlock label="Sender" className="w-full sm:w-60">
+                <SenderFilterSelect
+                  value={senderFilter}
+                  agents={agents}
+                  users={users}
+                  userResolver={userResolver}
+                  onChange={setSenderFilter}
+                />
+              </FilterBlock>
 
-            <FilterBlock label="Sender" className="w-full sm:w-60">
-              <SenderFilterSelect
-                value={senderFilter}
-                agents={agents}
-                users={users}
-                userResolver={userResolver}
-                onChange={setSenderFilter}
-              />
-            </FilterBlock>
-
-            <FilterBlock label="Time" className="w-full sm:w-44">
-              <TimeRangeSelect value={timeRange} onChange={setTimeRange} />
-            </FilterBlock>
-          </div>
-        </FilterPanel>
-      </section>
+              <FilterBlock label="Time" className="w-full sm:w-44">
+                <TimeRangeSelect value={timeRange} onChange={setTimeRange} />
+              </FilterBlock>
+            </div>
+          </FilterPanel>
+        </section>
+      </FloatingPaneChrome>
 
       <div className="search-list min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {hasIntent && identities?.status === "filtered" ? (

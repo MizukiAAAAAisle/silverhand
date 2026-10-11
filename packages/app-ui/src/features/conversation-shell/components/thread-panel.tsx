@@ -1,3 +1,4 @@
+import { usePageLive } from "@/navigation/page-stack";
 import { useViewMemory } from "@/navigation/view-memory";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
@@ -24,6 +25,7 @@ import { SelectionQuoteToolbar } from "@/features/messages/components/selection-
 import { ChannelJoinBar } from "@/features/messages/components/channel-join-bar";
 import { MessageRowsSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
+import { iconMarkup, type PageBarDeclaration } from "@/components/layout/native-page-bar";
 import { useMessageRenderContext } from "@/features/messages/hooks/use-message-render-context";
 import { useMessageActionSurface } from "@/features/messages/hooks/use-message-action-surface";
 import { MessageActionChrome } from "@/features/messages/components/message-action-chrome";
@@ -227,6 +229,9 @@ export function ThreadPanel({
   const followThread = useFollowThread(channelId, rootMessageId);
   const unfollowThread = useUnfollowThread(channelId, rootMessageId);
   const markThreadRead = useMarkThreadRead();
+  const live = usePageLive();
+  const liveRef = useRef(live);
+  liveRef.current = live;
   const followPending = followThread.isPending || unfollowThread.isPending;
   // Join the PARENT channel (the Composer-slot affordance for a non-member
   // browsing this public channel's thread).
@@ -600,7 +605,7 @@ export function ThreadPanel({
   // refetch bumps `windowFetchSucceededAt`) retries. The visible-live effect
   // below independently covers the pinned-tail case.
   useEffect(() => {
-    if (markedForOpenRef.current) return;
+    if (markedForOpenRef.current || !live) return;
     const snapshot = threadMarkReadSnapshot({
       alreadyMarkedForOpen: markedForOpenRef.current,
       isFetching: cluster.isFetching,
@@ -619,6 +624,7 @@ export function ThreadPanel({
     cluster.streamHeadSeq,
     cluster.windowFetchSucceededAt,
     issueMarkRead,
+    live,
   ]);
 
   // Document visibility as REACTIVE state. The live-mark gate reads visibility,
@@ -629,7 +635,8 @@ export function ThreadPanel({
   // gate, so it lingers unread until the next message/scroll/reopen. Mirroring
   // visibility into state makes the return-to-visible transition a dependency
   // that re-fires the live-mark effect.
-  const [documentVisible, setDocumentVisible] = useState(() => !document.hidden);
+  const [documentShown, setDocumentVisible] = useState(() => !document.hidden);
+  const documentVisible = documentShown && live;
   useEffect(() => {
     const onVisibility = (): void => setDocumentVisible(!document.hidden);
     document.addEventListener("visibilitychange", onVisibility);
@@ -688,7 +695,8 @@ export function ThreadPanel({
           scrollTop: currentViewport.scrollTop,
           clientHeight: currentViewport.clientHeight,
         }) ||
-        document.hidden
+        document.hidden ||
+        !liveRef.current
       ) {
         return;
       }
@@ -765,7 +773,7 @@ export function ThreadPanel({
     let attempts = 0;
     let flashTimer: ReturnType<typeof setTimeout> | undefined;
     const tryLocate = (): void => {
-      const node = document.getElementById(`msg-${jumpMessageId}`);
+      const node = findRootRef.current?.querySelector(`[id="msg-${jumpMessageId}"]`);
       if (node) {
         node.scrollIntoView({ block: "center" });
         node.classList.add("msg-jump-flash");
@@ -837,6 +845,40 @@ export function ThreadPanel({
       />
     );
 
+  const following = followers.data && canParticipate ? viewerFollowing : null;
+  const nativeBar = useMemo<PageBarDeclaration>(() => {
+    const actions = [
+      findAvailable
+        ? {
+            id: "find",
+            label: "Search this thread",
+            icon: iconMarkup(SearchIcon),
+            selected: find.open,
+          }
+        : null,
+      following !== null
+        ? {
+            id: "follow",
+            label: following ? "Unfollow thread" : "Follow thread",
+            icon: iconMarkup(following ? BellOffIcon : BellIcon),
+            selected: following,
+          }
+        : null,
+      onViewInChannel
+        ? { id: "view", label: "View in channel", icon: iconMarkup(ArrowUpRightIcon) }
+        : null,
+    ].filter((action) => action !== null);
+
+    return {
+      title: parentTitle || "Thread",
+      subtitle: `Thread ${replyCount} ${replyCount === 1 ? "reply" : "replies"}`,
+      titleAction: null,
+      actions: actions.length > 0 ? [actions] : [],
+      tabs: null,
+      addTabs: null,
+    };
+  }, [findAvailable, find.open, following, onViewInChannel, parentTitle, replyCount]);
+
   return (
     <TaskRefContextProvider value={taskRefContext}>
       <aside
@@ -848,6 +890,22 @@ export function ThreadPanel({
       >
         <SidePanelHeader
           onClose={onClose}
+          nativeBar={nativeBar}
+          nativeHandlers={{
+            action: ({ id }) => {
+              if (id === "find") {
+                if (find.open) {
+                  find.close();
+                } else {
+                  find.openFind();
+                }
+              } else if (id === "follow") {
+                toggleFollow();
+              } else if (id === "view") {
+                onViewInChannel?.();
+              }
+            },
+          }}
           actions={
             <>
               {findAvailable ? (
@@ -930,7 +988,7 @@ export function ThreadPanel({
           It drives only the search controller + overlay; the cluster window is
           untouched until the user navigates to a match (ensure-visible above). */}
         {findAvailable && find.open ? (
-          <div className="absolute inset-x-0 top-12 z-(--z-sticky)">
+          <div data-thread-find className="absolute inset-x-0 top-12 z-(--z-sticky)">
             <InlineFindBar
               controller={find}
               onOpenAdvanced={() =>

@@ -369,6 +369,7 @@ const FilterTrigger = forwardRef<
     <button
       ref={ref}
       type="button"
+      data-filter-trigger
       data-active={active || undefined}
       data-ink-selected={active || undefined}
       className={cn(

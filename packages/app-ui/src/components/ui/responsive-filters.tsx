@@ -2,7 +2,7 @@ import { useId, useState, type ReactNode } from "react";
 import { FiltersIcon } from "@/icons";
 import { useCompactLayout } from "@/navigation/layout";
 import { cn } from "@/lib/cn";
-import { Button } from "./button";
+import { iconMarkup, type NativeBarAction } from "@/components/layout/native-page-bar";
 
 /** Presentation only: query and filter values remain owned by the page. */
 export function useFilterDisclosure() {
@@ -29,24 +29,40 @@ export function FilterToggle({
 }): JSX.Element | null {
   if (!disclosure.compact) return null;
   const label = `${disclosure.expanded ? "Hide" : "Show"} filters${active ? " (active)" : ""}`;
+  // Compact only: the navigation bar's glass capsule, like Back beside it.
   return (
-    <Button
+    <button
       type="button"
-      variant="ghost"
-      size="icon"
       aria-label={label}
       title={label}
       aria-expanded={disclosure.expanded}
       aria-controls={disclosure.contentId}
-      data-sticker={disclosure.expanded ? "" : undefined}
-      data-sticker-tone={disclosure.expanded ? "neutral" : undefined}
-      data-sticker-size="sm"
-      className={cn("shrink-0", disclosure.expanded && "bg-bg-hover", active && "text-accent")}
+      data-filter-toggle
+      className={cn("mobile-header-action focus-outline", active && "text-accent")}
       onClick={disclosure.toggle}
     >
-      <FiltersIcon className="size-4" />
-    </Button>
+      <FiltersIcon />
+    </button>
   );
+}
+
+/** `FilterToggle` as a native bar button. */
+export function filterBarAction(
+  disclosure: FilterDisclosure,
+  active: boolean,
+): NativeBarAction | null {
+  if (!disclosure.compact) return null;
+  return {
+    id: "filters",
+    label: `${disclosure.expanded ? "Hide" : "Show"} filters`,
+    accessibilityLabel: active
+      ? `${disclosure.expanded ? "Hide" : "Show"} filters (active)`
+      : undefined,
+    icon: iconMarkup(FiltersIcon),
+    selected: disclosure.expanded,
+    dot: active,
+    run: disclosure.toggle,
+  };
 }
 
 export function FilterPanel({

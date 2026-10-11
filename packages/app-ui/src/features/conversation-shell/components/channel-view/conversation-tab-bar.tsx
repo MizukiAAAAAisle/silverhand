@@ -81,7 +81,7 @@ export interface ConversationTabBarProps {
   threadsUnread?: boolean;
 }
 
-interface TabPresentation {
+export interface TabPresentation {
   icon: IconComponent;
   label: string;
 }
@@ -89,7 +89,7 @@ interface TabPresentation {
 /** Icon + label for a panel surface — the ONE place a surface's tab identity is
  *  presented, shared by the strip chip and the `＋` menu row so the two can't
  *  disagree. Threads takes the `ThreadIcon` SSOT, never a raw bubble glyph. */
-const PANEL_PRESENTATION: Record<PanelTabKind, TabPresentation> = {
+export const PANEL_PRESENTATION: Record<PanelTabKind, TabPresentation> = {
   attachments: { icon: AttachmentIcon, label: "Attachments" },
   threads: { icon: ThreadIcon, label: "Threads" },
 };
@@ -97,7 +97,7 @@ const PANEL_PRESENTATION: Record<PanelTabKind, TabPresentation> = {
 /** A tab's icon + label. Exhaustive over the {@link Tab} union so a new custom
  *  kind must declare its presentation here rather than fall through to a blank
  *  chip. */
-function tabPresentation(tab: Tab): TabPresentation {
+export function tabPresentation(tab: Tab): TabPresentation {
   switch (tab.kind) {
     case "chat":
       // The chat-stream glyph (NavRail's Chats tab uses the same one), NOT the
@@ -182,6 +182,7 @@ export function ConversationTabBar({
               type="button"
               aria-label="Add a view"
               title="Add a view"
+              data-conversation-tab-add
               className="flex shrink-0 cursor-pointer items-center border-b-2 border-transparent px-2 text-text-muted transition-colors hover:text-text-primary"
             >
               <PlusIcon className="size-3.5" aria-hidden />
@@ -252,6 +253,8 @@ function SortableTab({
         zIndex: isDragging ? 1 : undefined,
         position: isDragging ? "relative" : undefined,
       }}
+      data-conversation-tab
+      data-active={active || undefined}
       className={cn(
         "flex shrink-0 items-center border-b-2 transition-colors",
         active ? "border-text-primary" : "border-transparent",

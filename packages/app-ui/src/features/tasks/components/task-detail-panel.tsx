@@ -5,6 +5,7 @@ import type { TaskDetailDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
 import { MiniIconButton } from "@/features/tasks/components/mini-icon-button";
 import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-panel-header";
+import { iconMarkup } from "@/components/layout/native-page-bar";
 import { Markdown } from "@/features/messages/components/markdown";
 import {
   FAILURE_COPY,
@@ -132,7 +133,35 @@ export function TaskDetailPanel({
           sticker, and the `h-12` height contract can't drift. Mirrors the
           attachments pane exactly: a static section label as the title, the
           entity's identity as the subtitle. */}
-      <SidePanelHeader onClose={onClose} actions={jumpAction}>
+      <SidePanelHeader
+        onClose={onClose}
+        actions={jumpAction}
+        nativeBar={{
+          title: "Task",
+          subtitle: painted ? `#${painted.task_number}` : undefined,
+          titleAction: null,
+          actions: jumpTarget
+            ? [
+                [
+                  {
+                    id: "jump",
+                    label: "View in conversation",
+                    icon: iconMarkup(OpenExternalIcon),
+                  },
+                ],
+              ]
+            : [],
+          tabs: null,
+          addTabs: null,
+        }}
+        nativeHandlers={{
+          action: ({ id }) => {
+            if (id === "jump" && jumpTarget) {
+              onJump?.(jumpTarget);
+            }
+          },
+        }}
+      >
         <SidePanelHeaderTitle
           icon={<TaskIcon className="size-3.5 shrink-0 text-text-muted" aria-hidden />}
           title="Task"

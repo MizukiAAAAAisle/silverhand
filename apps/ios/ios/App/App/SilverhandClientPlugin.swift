@@ -1,6 +1,7 @@
 import Capacitor
 import SilverhandNative
 import UIKit
+import WebKit
 
 @objc(SilverhandClientPlugin)
 public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
@@ -9,8 +10,8 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   public let pluginMethods: [CAPPluginMethod] = [
     "getProfile", "saveProfile", "clearProfile", "authState", "authenticate", "logout", "request",
     "openSocket", "sendSocket", "closeSocket", "openExternal",
-    "navigationSync", "navigationCapture", "navigationFinish", "navigationReset",
-    "navigationBadges", "sharePng", "saveAttachment",
+    "navigationSync", "navigationReset",
+    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "sharePng", "saveAttachment",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -148,21 +149,95 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         return
       }
       bindNavigationIntent(to: host)
-      call.resolve(["bottomInset": host.sync(call)])
+      call.resolve(["tabBarHeight": host.sync(call)])
     }
   }
-  @objc public func navigationCapture(_ call: CAPPluginCall) {
+  @objc public func navigationAvatar(_ call: CAPPluginCall) {
+    let image = call.getString("base64").flatMap { Data(base64Encoded: $0) }.flatMap(UIImage.init)
     Task { @MainActor in
-      await navigationHost?.capture(
-        session: call.getString("session") ?? "", key: call.getString("key") ?? "")
+      navigationHost?.setAvatar(image)
       call.resolve()
     }
   }
-  @objc public func navigationFinish(_ call: CAPPluginCall) {
+  @objc public func titlebar(_ call: CAPPluginCall) {
+    let state = call.getObject("state").map { state in
+      TitlebarState(
+        sidebar: (state["sidebar"] as? JSObject).map {
+          .init(shown: $0["shown"] as? Bool ?? false, label: $0["label"] as? String ?? "")
+        },
+        status: state["status"] as? String,
+        searchPlaceholder: state["searchPlaceholder"] as? String ?? "",
+        searchShortcut: state["searchShortcut"] as? String ?? "")
+    }
+    Task { @MainActor [self] in
+      if let host = navigationHost {
+        host.titlebar.state = state
+        host.titlebar.onEvent = { [weak self] event in self?.notifyListeners("titlebar", data: event) }
+        host.applyBars()
+      }
+      call.resolve()
+    }
+  }
+  @objc public func pageBar(_ call: CAPPluginCall) {
+    func action(_ value: Any) -> BarAction? {
+      guard let item = value as? JSObject, let id = item["id"] as? String else { return nil }
+      return BarAction(
+        id: id, label: item["label"] as? String ?? "",
+        accessibilityLabel: item["accessibilityLabel"] as? String,
+        icon: item["icon"] as? String ?? "",
+        selected: item["selected"] as? Bool ?? false, dot: item["dot"] as? Bool ?? false)
+    }
+    let state = call.getObject("state").map { state in
+      PageBarState(
+        title: state["title"] as? String ?? "",
+        subtitle: state["subtitle"] as? String,
+        titleAction: state["titleAction"] as? String,
+        titleIcon: (state["titleIcon"] as? JSObject).flatMap { icon in
+          (icon["glyph"] as? String).map(PageBarTitleIcon.glyph)
+            ?? (icon["image"] as? String).map(PageBarTitleIcon.image)
+        },
+        backdrop: state["backdrop"] as? Bool ?? false,
+        largeTitle: state["largeTitle"] as? Bool ?? false,
+        back: state["back"] as? String,
+        actions: (state["actions"] as? JSArray ?? []).map { ($0 as? JSArray ?? []).compactMap(action) }
+          .filter { !$0.isEmpty },
+        overflow: (state["overflow"] as? JSObject).map {
+          BarAction(
+            id: "more", label: $0["label"] as? String ?? "", icon: $0["icon"] as? String ?? "",
+            selected: false, dot: false)
+        },
+        tabs: (state["tabs"] as? JSArray)?.compactMap { tab in
+          action(tab).map {
+            PageBarTab(item: $0, closeLabel: (tab as? JSObject)?["closeLabel"] as? String)
+          }
+        },
+        addTabs: (state["addTabs"] as? JSObject).map {
+          PageBarAddMenu(
+            label: $0["label"] as? String ?? "",
+            items: ($0["items"] as? JSArray ?? []).compactMap(action))
+        })
+    }
+    Task { @MainActor [self] in
+      if let host = navigationHost {
+        host.pageBar.state = state
+        host.pageBar.onEvent = { [weak self] event in self?.notifyListeners("pageBar", data: event) }
+        host.applyBars()
+        host.observeContentScroll()
+      }
+      call.resolve()
+    }
+  }
+  @objc public func pageBarBackProgress(_ call: CAPPluginCall) {
+    let progress = call.getDouble("progress").map { CGFloat($0) }
     Task { @MainActor in
-      navigationHost?.finish(
-        session: call.getString("session") ?? "", request: call.getString("request") ?? "",
-        accepted: call.getBool("accepted") ?? false)
+      navigationHost?.setBackProgress(progress)
+      call.resolve()
+    }
+  }
+  @objc public func titlebarEndSearch(_ call: CAPPluginCall) {
+    let clear = call.getBool("clear") ?? false
+    Task { @MainActor in
+      navigationHost?.titlebar.endSearch(clear: clear)
       call.resolve()
     }
   }
@@ -243,18 +318,34 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   }
 }
 
+/// The page lays out against the window's top and bottom insets alone. The
+/// tab's bars draw over it and the page clears them itself, so showing or
+/// hiding a bar never reflows the pages kept beneath the one on screen.
+final class PageWebView: WKWebView {
+  override var safeAreaInsets: UIEdgeInsets {
+    var insets = super.safeAreaInsets
+    if let window {
+      insets.top = window.safeAreaInsets.top
+      insets.bottom = window.safeAreaInsets.bottom
+    }
+    return insets
+  }
+}
+
 class SilverhandViewController: CAPBridgeViewController {
-  private struct WindowControls: Equatable { let top, height, statusBar: CGFloat }
   private struct Fold: Equatable {
     let axis: String
     let start, end: CGFloat
   }
 
   private let plugin = SilverhandClientPlugin()
-  // Last published values; each event fires only on change.
-  private var windowControls: WindowControls?
-  private var verticalBar: String?
+  private var barMetrics: [String: CGFloat] = [:]
+  // Last published value; the event fires only on change.
   private var fold: Fold?
+
+  override func webView(with frame: CGRect, configuration: WKWebViewConfiguration) -> WKWebView {
+    PageWebView(frame: frame, configuration: configuration)
+  }
 
   override func capacitorDidLoad() {
     bridge?.registerPluginInstance(plugin)
@@ -270,34 +361,7 @@ class SilverhandViewController: CAPBridgeViewController {
 
   override func viewDidLayoutSubviews() {
     super.viewDidLayoutSubviews()
-    publishWindowControls()
-    publishVerticalBar()
     publishFold()
-  }
-
-  /// iPadOS window controls occupy the band between the top safe-area inset
-  /// and the vertically corner-adapted inset. When the window reaches the top
-  /// of the screen, the status bar covers part of that inset; the titlebar
-  /// keeps its row below it.
-  private func publishWindowControls() {
-    let top = view.safeAreaInsets.top
-    var height: CGFloat = 0
-    var statusBar: CGFloat = 0
-    if #available(iOS 26.0, *) {
-      let adapted = view.edgeInsets(for: .safeArea(cornerAdaptation: .vertical))
-      height = max(0, adapted.top - top)
-    }
-    if let window = view.window, let frame = window.windowScene?.statusBarManager?.statusBarFrame {
-      let bar = window.convert(frame, from: window.screen.coordinateSpace)
-      let overlap = window.bounds.intersection(bar)
-      if !overlap.isNull { statusBar = min(top, overlap.height) }
-    }
-    let next = WindowControls(top: top, height: height, statusBar: statusBar)
-    guard next != windowControls else { return }
-    windowControls = next
-    plugin.notifyListeners(
-      "windowControls", data: ["top": top, "height": height, "statusBar": statusBar],
-      retainUntilConsumed: true)
   }
 
   /// The active fold (iPhone Duo half open) as a band across the view,
@@ -321,18 +385,14 @@ class SilverhandViewController: CAPBridgeViewController {
     plugin.notifyListeners("fold", data: data, retainUntilConsumed: true)
   }
 
-  /// The edge where iOS stands the tab bar (iPhone Duo), or "" when bars are
-  /// horizontal. The page drops its own navigation rail while one is present.
-  private func publishVerticalBar() {
-    let edge: String
-    switch traitCollection.tabBarEdge {
-    case .leading: edge = "leading"
-    case .trailing: edge = "trailing"
-    default: edge = ""
-    }
-    guard edge != verticalBar else { return }
-    verticalBar = edge
-    plugin.notifyListeners("verticalBar", data: ["edge": edge], retainUntilConsumed: true)
+  /// Where the page's bars end, for the page to clear them: `bottom` of the
+  /// navigation bar (on iPhone Duo, of the title under it), `large` with a
+  /// large title, and the height of the view tabs under that.
+  func publishBarMetrics(bottom: CGFloat, tabs: CGFloat) {
+    let next = ["bottom": bottom, "tabs": tabs]
+    guard next != barMetrics else { return }
+    barMetrics = next
+    plugin.notifyListeners("barMetrics", data: next, retainUntilConsumed: true)
   }
 }
 

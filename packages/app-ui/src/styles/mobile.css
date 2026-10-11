@@ -5,10 +5,6 @@
   padding-left: env(safe-area-inset-left, 0px);
   padding-right: env(safe-area-inset-right, 0px);
 }
-/* A platform-owned vertical tab bar replaces the rail (tokens.css zeroes its width). */
-:root[data-vertical-bar] .nav-rail {
-  display: none;
-}
 [data-app-frame] {
   background: var(--bg-app, transparent);
 }
@@ -153,9 +149,6 @@
   border-radius: 50%;
   background: var(--unread);
 }
-.mobile-more-menu [role="menuitem"] {
-  min-height: 44px;
-}
 .mobile-chat-list {
   display: flex;
   flex: 1;
@@ -195,6 +188,15 @@
   align-items: baseline;
   padding: 12px 16px 8px;
   border-bottom-width: 0;
+}
+/* A 40px glass action is taller than the title line: centre the row and even
+   the padding, keeping the 56px height. */
+[data-layout="compact"]
+  header[data-pane-header]:has(> [data-pane-header-trailing] > .glass-round):not(
+    :has(> [data-mobile-navigation-slot] > .mobile-back)
+  ) {
+  align-items: center;
+  padding-block: 8px;
 }
 [data-layout="compact"] header[data-pane-header] > [data-pane-header-icon] {
   display: none;
@@ -275,9 +277,11 @@
 /* The native tab bar is glass: content runs beneath it, and each tab root's
    scroller pads its end so the last row can scroll clear. The inset is 0
    whenever the bar is hidden. */
-[data-layout="compact"] [data-scroll-root] {
+/* A page under the native tab bar scrolls clear of it. Each page reads only
+   its own presence, so a page kept beneath one without the bar never reflows. */
+[data-layout="compact"] [data-page][data-tab-bar] [data-scroll-root] {
   padding-bottom: calc(
-    var(--native-navigation-inset, 0px) + min(12px, var(--native-navigation-inset, 0px))
+    var(--native-tab-bar-height, 0px) + min(12px, var(--native-tab-bar-height, 0px))
   );
 }
 :root[data-layout="compact"] [data-panel] {
@@ -310,6 +314,7 @@
   max-width: none;
 }
 [data-layout="compact"] [data-section-sheet] {
+  position: relative;
   min-height: 0;
 }
 [data-layout="compact"] [data-tasks-board] {
@@ -322,6 +327,207 @@
   min-width: 0;
   flex: none;
   max-height: 70dvh;
+}
+
+/* Floating pane chrome: the header and the controls under it float over the
+   pane's scroller, which runs beneath them. In place of a bar, a blurred fade
+   at the top edge. It matches the page at rest and only shows once content
+   passes under it. */
+/* `clip`, not `hidden`: WebKit scrolls a hidden pane to bring a focused field
+   into view (Search autofocuses), which carries the floating chrome with it. */
+[data-layout="compact"] [data-panel]:has(> [data-pane-chrome]) {
+  position: relative;
+  overflow: clip !important;
+}
+[data-layout="compact"] [data-pane-chrome] {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  display: block;
+  pointer-events: none;
+}
+[data-layout="compact"] [data-pane-chrome] > * {
+  position: relative;
+  pointer-events: auto;
+}
+[data-layout="compact"] [data-pane-chrome]::before {
+  position: absolute;
+  inset: 0 0 auto;
+  height: calc(var(--pane-chrome-height, 0px) + 12px);
+  background: linear-gradient(
+    var(--pane-bg) 0%,
+    color-mix(in srgb, var(--pane-bg) 82%, transparent) calc(100% - 44px),
+    transparent
+  );
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 32px), transparent);
+  mask-image: linear-gradient(#000 calc(100% - 32px), transparent);
+  content: "";
+}
+[data-layout="compact"] [data-pane-chrome] > * {
+  border-bottom-width: 0;
+  background: transparent;
+}
+:root[data-layout="compact"] [data-panel] > [data-pane-chrome="sibling"] + * {
+  /* Clears the whole fade, so nothing sits blurred at rest. */
+  padding-top: calc(var(--pane-chrome-height, 0px) + 12px);
+}
+:where([data-layout="compact"]) [data-pane-chrome] [data-task-board-toolbar] {
+  padding: 4px 16px 10px;
+}
+/* View tabs are glass pills, each with its own ground, so message text never
+   shows through a label. The strip itself stays clear and the header fade
+   runs under the whole chrome. */
+:root[data-layout="compact"] [data-pane-chrome] > [data-conversation-tabs] {
+  height: 44px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 16px;
+  border-bottom-width: 0;
+}
+:root[data-layout="compact"] [data-conversation-tab],
+:root[data-layout="compact"] [data-conversation-tab-add] {
+  height: 34px;
+  border: 0;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-base) 55%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--bg-base) 90%, transparent),
+    inset 0 0 0 0.5px color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+:root[data-layout="compact"] [data-conversation-tab] > button[role="tab"] {
+  height: 100%;
+  padding-inline: 12px;
+  font-size: 14px;
+}
+:root[data-layout="compact"] [data-conversation-tab][data-active] {
+  background: color-mix(in srgb, var(--bg-base) 92%, transparent);
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in srgb, var(--text-primary) 18%, transparent),
+    0 4px 14px rgb(0 0 0 / 0.08);
+}
+:root[data-layout="compact"] [data-conversation-tab-add] {
+  width: 34px;
+  justify-content: center;
+  padding: 0;
+}
+/* Menus on touch read as iOS menus: glass with a large radius. */
+:root[data-layout="compact"] [data-app-menu] {
+  min-width: 200px;
+  padding: 6px;
+  border: 0;
+  border-radius: 20px;
+  font-size: 15px;
+  background: color-mix(in srgb, var(--bg-floating) 72%, transparent);
+  -webkit-backdrop-filter: blur(30px) saturate(1.8);
+  backdrop-filter: blur(30px) saturate(1.8);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--bg-base) 90%, transparent),
+    inset 0 0 0 0.5px color-mix(in srgb, var(--text-primary) 12%, transparent),
+    0 18px 48px rgb(0 0 0 / 0.16);
+}
+:root[data-layout="compact"] [data-app-menu] [role="menuitem"] {
+  min-height: 44px;
+  padding-inline: 12px;
+  border-radius: 14px;
+}
+/* The title alone names the conversation; the `#` would break the bar into
+   pieces. */
+:root[data-layout="compact"] [data-conversation-header] [data-conversation-hash-icon] {
+  display: none !important;
+}
+/* Conversation: the message list reserves the header inside its scroller
+   (`[data-pane-chrome-spacer]`), and anything pinned under the header starts
+   below it. */
+[data-layout="compact"] [data-pane-chrome-spacer] {
+  height: calc(var(--pane-chrome-height, 0px) + 12px);
+}
+[data-layout="compact"] :is([data-find-overlay], [data-conversation-overlay]) {
+  top: var(--pane-chrome-height, 0px);
+}
+[data-layout="compact"] [data-pane-chrome] > header[data-conversation-header] {
+  height: 56px;
+  padding-block: 6px;
+  padding-right: 16px;
+}
+[data-layout="compact"]
+  [data-conversation-header]
+  > :is([data-conversation-title], [data-conversation-title-button]) {
+  flex: 1 1 auto;
+  justify-content: center;
+  text-align: center;
+}
+/* One glass capsule for the conversation's actions, as iOS groups related
+   bar buttons; Back stays its own capsule. */
+[data-layout="compact"] [data-channel-actions] {
+  height: 44px;
+  gap: 0;
+  padding: 0 3px;
+  border-radius: 999px;
+}
+/* Several buttons share this capsule, so the press tint alone answers a tap;
+   scaling the whole capsule would move the neighbours too. */
+[data-layout="compact"] [data-channel-actions]:active {
+  transform: none;
+}
+[data-layout="compact"] [data-channel-actions]:empty {
+  display: none;
+}
+:root[data-layout="compact"] [data-channel-actions] > button[data-sticker] {
+  box-sizing: border-box;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 0;
+  transform: none !important;
+  transition: background-color 120ms ease;
+  border-radius: 999px;
+  color: var(--text-primary);
+  background: transparent;
+  box-shadow: none;
+}
+:root[data-layout="compact"] [data-channel-actions] > button[data-sticker][aria-pressed="true"] {
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+[data-layout="compact"] [data-channel-actions] > button > svg {
+  width: 18px;
+  height: 18px;
+}
+/* The filter toggle's open state: a denser capsule. */
+.mobile-header-action[aria-expanded="true"] > svg {
+  background: color-mix(in srgb, var(--text-primary) 12%, var(--bg-floating));
+}
+/* Touch-sized pills. An unset filter is glass; a set one keeps its fill. */
+[data-layout="compact"] [data-pane-chrome] [data-filter-trigger] {
+  height: 34px;
+  max-width: none;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 14px;
+}
+[data-layout="compact"] [data-pane-chrome] [data-filter-trigger]:not([data-active]) {
+  border-color: transparent;
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--bg-base) 55%, transparent);
+  -webkit-backdrop-filter: blur(24px) saturate(1.8);
+  backdrop-filter: blur(24px) saturate(1.8);
+  box-shadow:
+    inset 0 1px 0 color-mix(in srgb, var(--bg-base) 90%, transparent),
+    inset 0 0 0 0.5px color-mix(in srgb, var(--text-primary) 12%, transparent);
+}
+/* A mask would make the strip a backdrop root and leave the pills nothing to
+   blur, so the strip runs to the screen edge unmasked instead. */
+:where([data-layout="compact"]) [data-pane-chrome] [data-task-board-toolbar] {
+  padding-inline: 0;
+}
+:where([data-layout="compact"]) [data-pane-chrome] [data-task-filter-bar] {
+  gap: 8px;
+  padding-inline: 16px;
+  scroll-padding-inline: 16px;
+  mask-image: none;
 }
 
 /* One swipeable filter strip followed by an icon-only New task. */
@@ -409,7 +615,9 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding-bottom: max(24px, env(safe-area-inset-bottom, 0px));
+  /* A docked keyboard covers the home-indicator area, and iOS reports that inset
+     intermittently while typing; the docked override keeps the sheet height fixed. */
+  padding-bottom: max(24px, var(--input-safe-area-bottom, env(safe-area-inset-bottom, 0px)));
   padding-left: max(24px, env(safe-area-inset-left, 0px));
   padding-right: max(24px, env(safe-area-inset-right, 0px));
   border-bottom-left-radius: 0;
@@ -472,4 +680,80 @@
 /* A narrow pane spends the time column on the block too. */
 :where([data-layout="compact"]) [data-activity-block] {
   grid-column: 1 / -1;
+}
+
+/* A page drawing its header in the native bar (iOS) clears the bar itself:
+   the page runs under the bar and its view tabs, which blur it themselves,
+   and the pane chrome keeps only the clearance that places the first message
+   below them. The bar's extent is fixed per layout, so a page lays out for it
+   before it shows and never moves when another page takes the bar. A page
+   that declares no bar gets the shell's and clears it the same way. */
+[data-layout="compact"] .app-shell:not(:has(> .mobile-header)) {
+  padding-top: 0;
+}
+[data-layout="compact"]
+  .app-shell:not(:has(> .mobile-header))
+  [data-page]:not(:has([data-native-bar-clearance])) {
+  padding-top: var(--native-bar-bottom, env(safe-area-inset-top, 0px));
+}
+[data-native-bar-clearance] {
+  flex-shrink: 0;
+  height: var(--native-bar-bottom, env(safe-area-inset-top, 0px));
+}
+[data-native-bar-clearance="tabs"] {
+  height: calc(
+    var(--native-bar-bottom, env(safe-area-inset-top, 0px)) + var(--native-bar-tabs, 0px)
+  );
+}
+[data-native-bar-clearance="none"] {
+  height: env(safe-area-inset-top, 0px);
+}
+/* Under a native bar the page stays visible: a wash behind the status bar and
+   the bar keeps them and the bar's capsules legible, so only the capsules
+   read as chrome. A page without a bar washes the status bar alone. */
+/* Pane chrome under the bar (view tabs, filters) keeps its own fade below. */
+[data-pane-chrome]:has(> [data-native-bar-clearance])::before {
+  top: var(--native-bar-bottom, env(safe-area-inset-top, 0px));
+  height: calc(
+    var(--pane-chrome-height, 0px) - var(--native-bar-bottom, env(safe-area-inset-top, 0px)) + 12px
+  );
+}
+[data-pane-chrome]:has(> [data-native-bar-clearance="tabs"])::before {
+  content: none;
+}
+[data-layout="compact"] .app-shell:not(:has(> .mobile-header))::before {
+  position: fixed;
+  inset: 0 0 auto;
+  z-index: 5;
+  height: var(--native-bar-bottom, env(safe-area-inset-top, 0px));
+  background: linear-gradient(
+    var(--pane-bg) 0%,
+    color-mix(in srgb, var(--pane-bg) 85%, transparent) 50%,
+    transparent
+  );
+  pointer-events: none;
+  content: "";
+}
+[data-layout="compact"]
+  .app-shell:not(:has(> .mobile-header)):has(
+    [data-page]:not([aria-hidden]) [data-native-bar-clearance="none"]
+  )::before {
+  height: env(safe-area-inset-top, 0px);
+}
+/* A view in front of Chat (Tasks, a preview, a panel) covers the whole pane,
+   under the bar too, so the stream below never shows through the bar's glass. */
+[data-panel]:has(> [data-pane-chrome] > [data-native-bar-clearance]) [data-conversation-overlay] {
+  top: 0;
+  padding-top: var(--pane-chrome-height, 0px);
+}
+/* A side panel's find bar sits under the native bar. */
+[data-native-bar-clearance] ~ [data-thread-find] {
+  top: var(--native-bar-bottom, env(safe-area-inset-top, 0px));
+}
+/* WebKit gives a hidden scroller the base.css scrollbar gutter, which the page
+   on screen draws as an overlay. A kept page would reflow 6px narrower and
+   return shifted. */
+[data-page][aria-hidden] ::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }

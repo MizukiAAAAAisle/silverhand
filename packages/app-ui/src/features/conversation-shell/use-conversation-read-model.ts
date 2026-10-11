@@ -31,6 +31,7 @@ import { type ConversationPointer } from "@/features/conversation-shell/model/se
 import { useRouteState } from "@/router";
 import { isWorkspacePlaced } from "@silverhand/shared";
 import { useCallback, useDeferredValue, useMemo } from "react";
+import { useCompactLayout } from "@/navigation/layout";
 
 /** Carrier authority only; navigation and read-cursor writes belong to the coordinators. */
 export function useConversationReadModel() {
@@ -174,7 +175,11 @@ export function useConversationReadModel() {
 
   const parentChannelMembership = parentMembership.membership;
 
-  const deferredChannelId = useDeferredValue(selectedChannelId);
+  // A compact page slides in as it first paints, so it renders its channel at
+  // once; deferring would slide in a placeholder that then swaps.
+  const compact = useCompactLayout();
+  const deferred = useDeferredValue(selectedChannelId);
+  const deferredChannelId = compact ? selectedChannelId : deferred;
 
   const deferredSelectedChannel = channels.find((s) => s.id === deferredChannelId) ?? null;
 

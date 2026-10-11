@@ -1,6 +1,10 @@
 import type { ServerInfo } from "@silverhand/shared";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type {
+  TitlebarEvent,
+  TitlebarState,
+  PageBarEvent,
+  PageBarState,
   BackendProxyRequest,
   BackendProxyResponse,
   ClientAuthResult,
@@ -21,10 +25,17 @@ export interface NativeBridge {
     activity?: boolean;
     tasks?: boolean;
   }): Promise<void>;
-  navigationSync(state: NativeNavigationState): Promise<{ bottomInset: number }>;
-  navigationCapture(input: { session: string; key: string }): Promise<void>;
-  navigationFinish(input: { session: string; request: string; accepted: boolean }): Promise<void>;
+  navigationSync(state: NativeNavigationState): Promise<{ tabBarHeight: number }>;
   navigationReset(input: { session: string }): Promise<void>;
+  navigationAvatar(input: { base64?: string }): Promise<void>;
+  /** Groups of page controls the iPhone Duo vertical bar draws. */
+  /** The wide layout's native titlebar; a null state removes it. */
+  titlebar(input: { state: TitlebarState | null }): Promise<void>;
+  titlebarEndSearch(input: { clear: boolean }): Promise<void>;
+  /** A compact page's header as the native navigation bar; icons are base64
+   * PNG. A null state removes it. */
+  pageBar(input: { state: PageBarState | null }): Promise<void>;
+  pageBarBackProgress(input: { progress: number | null }): Promise<void>;
   addListener(
     event: "navigation",
     handler: (intent: NativeNavigationIntent) => void,
@@ -59,8 +70,12 @@ export interface NativeBridge {
   ): Promise<PluginListenerHandle>;
   addListener(event: "foreground", handler: () => void): Promise<PluginListenerHandle>;
   addListener(
-    event: "windowControls",
-    handler: (state: { top: number; height: number; statusBar: number }) => void,
+    event: "titlebar",
+    handler: (event: TitlebarEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    event: "pageBar",
+    handler: (event: PageBarEvent) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "fold",
@@ -69,8 +84,8 @@ export interface NativeBridge {
     ) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
-    event: "verticalBar",
-    handler: (state: { edge: "" | "leading" | "trailing" }) => void,
+    event: "barMetrics",
+    handler: (metrics: { bottom: number; tabs: number }) => void,
   ): Promise<PluginListenerHandle>;
 }
 export const nativeBridge = registerPlugin<NativeBridge>("SilverhandClient");

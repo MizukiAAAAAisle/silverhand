@@ -1,5 +1,8 @@
 import { useMemo } from "react";
-import { HashIcon } from "@/icons";
+import { BotIcon, HashIcon, UserIcon } from "@/icons";
+import type { PageBarState } from "@silverhand/client";
+import { agentAvatarImage } from "@/components/agent-avatar";
+import { iconMarkup } from "@/components/layout/native-page-bar";
 import type { DirectPairCounterpart } from "@silverhand/shared";
 import {
   AuthorAvatarView,
@@ -68,6 +71,42 @@ export function ConversationHeaderIdentity({
       {title}
     </span>
   );
+}
+
+/** The same identity as the native bar's title icon: the channel `#`, or the
+ * counterpart's face, falling back to its glyph while the face loads. */
+export function useHeaderIdentityIcon(
+  identity: ConversationPaneCapabilities["headerIdentity"],
+  counterpart: DirectPairCounterpart | null,
+): PageBarState["titleIcon"] {
+  const { agents, users } = useMemo(
+    () =>
+      identity === "counterpart" && counterpart
+        ? collectCounterpartAvatarSources([{ counterpart }])
+        : { agents: [], users: [] },
+    [identity, counterpart],
+  );
+  const agentAvatarUrls = useAgentAvatarObjectUrls(agents);
+  const humanAvatarUrls = useUserAvatarObjectUrls(users);
+
+  if (identity === "channel_hash") {
+    return { glyph: iconMarkup(HashIcon) };
+  }
+  if (identity !== "counterpart" || !counterpart) {
+    return undefined;
+  }
+
+  const { avatar } = presentCounterpart(counterpart);
+  const image =
+    avatar.variant === "agent"
+      ? agentAvatarImage(avatar.runtime, agentAvatarUrls.get(avatar.id) ?? null)
+      : avatar.variant === "user"
+        ? (humanAvatarUrls.get(avatar.id) ?? null)
+        : null;
+  if (image) {
+    return { image };
+  }
+  return { glyph: iconMarkup(counterpart.kind === "agent" ? BotIcon : UserIcon) };
 }
 
 /**

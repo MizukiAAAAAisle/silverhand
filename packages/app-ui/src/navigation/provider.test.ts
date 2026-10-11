@@ -71,3 +71,34 @@ it("Closing an overlay returns to the entry that opened it", () => {
   expect(url(s)).toBe("/tasks");
   expect(s.getSnapshot().canBack).toBe(false);
 });
+it("a push starts a page, a replace keeps it, and Back returns to the kept page", () => {
+  const s = new NavigationStore("/chat/d/c");
+  const channel = s.getSnapshot().page;
+  s.go("/chat/d/c?thread=a");
+  const thread = s.getSnapshot();
+  expect(thread.page).not.toBe(channel);
+  expect(thread.keptPages[0]).toBe(channel);
+  s.go("/chat/d/c?thread=b", { replace: true });
+  expect(s.getSnapshot().page).toBe(thread.page);
+  s.back();
+  expect(s.getSnapshot().page).toBe(channel);
+});
+it("keeps every page of every Tab's stack", () => {
+  const s = new NavigationStore("/chat");
+  const chats = s.getSnapshot().page;
+  s.go("/chat/d/c");
+  const channel = s.getSnapshot().page;
+  s.go("/chat/d/c?settings=c");
+  const settings = s.getSnapshot().page;
+  s.go("/chat/d/c?settings=c&settingsPage=members");
+  expect(s.getSnapshot().keptPages).toEqual(
+    expect.arrayContaining([chats, channel, settings, s.getSnapshot().page]),
+  );
+  s.selectTab("tasks");
+  expect(s.getSnapshot().keptPages).toEqual(expect.arrayContaining([chats, channel, settings]));
+  s.selectTab("chat");
+  s.back();
+  s.back();
+  expect(s.getSnapshot().page).toBe(channel);
+  expect(s.getSnapshot().keptPages).not.toContain(settings);
+});

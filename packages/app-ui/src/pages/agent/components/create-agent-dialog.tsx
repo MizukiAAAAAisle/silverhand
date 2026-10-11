@@ -21,6 +21,7 @@ import { cn } from "@/lib/cn";
 import { describeApiError } from "@/lib/api-error-message";
 import {
   NameAvailabilityHint,
+  NameCheckingIcon,
   useNameAvailability,
 } from "@/features/identity/use-name-availability";
 import {
@@ -289,18 +290,22 @@ export function CreateAgentDialog({
             <Label htmlFor="ag-name" required className="font-semibold">
               Name
             </Label>
-            <Input
-              id="ag-name"
-              value={name}
-              onChange={(e) => {
-                setName(e.target.value);
-                setError(null);
-              }}
-              onBlur={nameCheck.markTouched}
-              aria-invalid={nameCheck.blocking || undefined}
-              placeholder="alice"
-              autoFocus
-            />
+            <div className="relative">
+              <Input
+                id="ag-name"
+                value={name}
+                onChange={(e) => {
+                  setName(e.target.value);
+                  setError(null);
+                }}
+                onBlur={nameCheck.markTouched}
+                aria-invalid={nameCheck.blocking || undefined}
+                placeholder="alice"
+                autoFocus
+                className="pr-8"
+              />
+              <NameCheckingIcon check={nameCheck} />
+            </div>
             <NameAvailabilityHint check={nameCheck} />
           </div>
 

@@ -133,6 +133,7 @@ export const routes = {
   computers: () => "/computers",
   tasks: () => "/tasks",
   settings: () => "/settings",
+  me: () => "/me",
 } as const;
 
 export const routePatterns = {
@@ -154,6 +155,7 @@ export const routePatterns = {
   computers: "/computers",
   tasks: "/tasks",
   settings: "/settings",
+  me: "/me",
 } as const;
 
 export type ChatView = "channel" | "saved" | "search" | "archived";
@@ -407,6 +409,7 @@ export function parseRouteState(pathname: string, search: string): RouteState {
   else if (pathname.startsWith("/tasks")) section = "tasks";
   else if (pathname.startsWith("/settings")) section = "settings";
   else if (pathname.startsWith("/activity")) section = "activity";
+  else if (pathname === "/me") section = "me";
 
   const chatView: ChatView = pathname.startsWith("/chat/saved")
     ? "saved"
@@ -982,7 +985,7 @@ export function buildAgentPanelOpenUrl(pathname: string, search: string, agentId
  */
 export type NavigationTarget =
   | { kind: "tab"; tab: MainTab }
-  | { kind: "section"; tab: MainTab }
+  | { kind: "section"; tab: MainTab; root?: string }
   | { kind: "url"; url: string }
   | { kind: "conversation"; conversationId: string; workspaceId?: string }
   | { kind: "thread"; rootMessageId: string; conversationId?: string; workspaceId?: string }
@@ -1046,8 +1049,9 @@ export function resolveNavigationTarget(
 }
 
 export function useNav() {
-  const { go: drive, back, selectTab, openSection } = useNavigationDriver();
+  const driver = useNavigationDriver();
   const { pathname, search } = useLocation();
+  const { back, selectTab, openSection, go: drive } = driver;
   const navigate = useCallback(
     (target: NavigationTarget, opts?: { replace?: boolean }) => {
       if (target.kind === "tab") {
@@ -1055,7 +1059,7 @@ export function useNav() {
         return;
       }
       if (target.kind === "section") {
-        openSection(target.tab);
+        openSection(target.tab, target.root);
         return;
       }
       const pane = target.kind !== "url" && target.kind !== "conversation";
@@ -1089,6 +1093,8 @@ export function useNav() {
       toMembersUser: (id: string) => go(routes.membersUser(id)),
       toComputers: () => go(routes.computers()),
       toTasks: () => navigate({ kind: "section", tab: "tasks" }),
+      toUtilitySection: (section: "members" | "computers" | "settings") =>
+        navigate({ kind: "section", tab: "me", root: routes[section]() }),
       toSettings: () => go(routes.settings()),
       openSide: (conversationId: string) => navigate({ kind: "side-conversation", conversationId }),
       closeSide: () => drive(withSideQuery(pathname, search, null), { replace: true }),

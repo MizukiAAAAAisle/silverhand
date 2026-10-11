@@ -1,3 +1,4 @@
+import { usePageLive } from "@/navigation/page-stack";
 import { type RefObject, useCallback, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { SearchDto } from "@silverhand/shared";
@@ -325,8 +326,9 @@ export function useInlineFindHotkey(opts: {
   onOpen: () => void;
 }): void {
   const { rootRef, enabled, isPrimary = false, onOpen } = opts;
+  const live = usePageLive();
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !live) return;
     const handler = (e: KeyboardEvent) => {
       if (e.key !== "f" || !e.metaKey || e.ctrlKey || e.altKey) return;
       const root = rootRef.current;
@@ -341,5 +343,5 @@ export function useInlineFindHotkey(opts: {
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [rootRef, enabled, isPrimary, onOpen]);
+  }, [rootRef, enabled, live, isPrimary, onOpen]);
 }

@@ -1,0 +1,161 @@
+/* Liquid glass needs colour behind it: the viewer's own avatar, blurred and
+   faded into the page, is the field the cards float over. */
+.me-shell {
+  position: relative;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  isolation: isolate;
+}
+/* A glow behind the hero rather than a band from the top: it fades out before
+   every pane edge, so it meets the status bar, a Duo's side bars and the
+   desktop titlebar as plain page colour, with no seam. */
+.me-backdrop {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: -1;
+  height: 400px;
+  background-image: var(--me-backdrop);
+  background-position: center 30%;
+  background-size: cover;
+  filter: blur(40px) saturate(1.4);
+  opacity: 0.5;
+  -webkit-mask-image: radial-gradient(closest-side, #000 25%, transparent);
+  mask-image: radial-gradient(closest-side, #000 25%, transparent);
+  pointer-events: none;
+}
+
+[data-layout="compact"] .me-shell header[data-pane-header] {
+  background: transparent;
+}
+
+.me-page {
+  container: me-page / inline-size;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px 16px 24px;
+  overflow-y: auto;
+}
+
+.me-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 4px 8px;
+}
+.me-avatar {
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.2);
+}
+.me-name {
+  overflow-wrap: anywhere;
+  font-family: var(--font-sans);
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: var(--text-primary);
+}
+.me-handle {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--text-muted);
+}
+
+.me-activity {
+  padding: 18px 18px 16px;
+  border-radius: 28px;
+}
+/* The calendar's empty cell is mixed with the opaque page colour; on glass it
+   must be translucent too, or it reads as a lighter patch than the card. */
+.me-activity [data-message-activity] {
+  --activity-empty: color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+
+.me-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.me-tile {
+  position: relative;
+  display: flex;
+  height: 118px;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 16px;
+  border-radius: 24px;
+  text-align: left;
+}
+.me-tile-icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text-primary) 7%, transparent);
+}
+.me-tile-chevron {
+  position: absolute;
+  top: 18px;
+  right: 14px;
+}
+.me-tile-count {
+  margin-top: auto;
+  font-size: 26px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.me-tile-title {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--text-muted);
+}
+/* Narrow: two count tiles share a row and the plain tile spans beneath them.
+   Wide (an unfolded Duo, iPad): all three sit in one row so no tile stretches
+   into a long bar. */
+@container me-page (max-width: 559px) {
+  .me-tile[data-plain] {
+    grid-column: 1 / -1;
+    height: 56px;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    padding: 0 14px 0 18px;
+  }
+  .me-tile[data-plain] .me-tile-icon {
+    width: auto;
+    height: auto;
+    background: none;
+  }
+  .me-tile[data-plain] .me-tile-title {
+    flex: 1;
+    margin: 0;
+    font-size: 16px;
+    color: var(--text-primary);
+  }
+  .me-tile[data-plain] .me-tile-chevron {
+    position: static;
+    order: 1;
+  }
+}
+@container me-page (min-width: 560px) {
+  .me-tiles {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .me-tile[data-plain] .me-tile-title {
+    margin-top: auto;
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+}
+.me-chevron {
+  color: var(--text-muted);
+}

@@ -80,6 +80,7 @@ export function AppContextMenu({
       </ContextMenu.Trigger>
       <ContextMenu.Portal>
         <ContextMenu.Content
+          data-app-menu
           className={cn(MENU_CONTENT_CLASS, contentClassName)}
           onCloseAutoFocus={onCloseAutoFocus}
         >
@@ -139,7 +140,7 @@ export function AppContextMenuSub({
         </AppMenuItemContent>
       </ContextMenu.SubTrigger>
       <ContextMenu.Portal>
-        <ContextMenu.SubContent className={MENU_CONTENT_CLASS} sideOffset={2}>
+        <ContextMenu.SubContent data-app-menu className={MENU_CONTENT_CLASS} sideOffset={2}>
           {children}
         </ContextMenu.SubContent>
       </ContextMenu.Portal>
@@ -170,6 +171,7 @@ export function AppDropdownMenu({
           align={align}
           side={side}
           sideOffset={4}
+          data-app-menu
           className={cn(MENU_CONTENT_CLASS, contentClassName)}
         >
           {children}

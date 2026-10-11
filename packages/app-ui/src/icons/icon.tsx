@@ -1,7 +1,6 @@
 import { createElement, forwardRef, useId, type ReactNode, type SVGProps } from "react";
-import { withNativeCircles } from "./native-circles";
 
-/** One SVG element of an icon: tag name plus attributes, as Hugeicons ships them. */
+/** SVG elements of an icon: tag name plus attributes, as Lucide ships them. */
 export type IconNode = readonly (readonly [string, Readonly<Record<string, string | number>>])[];
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, "ref"> {
@@ -52,15 +51,13 @@ export function createDrawnIcon(name: string, Glyph: (props: { id: string }) => 
 }
 
 /**
- * A Hugeicons data node on the shared grid. Per-element stroke widths from the
+ * A Lucide data node on the shared grid. Per-element stroke widths from the
  * source are dropped so the root `strokeWidth` governs the whole glyph.
  */
 export function createIcon(name: string, node: IconNode) {
-  const children = withNativeCircles(node).map(([tag, attrs], index) => {
+  const children = node.map(([tag, attrs], index) => {
     const { strokeWidth: _strokeWidth, key: _key, ...rest } = attrs;
-    // A filled shape must not inherit the root stroke, or it reads heavier.
-    const paint = rest["fill"] && !rest["stroke"] ? { stroke: "none" } : null;
-    return createElement(tag, { ...rest, ...paint, key: index });
+    return createElement(tag, { ...rest, key: index });
   });
 
   return createDrawnIcon(name, () => children);

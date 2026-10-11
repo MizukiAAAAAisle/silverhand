@@ -13,6 +13,8 @@ vi.mock("./mobile-header-slot", () => ({
   useMobileHeaderActionRef: () => null,
 }));
 vi.mock("@/platform", () => ({ getPlatform: () => ({}) }));
+vi.mock("./native-page-bar", () => ({ useNativeBarPlatform: () => false }));
+vi.mock("@/navigation/page-bar", () => ({ usePageBarClaim: () => {} }));
 vi.mock("@/navigation/provider", () => ({
   useNavigationDriver: () => ({ back: h.back, canBack: h.canBack }),
 }));

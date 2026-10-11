@@ -2,6 +2,7 @@ import { ComputerRowsSkeleton } from "./components/computer-skeletons";
 import type { JSX } from "react";
 import { DirectorySidebar } from "@/components/layout/directory-shell";
 import { MobileHeaderAction } from "@/components/layout/mobile-header-slot";
+import { iconMarkup, nativeActionBar, useNativeBar } from "@/components/layout/native-page-bar";
 import { ComputerIcon, PlusIcon } from "@/icons";
 import type { HostDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
@@ -37,6 +38,20 @@ export function ComputerSidebarShell({
   );
 
   const compact = useCompactLayout();
+  const [bar, handlers] = nativeActionBar(
+    { title: "Computers", titleAction: null, tabs: null, addTabs: null },
+    [
+      onAddComputer
+        ? {
+            id: "add",
+            label: computerCopy.addComputer,
+            icon: iconMarkup(PlusIcon),
+            run: onAddComputer,
+          }
+        : null,
+    ],
+  );
+  const native = useNativeBar(compact ? bar : null, handlers);
 
   const rows =
     sorted.length === 0 ? (
@@ -63,7 +78,8 @@ export function ComputerSidebarShell({
   if (compact) {
     return (
       <DirectorySidebar>
-        {onAddComputer ? (
+        {native.clearance}
+        {onAddComputer && !native.active ? (
           <MobileHeaderAction>
             <button
               type="button"

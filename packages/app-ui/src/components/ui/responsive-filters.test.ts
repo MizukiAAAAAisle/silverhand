@@ -21,33 +21,9 @@ it("links the compact action to a hidden but still mounted filter panel", () => 
   expect(action).toContain('aria-controls="filters-test"');
   expect(action).toContain('aria-expanded="false"');
   expect(action).toContain('aria-label="Show filters"');
-  expect(action).not.toContain('data-sticker=""');
   expect(panel).toContain('id="filters-test"');
   expect(panel).toContain('hidden=""');
   expect(panel).toContain("retained filter");
-});
-
-it("distinguishes expanded presentation from active query filters", () => {
-  const action = renderToStaticMarkup(
-    createElement(FilterToggle, {
-      disclosure: { ...disclosure, expanded: true },
-      active: true,
-    }),
-  );
-  expect(action).toContain('aria-expanded="true"');
-  expect(action).toContain('aria-label="Hide filters (active)"');
-  expect(action).toContain("text-accent");
-  expect(action).toContain("bg-bg-hover");
-  expect(action).toContain('data-sticker=""');
-  expect(action).toContain('data-sticker-size="sm"');
-  expect(action).toContain('data-sticker-tone="neutral"');
-});
-
-it("does not apply the expanded sticker to collapsed active filters", () => {
-  const action = renderToStaticMarkup(createElement(FilterToggle, { disclosure, active: true }));
-  expect(action).toContain("text-accent");
-  expect(action).not.toContain('data-sticker=""');
-  expect(action).not.toContain("data-sticker-tone");
 });
 
 it("has no desktop action and keeps the desktop panel visible", () => {

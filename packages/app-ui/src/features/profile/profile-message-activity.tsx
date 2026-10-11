@@ -18,20 +18,34 @@ import {
   type ProfileMessageSubject,
 } from "./message-counts";
 
+/** `compact` drops the section title, the period picker, the legend and the
+ * frame, and fits the last weeks to the width: a glanceable summary whose
+ * consumer supplies the surface. */
+export type MessageActivityMode = "full" | "compact";
+
 export function ProfileMessageActivity({
   subject,
+  mode = "full",
 }: {
   subject: ProfileMessageSubject;
+  mode?: MessageActivityMode;
 }): JSX.Element {
   return (
     <MessageActivitySection
       key={`${getCurrentUserId()}:${subject.kind}:${subject.id}`}
       subject={subject}
+      mode={mode}
     />
   );
 }
 
-function MessageActivitySection({ subject }: { subject: ProfileMessageSubject }): JSX.Element {
+function MessageActivitySection({
+  subject,
+  mode,
+}: {
+  subject: ProfileMessageSubject;
+  mode: MessageActivityMode;
+}): JSX.Element {
   const [year, setYear] = useState<number | "recent">("recent");
   const [availableYears, setAvailableYears] = useState<number[]>([]);
 
@@ -66,6 +80,65 @@ function MessageActivitySection({ subject }: { subject: ProfileMessageSubject })
     ...new Set([...(year === "recent" ? [] : [year]), currentYear, ...availableYears]),
   ].sort((a, b) => b - a);
   const total = data?.reduce((sum, day) => sum + day.count, 0) ?? 0;
+
+  const content = (
+    <>
+      {isError ? (
+        <div
+          className="flex min-h-40 items-center justify-center gap-3 text-xs text-text-muted"
+          role="status"
+        >
+          <span>Message activity unavailable.</span>
+          <button
+            type="button"
+            className="text-text-primary underline underline-offset-2 focus-outline"
+            onClick={() => void Promise.all(queries.map((query) => query.refetch()))}
+            disabled={isFetching}
+          >
+            Retry
+          </button>
+        </div>
+      ) : data ? (
+        <div>
+          {mode === "compact" ? (
+            <p className="mb-3.5 flex items-baseline gap-2">
+              <span className="text-[30px] font-bold leading-none tracking-tight tabular-nums text-text-primary">
+                {total.toLocaleString()}
+              </span>
+              <span className="text-[13px] text-text-muted">
+                {total === 1 ? "message" : "messages"} in the last year
+              </span>
+            </p>
+          ) : (
+            <p className="mb-5 text-xs text-text-muted">
+              {total.toLocaleString()} {total === 1 ? "message" : "messages"}{" "}
+              {year === "recent" ? "in the last year" : `in ${year}`}
+            </p>
+          )}
+          <MessageActivityCalendar
+            year={year}
+            days={data}
+            today={today}
+            legend={mode === "full"}
+            fit={mode === "compact"}
+          />
+        </div>
+      ) : (
+        <div
+          className="flex min-h-40 flex-col justify-center gap-4"
+          role="status"
+          aria-label="Loading message activity"
+        >
+          <div className="h-3 w-40 animate-pulse rounded-(--control-radius) bg-bg-elevated" />
+          <div className="h-28 animate-pulse rounded-(--control-radius) bg-bg-elevated" />
+        </div>
+      )}
+    </>
+  );
+
+  if (mode === "compact") {
+    return <section aria-label="Message activity">{content}</section>;
+  }
 
   return (
     <ProfileSection
@@ -104,39 +177,7 @@ function MessageActivitySection({ subject }: { subject: ProfileMessageSubject })
         </Select.Root>
       }
     >
-      {isError ? (
-        <div
-          className="flex min-h-40 items-center justify-center gap-3 text-xs text-text-muted"
-          role="status"
-        >
-          <span>Message activity unavailable.</span>
-          <button
-            type="button"
-            className="text-text-primary underline underline-offset-2 focus-outline"
-            onClick={() => void Promise.all(queries.map((query) => query.refetch()))}
-            disabled={isFetching}
-          >
-            Retry
-          </button>
-        </div>
-      ) : data ? (
-        <div>
-          <p className="mb-5 text-xs text-text-muted">
-            {total.toLocaleString()} {total === 1 ? "message" : "messages"}{" "}
-            {year === "recent" ? "in the last year" : `in ${year}`}
-          </p>
-          <MessageActivityCalendar year={year} days={data} today={today} />
-        </div>
-      ) : (
-        <div
-          className="flex min-h-40 flex-col justify-center gap-4"
-          role="status"
-          aria-label="Loading message activity"
-        >
-          <div className="h-3 w-40 animate-pulse rounded-(--control-radius) bg-bg-elevated" />
-          <div className="h-28 animate-pulse rounded-(--control-radius) bg-bg-elevated" />
-        </div>
-      )}
+      {content}
     </ProfileSection>
   );
 }

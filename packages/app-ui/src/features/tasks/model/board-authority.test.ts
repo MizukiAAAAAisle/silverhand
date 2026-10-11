@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   UNKNOWN_COUNT,
-  activeTaskCount,
   boardAuthority,
   boardColumnTotal,
   boardCountLabel,
   mapBoardAuthority,
   personMenuState,
-  totalTaskCount,
   type BoardCounts,
   type BoardFacets,
 } from "./board-authority";
@@ -65,8 +63,6 @@ describe("counts nobody has answered for", () => {
       isError: true,
     });
     for (const unknown of [loading, failed]) {
-      expect(activeTaskCount(unknown)).toBe(null);
-      expect(totalTaskCount(unknown)).toBe(null);
       expect(boardColumnTotal(unknown, "todo")).toBe(null);
       // What a header prints instead: a dash holding the shape, never a digit.
       expect(boardCountLabel(boardColumnTotal(unknown, "todo"))).toBe(UNKNOWN_COUNT);
@@ -86,15 +82,11 @@ describe("counts nobody has answered for", () => {
     // unknown bit lives in the query state alone — inferring it from the value
     // would strand a legitimately empty workspace in a permanent loading state.
     const known = boardAuthority({ data: empty, isError: false });
-    expect(totalTaskCount(known)).toBe(0);
     expect(boardCountLabel(boardColumnTotal(known, "todo"))).toBe("0");
   });
 
-  it("sums and slices a known answer", () => {
+  it("reads a column total from a known answer", () => {
     const known = boardAuthority({ data: COUNTS, isError: false });
-    expect(totalTaskCount(known)).toBe(17);
-    // "Active" excludes both terminal statuses.
-    expect(activeTaskCount(known)).toBe(6);
     expect(boardColumnTotal(known, "closed")).toBe(4);
   });
 });

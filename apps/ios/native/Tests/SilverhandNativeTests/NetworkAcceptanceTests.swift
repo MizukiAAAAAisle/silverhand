@@ -364,19 +364,6 @@ final class NetworkAcceptanceTests: XCTestCase {
       if #available(iOS 18.0, *) { XCTAssertTrue(tabs.isTabBarHidden) }
       selectTab(1)
       try await waitFor("location.hash === '#/activity'")
-      #if canImport(App)
-        let actionHost = try XCTUnwrap(tabs as? SilverhandNavigationController)
-        if #available(iOS 18.0, *) {
-          for _ in 0..<50 {
-            if !tabs.isTabBarHidden { break }
-            try await Task.sleep(nanoseconds: 10_000_000)
-          }
-        }
-        actionHost.view.layoutIfNeeded()
-        let moreHit = CGPoint(
-          x: actionHost.moreAction.frame.midX, y: actionHost.moreAction.frame.midY)
-        XCTAssertTrue(actionHost.view.hitTest(moreHit, with: nil) === actionHost.moreAction)
-      #endif
 
       selectTab(0)
       try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
@@ -393,27 +380,19 @@ final class NetworkAcceptanceTests: XCTestCase {
         _ = try await view.evaluateJavaScript(
           "window.memberField = document.querySelector('input[placeholder=\"Search members or add someone\"]'); window.memberField.focus(); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(window.memberField, 'unfinished member search'); window.memberField.dispatchEvent(new Event('input', {bubbles:true}))"
         )
-        XCTAssertTrue(navigationHost.beginInteractiveBack())
-        navigationHost.updateInteractiveBack(progress: 0.45)
-        let moving = navigationHost.view.subviews.first {
-          $0.accessibilityIdentifier == "navigation-transition-front"
+        // Back from the native bar runs the page's own Back; the stack stays
+        // one page deep.
+        func tapBack() throws {
+          let stack = try XCTUnwrap(navigationHost.selectedViewController as? UINavigationController)
+          XCTAssertEqual(stack.viewControllers.count, 1)
+          navigationHost.pageBar.onEvent?(["kind": "back"])
         }
-        XCTAssertGreaterThan(moving?.transform.tx ?? 0, 0)
-        navigationHost.endInteractiveBack(complete: false)
         try await Task.sleep(nanoseconds: 350_000_000)
-        try await waitFor(
-          "location.hash.includes('settingsPage=members') && document.activeElement === window.memberField && window.memberField.value === 'unfinished member search'"
-        )
-        XCTAssertTrue(navigationHost.beginInteractiveBack())
-        navigationHost.updateInteractiveBack(progress: 0.7)
-        navigationHost.endInteractiveBack(complete: true)
-        navigationHost.endInteractiveBack(complete: true)
+        try tapBack()
         try await waitFor(
           "location.hash.includes('settings=') && !location.hash.includes('settingsPage=')")
         try await Task.sleep(nanoseconds: 350_000_000)
-        XCTAssertTrue(navigationHost.beginInteractiveBack())
-        navigationHost.updateInteractiveBack(progress: 0.7)
-        navigationHost.endInteractiveBack(complete: true)
+        try tapBack()
         try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
         // Re-open to retain the button-return regression below.
         _ = try await view.evaluateJavaScript(
@@ -433,46 +412,17 @@ final class NetworkAcceptanceTests: XCTestCase {
       )
       _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
       try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
-      let beforeMoreSelection = tabs.selectedIndex
-      #if canImport(App)
-        let host = try XCTUnwrap(tabs as? SilverhandNavigationController)
-        host.moreAction.sendActions(for: .touchUpInside)
-      #else
-        XCTFail("Hosted More input requires App module")
-      #endif
-      try await Task.sleep(nanoseconds: 350_000_000)
-      XCTAssertEqual(tabs.selectedIndex, beforeMoreSelection)
-      XCTAssertNotNil(tabs.viewControllers?[3].tabBarItem.selectedImage)
-      let firstMenu = try XCTUnwrap(tabs.presentedViewController)
-      await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-        firstMenu.dismiss(animated: false) { continuation.resume() }
-      }
-      XCTAssertEqual(tabs.selectedIndex, beforeMoreSelection)
       selectTab(3)
-      try await Task.sleep(nanoseconds: 350_000_000)
-      #if canImport(App)
-        let menu = try XCTUnwrap(tabs.presentedViewController as? NavigationMoreMenu)
-        XCTAssertEqual(tabs.selectedIndex, beforeMoreSelection)
-        XCTAssertEqual(menu.menuButtons.count, 3)
-        for (index, title) in ["Members", "Computers", "Settings"].enumerated() {
-          let configuration = try XCTUnwrap(menu.menuButtons[index].configuration)
-          XCTAssertEqual(configuration.title, title)
-          XCTAssertNotNil(configuration.image)
-        }
-        let menuShot = UIGraphicsImageRenderer(bounds: tabs.view.bounds).image { _ in
-          tabs.view.window?.drawHierarchy(in: tabs.view.bounds, afterScreenUpdates: true)
-        }
-        let menuAttachment = XCTAttachment(image: menuShot)
-        menuAttachment.name = "native-more-menu"
-        menuAttachment.lifetime = .keepAlways
-        add(menuAttachment)
-        menu.menuButtons[0].sendActions(for: .touchUpInside)
-      #else
-        XCTFail("Hosted menu acceptance requires the App module")
-      #endif
+      try await waitFor("location.hash === '#/me'")
+      XCTAssertEqual(tabs.selectedIndex, 3)
+      _ = try await view.evaluateJavaScript(
+        "Array.from(document.querySelectorAll('[data-sidebar=me] button')).find(b => b.textContent.startsWith('Members')).click()"
+      )
       try await waitFor("location.hash === '#/members'")
       XCTAssertEqual(tabs.selectedIndex, 3)
       _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
+      try await waitFor("location.hash === '#/me'")
+      selectTab(0)
       try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
       try await waitFor("!!document.querySelector('button[aria-label=\"Thread\"]')")
       _ = try await view.evaluateJavaScript(
@@ -497,7 +447,7 @@ final class NetworkAcceptanceTests: XCTestCase {
       try await waitFor("document.querySelector('textarea')?.value === 'thread-only draft'")
       _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
       try await waitFor("document.querySelector('textarea')?.value === 'unsent foreground draft'")
-      // Main-list pages use the full viewport; More preserves its caller.
+      // Main-list pages use the full viewport.
       _ = try await view.evaluateJavaScript("document.querySelector('.mobile-back').click()")
       try await waitFor(
         "location.hash === '#/chat' && !!document.querySelector('[data-sidebar=workspaces]')")
@@ -582,8 +532,11 @@ final class NetworkAcceptanceTests: XCTestCase {
       try await Task.sleep(nanoseconds: 100_000_000)
       selectTab(0)
       #if canImport(App)
-        XCTAssertFalse(
-          try XCTUnwrap(tabs as? SilverhandNavigationController).beginInteractiveBack())
+        // A modal leaves nothing beneath the page to swipe back to.
+        let modalStack = try XCTUnwrap(
+          (tabs as? SilverhandNavigationController)?.selectedViewController
+            as? UINavigationController)
+        XCTAssertEqual(modalStack.viewControllers.count, 1)
       #endif
       _ = try await view.evaluateJavaScript(
         "Array.from(document.querySelectorAll('[role=dialog]')).at(-1).querySelector('[data-sticker-close]').click()"

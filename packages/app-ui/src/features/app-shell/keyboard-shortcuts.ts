@@ -24,8 +24,8 @@ import type { RouteState } from "@/router";
 // ── ⌘1–5 nav-rail sections ──────────────────────────────────────────────────
 
 /** The five primary nav-rail sections, in rail order. `settings` is a bottom
- *  utility button, deliberately NOT bound to a digit. */
-export type NavShortcutSection = Exclude<AppSection, "settings">;
+ *  utility button and `me` is a compact-only tab, so neither binds a digit. */
+export type NavShortcutSection = Exclude<AppSection, "settings" | "me">;
 
 /** The nav-section subset of `useNav()` this feature drives. Structural so the
  *  hook doesn't couple to the full (large) nav API shape. */

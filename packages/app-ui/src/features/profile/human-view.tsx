@@ -74,7 +74,17 @@ export function HumanView({
         style={paneChrome}
       >
         {variant === "side" ? (
-          <SidePanelHeader onClose={onClose}>
+          <SidePanelHeader
+            onClose={onClose}
+            nativeBar={{
+              title: "Profile",
+              subtitle: undefined,
+              titleAction: null,
+              actions: [],
+              tabs: null,
+              addTabs: null,
+            }}
+          >
             <span className="text-sm text-text-muted">Profile</span>
           </SidePanelHeader>
         ) : null}

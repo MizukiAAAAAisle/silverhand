@@ -4,6 +4,7 @@ import type { UserDto } from "@silverhand/shared";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { SidePanelHeader } from "@/components/layout/side-panel-header";
+import { iconMarkup } from "@/components/layout/native-page-bar";
 import { ProfileHeaderContent } from "@/features/profile/profile-header-content";
 import { usePresenceById, presenceDotStatus, humanPresenceText } from "@/features/users/presence";
 import { useHumanAvatar } from "./use-human-avatar";
@@ -56,7 +57,28 @@ export function HumanHeader({
   );
 
   return compact ? (
-    <SidePanelHeader onClose={onClose}>{content}</SidePanelHeader>
+    <SidePanelHeader
+      onClose={onClose}
+      nativeBar={{
+        title: user.display_name || user.name,
+        subtitle: humanPresenceText(presence?.presence, null, "") || undefined,
+        titleAction: null,
+        actions: onMessage
+          ? [[{ id: "message", label: `Message @${user.name}`, icon: iconMarkup(MessageIcon) }]]
+          : [],
+        tabs: null,
+        addTabs: null,
+      }}
+      nativeHandlers={{
+        action: ({ id }) => {
+          if (id === "message") {
+            onMessage?.();
+          }
+        },
+      }}
+    >
+      {content}
+    </SidePanelHeader>
   ) : (
     <header className="agent-header-full">{content}</header>
   );

@@ -1,5 +1,6 @@
 import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
-import type { CSSProperties, ReactNode } from "react";
+import { useLayoutEffect, useRef, type CSSProperties, type ReactNode } from "react";
+import { nativeActionBar, useNativeBar, type NativeBarAction } from "./native-page-bar";
 import { cn } from "@/lib/cn";
 import { type PanelRole, paneChrome } from "./pane-chrome";
 
@@ -50,22 +51,48 @@ export function PaneShell({
  * The section pane's title bar: the `h-(--titlebar-height)` strip with the
  * bottom hairline. `icon` + `title` are the identity; `count` is the quiet
  * tally; `trailing` rides the right edge (push it with `ml-auto`).
+ *
+ * On compact iOS the native bar draws it: a Tab's root page shows the title
+ * large, a pushed page centred, and `nativeActions` stand in for `trailing`.
  */
 export function PaneHeader({
   icon,
   title,
   count,
   trailing,
+  nativeActions = [],
+  backdrop = false,
   className,
 }: {
   icon: ReactNode;
-  title: ReactNode;
+  title: string;
   /** Quiet tally beside the title. Omitted when there is nothing to count. */
   count?: ReactNode;
   /** Rides the right edge — push it there with `ml-auto`. */
   trailing?: ReactNode;
+  /** `trailing` as native bar buttons. */
+  nativeActions?: readonly (NativeBarAction | null)[];
+  /** The pane paints a backdrop the native bar lets show through. */
+  backdrop?: boolean;
   className?: string;
-}): JSX.Element {
+}): JSX.Element | null {
+  const [bar, handlers] = nativeActionBar(
+    {
+      title,
+      titleAction: null,
+      backdrop: backdrop || undefined,
+      largeTitle: true,
+      tabs: null,
+      addTabs: null,
+    },
+    nativeActions,
+  );
+  const native = useNativeBar(bar, handlers);
+
+  if (native.active) {
+    return native.clearance;
+  }
+
   return (
     <header
       data-pane-header
@@ -94,5 +121,48 @@ export function PaneHeader({
         </span>
       ) : null}
     </header>
+  );
+}
+
+/**
+ * Wraps a pane's header and the controls under it. Compact floats it over the
+ * pane's scroller, which must be the next sibling, so content scrolls beneath
+ * the glass. Its height is published as `--pane-chrome-height` because
+ * expanding filters changes it. Desktop lays it out as `contents`.
+ *
+ * `clearance="scroller"` leaves the sibling unpadded: the scroller itself
+ * reserves the height at the top of its content, so it can scroll under.
+ */
+export function FloatingPaneChrome({
+  clearance = "sibling",
+  children,
+}: {
+  clearance?: "sibling" | "scroller";
+  children: ReactNode;
+}): JSX.Element {
+  const ref = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    const node = ref.current;
+    const pane = node?.parentElement;
+    if (!node || !pane) {
+      return;
+    }
+
+    // Publish once now, before sibling scrollers measure on mount.
+    const publish = () => pane.style.setProperty("--pane-chrome-height", `${node.offsetHeight}px`);
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(node);
+    return () => {
+      observer.disconnect();
+      pane.style.removeProperty("--pane-chrome-height");
+    };
+  }, []);
+
+  return (
+    <div ref={ref} data-pane-chrome={clearance} className="contents">
+      {children}
+    </div>
   );
 }

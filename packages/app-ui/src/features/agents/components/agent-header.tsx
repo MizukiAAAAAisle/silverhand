@@ -4,6 +4,7 @@ import { DeleteIcon, MessageIcon, PowerIcon } from "@/icons";
 import type { AgentDto, AgentRuntimeStateDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
+import { iconMarkup } from "@/components/layout/native-page-bar";
 import { SidePanelHeader } from "@/components/layout/side-panel-header";
 import { ProfileHeaderAction as HeaderAction } from "@/features/profile/profile-header-action";
 import { useAgentPresence, useStopAgent } from "../hooks/hooks";
@@ -115,7 +116,49 @@ export function AgentHeader({
   return (
     <>
       {compact ? (
-        <SidePanelHeader onClose={onClose}>{content}</SidePanelHeader>
+        <SidePanelHeader
+          onClose={onClose}
+          nativeBar={{
+            title: displayName,
+            subtitle: presenceDisplay?.a11yLabel,
+            titleAction: null,
+            actions: [
+              [
+                ...(canMessage
+                  ? [
+                      {
+                        id: "message",
+                        label: `Message @${agent.name}`,
+                        icon: iconMarkup(MessageIcon),
+                      },
+                    ]
+                  : []),
+                ...(runningCount > 0
+                  ? [
+                      {
+                        id: "stop",
+                        label: `Hard-stop ${runningCount} running session${runningCount === 1 ? "" : "s"}`,
+                        icon: iconMarkup(PowerIcon),
+                      },
+                    ]
+                  : []),
+              ],
+            ].filter((group) => group.length > 0),
+            tabs: null,
+            addTabs: null,
+          }}
+          nativeHandlers={{
+            action: ({ id }) => {
+              if (id === "message") {
+                onMessageAgent?.(agent.id);
+              } else if (id === "stop" && !stopAgent.isPending) {
+                stopAgent.mutate();
+              }
+            },
+          }}
+        >
+          {content}
+        </SidePanelHeader>
       ) : (
         <header className="agent-header-full">{content}</header>
       )}

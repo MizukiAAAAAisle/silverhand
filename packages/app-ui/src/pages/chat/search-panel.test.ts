@@ -5,6 +5,8 @@ import type { SearchIdentities } from "@silverhand/shared";
 import { SearchPanel, SEARCH_FILTER_DEFAULT } from "./search-panel";
 
 vi.mock("@/navigation/layout", () => ({ useCompactLayout: () => true }));
+vi.mock("@/platform", () => ({ getPlatform: () => ({}) }));
+vi.mock("@/navigation/page-stack", () => ({ usePageLive: () => true }));
 
 const state = vi.hoisted(() => ({
   identities: undefined as SearchIdentities | undefined,
@@ -102,10 +104,9 @@ it("has a real empty state when the server has no identity or content hits", () 
   expect(render()).toContain("No matches");
 });
 
-it("keeps search and loading status visible while compact filters start collapsed", () => {
+it("keeps the search visible while compact filters start collapsed", () => {
   state.loading = true;
   const html = render();
-  expect(html).toContain("Searching…");
   expect(html).toContain('aria-label="Show filters"');
   expect(html).toContain('aria-expanded="false"');
   expect(html).toContain('aria-label="Filters" hidden=""');

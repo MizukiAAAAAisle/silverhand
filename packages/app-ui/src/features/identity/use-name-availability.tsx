@@ -8,7 +8,7 @@ import {
   type NameAvailabilityDto,
 } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { cn } from "@/lib/cn";
+import { SpinnerIcon } from "@/icons";
 
 export type NameCheckKind = "agent" | "workspace";
 
@@ -193,14 +193,14 @@ export function useNameAvailability(kind: NameCheckKind, rawName: string): NameC
   };
 }
 
-/** How long a probe must stay in flight before the field says anything. A
- *  local probe settles well inside this window, so the common path shows no
- *  note at all instead of flashing one word. */
-const CHECKING_NOTE_DELAY_MS = 400;
+/** How long a probe must stay in flight before the field shows it. A local
+ *  probe settles well inside this window, so the common path shows nothing. */
+const CHECKING_DELAY_MS = 400;
 
 /** True once `active` has held for `ms`; false again the moment it drops. */
 function useSettledTrue(active: boolean, ms: number): boolean {
   const [held, setHeld] = useState(false);
+
   useEffect(() => {
     if (!active) {
       setHeld(false);
@@ -209,16 +209,39 @@ function useSettledTrue(active: boolean, ms: number): boolean {
     const t = setTimeout(() => setHeld(true), ms);
     return () => clearTimeout(t);
   }, [active, ms]);
+
   return held;
 }
 
+/**
+ * The definitive verdict line under the field. A slow probe is shown by
+ * `NameCheckingIcon` inside the field instead: a line that comes and goes per
+ * keystroke changes the dialog height, and the keyboard-anchored mobile sheet
+ * jumps with it.
+ */
 export function NameAvailabilityHint({ check }: { check: NameCheckView }): JSX.Element | null {
-  const slowProbe = useSettledTrue(check.status === "checking", CHECKING_NOTE_DELAY_MS);
   const problem = check.status === "invalid" || check.status === "taken";
-  if (!problem && !slowProbe) return null;
+
+  if (!problem) {
+    return null;
+  }
+
+  return <p className="text-xs leading-4 text-error">{check.message}</p>;
+}
+
+/** Trailing spinner for a slow probe; the field wrapper must be `relative`. */
+export function NameCheckingIcon({ check }: { check: NameCheckView }): JSX.Element | null {
+  const slowProbe = useSettledTrue(check.status === "checking", CHECKING_DELAY_MS);
+
+  if (!slowProbe) {
+    return null;
+  }
+
   return (
-    <p className={cn("text-xs leading-4", problem ? "text-error" : "text-text-muted")}>
-      {problem ? check.message : "Checking…"}
-    </p>
+    <SpinnerIcon
+      role="status"
+      aria-label="Checking availability"
+      className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 animate-spin text-text-muted"
+    />
   );
 }

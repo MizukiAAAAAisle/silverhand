@@ -144,7 +144,19 @@ export function AgentView({
             onClose={onClose}
           />
         ) : mode === "side" ? (
-          <SidePanelHeader onClose={onClose}>{null}</SidePanelHeader>
+          <SidePanelHeader
+            onClose={onClose}
+            nativeBar={{
+              title: "",
+              subtitle: undefined,
+              titleAction: null,
+              actions: [],
+              tabs: null,
+              addTabs: null,
+            }}
+          >
+            {null}
+          </SidePanelHeader>
         ) : null
       }
       navigation={

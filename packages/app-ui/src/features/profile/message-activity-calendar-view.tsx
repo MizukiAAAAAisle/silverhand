@@ -11,10 +11,49 @@ interface Props {
   year: number | "recent";
   days: readonly MessageActivityDay[];
   today: string;
+  /** The Less/More intensity key. */
+  legend?: boolean;
+  /** Show only the most recent weeks that fit the width, with no scrolling and
+   * no weekday column; cells stretch to fill the row. */
+  fit?: boolean;
 }
 
-export function MessageActivityCalendar({ year, days, today }: Props): JSX.Element {
-  const cells = useMemo(() => messageActivityCalendar(year, days, today), [year, days, today]);
+/** Cell and gap of the fitted grid at its narrowest. */
+const FIT_CELL_MIN = 12;
+const FIT_GAP = 3;
+
+export function MessageActivityCalendar({
+  year,
+  days,
+  today,
+  legend = true,
+  fit = false,
+}: Props): JSX.Element {
+  const allCells = useMemo(() => messageActivityCalendar(year, days, today), [year, days, today]);
+
+  const root = useRef<HTMLDivElement>(null);
+  const [fitWeeks, setFitWeeks] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const node = root.current;
+    if (!fit || !node) {
+      return;
+    }
+
+    const measure = () => {
+      setFitWeeks(Math.max(1, Math.floor((node.clientWidth + FIT_GAP) / (FIT_CELL_MIN + FIT_GAP))));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [fit]);
+
+  const cells =
+    fit && fitWeeks ? allCells.slice(-Math.min(fitWeeks * 7, allCells.length)) : allCells;
 
   const [focusedDate, setFocusedDate] = useState<string | null>(null);
 
@@ -38,7 +77,9 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
   const columns = cells.length / 7;
   const monthLabels = cells.flatMap((cell, index) =>
     (year === "recent" ? cell.visible : cell.date.startsWith(`${year}-`)) &&
-    cell.date.endsWith("-01")
+    cell.date.endsWith("-01") &&
+    // A fitted grid has no scroll room: a label needs three columns to stay whole.
+    (!fit || Math.floor(index / 7) + 3 <= columns)
       ? [{ column: Math.floor(index / 7) + 1, date: cell.date }]
       : [],
   );
@@ -52,7 +93,12 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
   });
 
   return (
-    <div data-message-activity data-activity-columns={columns}>
+    <div
+      ref={root}
+      data-message-activity
+      data-activity-columns={fit ? undefined : columns}
+      data-activity-fit={fit || undefined}
+    >
       <div ref={scrollContainer} className="message-activity-calendar">
         <div
           className="message-activity-plot"
@@ -66,15 +112,17 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
             ))}
           </div>
           <div className="message-activity-matrix">
-            <div className="message-activity-weekdays" aria-hidden>
-              <span />
-              <span>Mon</span>
-              <span />
-              <span>Wed</span>
-              <span />
-              <span>Fri</span>
-              <span />
-            </div>
+            {fit ? null : (
+              <div className="message-activity-weekdays" aria-hidden>
+                <span />
+                <span>Mon</span>
+                <span />
+                <span>Wed</span>
+                <span />
+                <span>Fri</span>
+                <span />
+              </div>
+            )}
             <TooltipProvider>
               <div
                 className="message-activity-grid"
@@ -141,15 +189,17 @@ export function MessageActivityCalendar({ year, days, today }: Props): JSX.Eleme
           </div>
         </div>
       </div>
-      <div className="mt-3 flex items-center justify-end gap-3 text-[11px] text-text-muted">
-        <div className="message-activity-legend" aria-label="Message count intensity">
-          <span>Less</span>
-          {[0, 1, 2, 3, 4].map((level) => (
-            <i key={level} data-level={level} />
-          ))}
-          <span>More</span>
+      {legend ? (
+        <div className="mt-3 flex items-center justify-end gap-3 text-[11px] text-text-muted">
+          <div className="message-activity-legend" aria-label="Message count intensity">
+            <span>Less</span>
+            {[0, 1, 2, 3, 4].map((level) => (
+              <i key={level} data-level={level} />
+            ))}
+            <span>More</span>
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }

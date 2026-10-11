@@ -1,13 +1,9 @@
 import { memo, useCallback, useMemo, useState } from "react";
-import { TaskIcon } from "@/icons";
+import { PlusIcon, TaskIcon } from "@/icons";
+import { useCompactLayout } from "@/navigation/layout";
 import { useUpdateTaskStatus } from "@/features/tasks/hooks/hooks";
 import { useKanbanColumnCollapse } from "@/features/tasks/hooks/use-kanban-column-collapse";
 import { useTaskFilterOptions } from "@/features/tasks/hooks/use-task-filter-options";
-import {
-  activeTaskCount,
-  boardCountLabel,
-  totalTaskCount,
-} from "@/features/tasks/model/board-authority";
 import { useBoardColumns, useBoardCounts, useBoardFacets } from "@/features/tasks/hooks/use-board";
 import { useColumnWindow } from "@/features/tasks/hooks/use-column-window";
 import { DEFAULT_TASK_FILTERS, type TaskFilters } from "@/features/tasks/model/task-filters";
@@ -18,7 +14,8 @@ import {
   useCreateTaskSubmit,
   type CreateTaskTarget,
 } from "@/features/tasks/components/create-task-dialog";
-import { PaneHeader, PaneShell } from "@/components/layout/pane-shell";
+import { FloatingPaneChrome, PaneHeader, PaneShell } from "@/components/layout/pane-shell";
+import { iconMarkup } from "@/components/layout/native-page-bar";
 
 export interface TaskBoardProps {
   filters: TaskFilters;
@@ -85,30 +82,47 @@ export const TaskBoard = memo(function TaskBoard({
     return { kind: "pick", channelOptions, defaultChannelId };
   }, [channelOptions, filters.channelId]);
   const submitCreate = useCreateTaskSubmit();
+  const compact = useCompactLayout();
 
   return (
     <PaneShell>
-      <PaneHeader
-        icon={<TaskIcon data-sticker-size="sm" className="size-4 text-text-muted" />}
-        title={selectedChannelName ? `Tasks in #${selectedChannelName}` : "Tasks"}
-        count={boardCountLabel(totalTaskCount(counts))}
-        trailing={
-          <span className="ml-auto text-(length:--text-badge) text-text-muted">
-            {boardCountLabel(activeTaskCount(counts))} active
-          </span>
-        }
-      />
+      <FloatingPaneChrome>
+        <PaneHeader
+          icon={<TaskIcon data-sticker-size="sm" className="size-4 text-text-muted" />}
+          title={selectedChannelName ? `Tasks in #${selectedChannelName}` : "Tasks"}
+          trailing={
+            compact ? (
+              <button
+                type="button"
+                className="glass-surface glass-round focus-outline"
+                onClick={() => setCreateOpen(true)}
+                aria-label="New task"
+              >
+                <PlusIcon size={20} />
+              </button>
+            ) : undefined
+          }
+          nativeActions={[
+            {
+              id: "create",
+              label: "New task",
+              icon: iconMarkup(PlusIcon),
+              run: () => setCreateOpen(true),
+            },
+          ]}
+        />
 
-      <TaskToolbar
-        onCreate={() => setCreateOpen(true)}
-        filters={filters}
-        onChange={applyFilters}
-        baselineFilters={DEFAULT_TASK_FILTERS}
-        workspaceOptions={workspaceOptions}
-        channelOptions={channelOptions}
-        allChannelsLabel="All"
-        people={people}
-      />
+        <TaskToolbar
+          onCreate={compact ? undefined : () => setCreateOpen(true)}
+          filters={filters}
+          onChange={applyFilters}
+          baselineFilters={DEFAULT_TASK_FILTERS}
+          workspaceOptions={workspaceOptions}
+          channelOptions={channelOptions}
+          allChannelsLabel="All"
+          people={people}
+        />
+      </FloatingPaneChrome>
       <TaskBoardColumns
         columns={columns}
         counts={counts}

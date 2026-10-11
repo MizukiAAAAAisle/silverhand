@@ -1,4 +1,4 @@
-import { TaskStatusSchema, type TaskStatus } from "@silverhand/shared";
+import type { TaskStatus } from "@silverhand/shared";
 import type { PersonOption } from "./task-filters";
 
 /**
@@ -46,28 +46,10 @@ export function mapBoardAuthority<A, B>(
 export type BoardCounts = Readonly<Record<TaskStatus, number>>;
 
 /**
- * "Active" = everything before a terminal status. ONE definition, consumed by
- * the global Tasks section's active-count label and kept distinct from the
- * board header's total below, so the two numbers cannot disagree about what
- * they mean (`done` is completed and `closed` is shelved — neither is work in
- * hand).
- *
  * Every reader below takes the AUTHORITY, not a `BoardCounts`, and returns `null`
  * when it is unknown: a consumer therefore cannot obtain a number without
  * deciding what to show in the absence of one.
  */
-export function activeTaskCount(counts: BoardAuthority<BoardCounts>): number | null {
-  if (!counts.known) return null;
-  const c = counts.value;
-  return c.todo + c.in_progress + c.in_review;
-}
-
-/** Every status under the current filters — the board header's own total. */
-export function totalTaskCount(counts: BoardAuthority<BoardCounts>): number | null {
-  if (!counts.known) return null;
-  return TaskStatusSchema.options.reduce((sum, s) => sum + counts.value[s], 0);
-}
-
 /** One column header's total. Independent of that column's own body read: a
  *  loaded body with unknown counts shows its rows and no number, and a known `0`
  *  with a failed body read shows the number and the body's error. */

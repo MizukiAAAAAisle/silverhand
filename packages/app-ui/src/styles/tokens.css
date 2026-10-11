@@ -75,19 +75,14 @@
   --titlebar-controls-safe-width: 138px;
   --conversation-tab-strip-height: 30px;
 }
-/* Set by the platform shell while the system window controls are hidden
-   (macOS / iPadOS full screen). The reserved inset collapses and the sidebar
-   toggle sits centred over the nav rail. */
+/* Set by the desktop shell while the window controls are hidden (macOS full
+   screen). The reserved inset collapses and the sidebar toggle sits centred
+   over the nav rail. */
 :root[data-window-controls="hidden"] {
   --titlebar-controls-safe-width: 0px;
   --titlebar-sidebar-toggle-left: calc(
-    var(--frame-padding, 0px) + (var(--nav-rail-width) - var(--titlebar-control-size, 24px)) / 2
+    var(--frame-padding, 0px) + (var(--nav-rail-width) - 24px) / 2
   );
-}
-/* A platform-owned vertical tab bar (iPhone Duo) replaces the navigation rail. */
-:root[data-vertical-bar] {
-  --nav-rail-width: 0px;
-  --titlebar-sidebar-toggle-left: calc(var(--frame-padding, 0px) + 8px);
 }
 
 /* ── Z-index ladder ──

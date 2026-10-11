@@ -16,17 +16,23 @@ import type { NavigationLaunch } from "./launch";
 import { NavigationStore } from "./store";
 import type { MainTab } from "./history";
 
-type Driver = {
+export type Driver = {
   session: string;
   go: (url: string, options?: { replace?: boolean; pane?: boolean }) => void;
-  back: () => void;
+  /** Whether Back left the page; a leave guard can hold it. */
+  back: () => boolean;
   selectTab: (tab: MainTab) => void;
-  openSection: (tab: MainTab) => void;
+  openSection: (tab: MainTab, root?: string) => void;
   tab: MainTab;
   canBack: boolean;
+  /** The page on screen, the one Back returns to, and every page kept
+   * mounted: each Tab's stack. See `PageStack`. */
+  page: string;
+  backPage: string | null;
+  keptPages: readonly string[];
   registerLeaveGuard: (guard: () => boolean) => () => void;
 };
-const NavigationContext = createContext<Driver | null>(null);
+export const NavigationContext = createContext<Driver | null>(null);
 
 export function NavigationProvider({
   children,
@@ -53,19 +59,20 @@ export function NavigationProvider({
     () => ({
       session: store.session,
       go: (url, options) => {
-        void run(() => store.go(url, { replace: options?.replace && !options.pane }));
+        run(() => store.go(url, { replace: options?.replace && !options.pane }));
       },
-      back: () => {
-        void run(store.back);
-      },
+      back: () => run(store.back),
       selectTab: (tab) => {
-        void run(() => store.selectTab(tab));
+        run(() => store.selectTab(tab));
       },
-      openSection: (tab) => {
-        void run(() => store.openSection(tab));
+      openSection: (tab, root) => {
+        run(() => store.openSection(tab, root));
       },
       tab: snapshot.tab,
       canBack: snapshot.canBack,
+      page: snapshot.page,
+      backPage: snapshot.back?.page ?? null,
+      keptPages: snapshot.keptPages,
       registerLeaveGuard,
     }),
     [store, run, registerLeaveGuard, snapshot],

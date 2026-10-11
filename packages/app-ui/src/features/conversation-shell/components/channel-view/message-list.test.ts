@@ -174,7 +174,8 @@ describe("message window publication", () => {
     const before = render(messages);
     const loading = render(messages, { isFetchingEarlier: true });
     expect(loading.props.components).toBe(before.props.components);
-    expect(loading.props.components.Header({ context: {} })).toBeNull();
+    // Without a leading slot the header holds only the chrome spacer.
+    expect(loading.props.components.Header({ context: {} }).props.children[1]).toBeNull();
     expect(loading.key).toBe(before.key);
   });
   it("prefetches near the head, but not when hidden, jumping, exhausted or fetching", () => {

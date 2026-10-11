@@ -42,21 +42,8 @@ it("publishes the fold band and clears it when the device opens", () => {
   expect(root.style.has("--fold-end")).toBe(false);
 });
 
-it("mirrors the vertical bar edge", () => {
-  emit("verticalBar", { edge: "trailing" });
-  expect(root.dataset["verticalBar"]).toBe("trailing");
-
-  emit("verticalBar", { edge: "" });
-  expect(root.dataset["verticalBar"]).toBeUndefined();
-});
-
-it("centres the titlebar row on the window controls below the status bar", () => {
-  emit("windowControls", { top: 24, height: 32, statusBar: 24 });
-  expect(root.dataset["windowControls"]).toBeUndefined();
-  expect(root.style.get("--titlebar-inset-top")).toBe("24px");
-  expect(root.style.get("--titlebar-row-height")).toBe("48px");
-
-  emit("windowControls", { top: 24, height: 0, statusBar: 24 });
-  expect(root.dataset["windowControls"]).toBe("hidden");
-  expect(root.style.has("--titlebar-inset-top")).toBe(false);
+it("publishes the bar extents pages clear", () => {
+  emit("barMetrics", { bottom: 116, tabs: 48 });
+  expect(root.style.get("--native-bar-bottom")).toBe("116px");
+  expect(root.style.get("--native-bar-tabs")).toBe("48px");
 });

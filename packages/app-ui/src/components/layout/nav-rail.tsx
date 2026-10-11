@@ -17,7 +17,14 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
  * than the main rail, but it still participates in section selection
  * so the bottom button can highlight when its route is active.
  */
-export type AppSection = "chat" | "activity" | "tasks" | "members" | "computers" | "settings";
+export type AppSection =
+  | "chat"
+  | "activity"
+  | "tasks"
+  | "members"
+  | "computers"
+  | "settings"
+  | "me";
 
 interface NavRailProps {
   current: AppSection;
@@ -45,11 +52,21 @@ interface NavItem {
 }
 
 const ITEMS: NavItem[] = [
-  { id: "chat", label: "Chat", icon: <ChatsIcon className="size-4" />, shortcut: 1 },
-  { id: "activity", label: "Activity", icon: <ActivityIcon className="size-4" />, shortcut: 2 },
-  { id: "tasks", label: "Tasks", icon: <TaskIcon className="size-4" />, shortcut: 3 },
-  { id: "members", label: "Members", icon: <MembersIcon className="size-4" />, shortcut: 4 },
-  { id: "computers", label: "Computers", icon: <ComputerIcon className="size-4" />, shortcut: 5 },
+  { id: "chat", label: "Chat", icon: <ChatsIcon className="size-[18px]" />, shortcut: 1 },
+  {
+    id: "activity",
+    label: "Activity",
+    icon: <ActivityIcon className="size-[18px]" />,
+    shortcut: 2,
+  },
+  { id: "tasks", label: "Tasks", icon: <TaskIcon className="size-[18px]" />, shortcut: 3 },
+  { id: "members", label: "Members", icon: <MembersIcon className="size-[18px]" />, shortcut: 4 },
+  {
+    id: "computers",
+    label: "Computers",
+    icon: <ComputerIcon className="size-[18px]" />,
+    shortcut: 5,
+  },
 ];
 
 /**
@@ -126,7 +143,7 @@ export function NavRail({ current, onChange, dots }: NavRailProps): JSX.Element 
         onClick={() => onChange("settings")}
         className="nav-rail__item mt-auto flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors"
       >
-        <SettingsIcon className="size-4" />
+        <SettingsIcon className="size-[18px]" />
       </button>
     </nav>
   );

@@ -11,6 +11,8 @@ describe("navigation targets", () => {
     ["/members/u/person", "/members"],
     ["/settings?settingsSection=connection", "/settings"],
     ["/computers?computer=host", "/computers"],
+    ["/settings", "/me"],
+    ["/me", null],
     ["/chat", null],
   ])("deep link %s has a safe parent", (url, parent) => expect(parentUrl(url!)).toBe(parent));
   it("one semantic target preserves the current activity placement", () => {

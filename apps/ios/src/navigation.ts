@@ -15,9 +15,8 @@ export function createIOSNavigation(
   return {
     badges: (input) => navigationCall(() => bridge.navigationBadges(input)),
     sync: (state) => navigationCall(() => bridge.navigationSync(state)),
-    capture: (input) => navigationCall(() => bridge.navigationCapture(input)),
-    finish: (input) => navigationCall(() => bridge.navigationFinish(input)),
     reset: (session) => navigationCall(() => bridge.navigationReset({ session })),
+    avatar: (base64) => navigationCall(() => bridge.navigationAvatar({ base64 })),
     subscribe: async (handler) => {
       const listener = await bridge.addListener("navigation", handler);
       return () => {
