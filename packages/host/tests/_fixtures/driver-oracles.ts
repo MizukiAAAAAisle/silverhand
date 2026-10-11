@@ -3,6 +3,8 @@ import type { ParsedEvent } from '../../src/drivers/index.js';
 
 export interface DriverOracleStep {
   line: string;
+  /** Bind a response to the request actually emitted by the driver handshake. */
+  responseTo?: 'thread/start' | 'thread/resume';
   expected: ParsedEvent[];
   /** Strings that must not appear in the parsed event projection. */
   forbiddenSubstrings?: string[];
@@ -13,6 +15,7 @@ export interface DriverParseOracle {
   runtime: Extract<RuntimeKind, 'claude' | 'codex' | 'cursor'>;
   description: string;
   incident: string;
+  resumeSessionId?: string;
   steps: DriverOracleStep[];
 }
 
@@ -173,16 +176,58 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
     ],
   },
   {
+    id: 'codex-thread-ownership-requires-correlated-response',
+    runtime: 'codex',
+    description: 'Codex notifications and unrelated replies cannot establish or replace thread ownership',
+    incident: '#2760 child thread events must not take over the main session',
+    resumeSessionId: 'thread-owned',
+    steps: [
+      {
+        line: j({ method: 'thread/started', params: { thread: { id: 'thread-owned' } } }),
+        expected: [],
+      },
+      {
+        line: j({ id: 999, result: { thread: { id: 'thread-child' } } }),
+        expected: [],
+      },
+      {
+        line: j({ id: 999, error: { message: 'thread not found: unrelated' } }),
+        expected: [],
+      },
+      {
+        line: j({ method: 'turn/started', params: { threadId: 'thread-owned', turn: { id: 'early' } } }),
+        expected: [],
+      },
+      {
+        responseTo: 'thread/resume',
+        line: j({ result: { thread: { id: 'thread-owned' } } }),
+        expected: [{ kind: 'session_init', sessionId: 'thread-owned' }],
+      },
+      {
+        line: j({ method: 'thread/started', params: { thread: { id: 'thread-child' } } }),
+        expected: [],
+      },
+      {
+        line: j({ method: 'turn/completed', params: { threadId: 'thread-child', turn: { id: 'child-turn' } } }),
+        expected: [],
+      },
+      {
+        line: j({ method: 'turn/completed', params: { threadId: 'thread-owned', turn: { id: 'main-turn' } } }),
+        expected: [{ kind: 'turn_end', sessionId: 'thread-owned' }],
+      },
+    ],
+  },
+  {
     id: 'codex-turn-tool-lifecycle',
     runtime: 'codex',
     description: 'Codex thread, turn, command tool, and terminal frames preserve ordering',
     incident: 'codex daemon-mode delivery and run-state projection',
     steps: [
       {
+        responseTo: 'thread/start',
         line: j({
           jsonrpc: '2.0',
-          method: 'thread/started',
-          params: { thread: { id: 'thread-codex' } },
+          result: { thread: { id: 'thread-codex' } },
         }),
         expected: [{ kind: 'session_init', sessionId: 'thread-codex' }],
       },
@@ -227,10 +272,10 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
     incident: 'driver parser state must not duplicate deltas',
     steps: [
       {
+        responseTo: 'thread/start',
         line: j({
           jsonrpc: '2.0',
-          method: 'thread/started',
-          params: { thread: { id: 'thread-stream' } },
+          result: { thread: { id: 'thread-stream' } },
         }),
         expected: [{ kind: 'session_init', sessionId: 'thread-stream' }],
       },
@@ -259,10 +304,10 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
     incident: 'toolCallCounts and outstandingToolUses drift',
     steps: [
       {
+        responseTo: 'thread/start',
         line: j({
           jsonrpc: '2.0',
-          method: 'thread/started',
-          params: { thread: { id: 'thread-clean' } },
+          result: { thread: { id: 'thread-clean' } },
         }),
         expected: [{ kind: 'session_init', sessionId: 'thread-clean' }],
       },
@@ -414,11 +459,12 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
     runtime: 'codex',
     description: 'Codex stale resume target is a fatal thread_not_found error',
     incident: 'resume jsonl recovery',
+    resumeSessionId: 'thread-stale',
     steps: [
       {
+        responseTo: 'thread/resume',
         line: j({
           jsonrpc: '2.0',
-          id: 99,
           error: { code: -32602, message: 'thread not found: thread-stale' },
         }),
         expected: [
@@ -437,11 +483,12 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
     runtime: 'codex',
     description: 'Codex archived resume target is a fatal session_archived error',
     incident: 'restore after codex-side session archive',
+    resumeSessionId: '019f3ba4-a772-7010-a52a-8cdac98ddfd5',
     steps: [
       {
+        responseTo: 'thread/resume',
         line: j({
           jsonrpc: '2.0',
-          id: 100,
           error: {
             code: -32602,
             message:
