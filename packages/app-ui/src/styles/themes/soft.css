@@ -1,8 +1,13 @@
-/* Soft surface family: studio-light, slack-dark and iris share one card and
+/* Soft surface family: studio-light, slack-dark, iris and glass share one card and
    message language. Per-theme differences arrive as tokens from each theme file.
    `:is()` keeps the specificity of a single `[data-theme]` selector. */
 
-:is([data-theme="studio-light"], [data-theme="slack-dark"], [data-theme="iris"]) {
+:is(
+  [data-theme="studio-light"],
+  [data-theme="slack-dark"],
+  [data-theme="iris"],
+  [data-theme="glass"]
+) {
   & [data-workspace-icon] {
     background-color: var(--text-secondary);
     color: var(--workspace-icon-fg, var(--text-on-structure));

@@ -13,8 +13,9 @@
 @import "./themes/studio-light.css";
 @import "./themes/slack-dark.css";
 @import "./themes/iris.css";
+@import "./themes/glass.css";
 
-/* Component layers. `soft.css` paints the studio-light, slack-dark and iris
+/* Component layers. `soft.css` paints the studio-light, slack-dark, iris and glass
    family; `poster-components.css` paints poster only. Both read the tokens
    declared above. */
 @import "./themes/soft.css";

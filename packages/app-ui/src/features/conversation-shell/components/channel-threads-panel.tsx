@@ -229,6 +229,7 @@ export function ChannelThreadsContent({
               type="button"
               onClick={() => setTab(t.key)}
               aria-pressed={on}
+              data-filter-chip
               className={
                 "inline-flex items-center gap-1.5 border-(length:--control-border-width) rounded-(--chip-radius) px-2.5 py-1 text-xs font-medium transition-colors " +
                 (on

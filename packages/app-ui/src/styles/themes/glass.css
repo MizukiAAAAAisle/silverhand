@@ -1,0 +1,328 @@
+/* Theme: glass
+   Tokens follow the same module order across themes. Keep explicit initial values
+   to prevent inheritance from the default theme. */
+
+[data-theme="glass"] {
+  /* Typography and motion */
+  --chrome-label-tracking: 0.07em;
+  --font-chrome-label: var(--font-sans);
+  --font-display: var(--font-sans);
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+
+  /* Application frame and panes */
+  --app-paper:
+    radial-gradient(60% 70% at 10% 0%, #d3edf5 0%, transparent 60%),
+    radial-gradient(55% 60% at 92% 8%, #e6e0f6 0%, transparent 62%),
+    radial-gradient(70% 70% at 70% 100%, #f6e6dc 0%, transparent 60%),
+    linear-gradient(180deg, #eef3f6, #f3f1f4);
+  --bg-app: transparent;
+  --card-radius: 12px;
+  --pane-radius: 18px;
+  --pane-corner-shape: squircle;
+  --pane-border: none;
+  --card-shadow: 0 1px 2px rgba(var(--shadow-base), 0.06);
+  --pane-shadow:
+    0 1px 2px rgba(var(--shadow-base), 0.06), 0 8px 28px -12px rgba(var(--shadow-base), 0.16);
+  --frame-padding: 8px;
+  --pane-gap: 8px;
+  --splitter-hover-bg: rgba(22, 25, 29, 0.2);
+
+  /* Glass material: one recipe for navigation and control layers. */
+  --glass-tint: rgba(255, 255, 255, 0.5);
+  --glass-tint-strong: rgba(255, 255, 255, 0.72);
+  --glass-blur: 20px;
+  --glass-shadow:
+    inset 0 1px 0.5px rgba(255, 255, 255, 0.9), inset 0 -1px 1px rgba(var(--shadow-base), 0.05),
+    0 0 0 0.5px rgba(var(--shadow-base), 0.08), 0 8px 24px -10px rgba(var(--shadow-base), 0.2);
+
+  /* Surface, text and border foundations */
+  --bg-base: #ffffff;
+  --bg-elevated: #eef1f5;
+  --bg-hover: #f0f2f5;
+  --bg-primary: #f4f6f9;
+  --bg-selected: rgba(22, 25, 29, 0.07);
+  --bg-structure-dark: #1d2127;
+  --border: rgba(22, 25, 29, 0.11);
+  --border-focus: color-mix(in oklab, var(--text-primary) 32%, transparent);
+  --border-subtle: rgba(22, 25, 29, 0.07);
+  --radius-lg: 16px;
+  --radius-md: 12px;
+  --radius-sm: 8px;
+  --radius-xl: 22px;
+  --text-inverse: #fbfcfd;
+  --text-muted: #5b616b;
+  --text-on-dark-pop: #8ec5ff;
+  --text-on-selected: var(--text-primary);
+  --text-on-structure: #f5f7fa;
+  --text-primary: #16191d;
+  --text-secondary: #2f343b;
+
+  /* Brand and semantic colors */
+  --accent: #0071e3;
+  --soft-alpha: 10%;
+  --accent-hover: #0062c4;
+  --accent-soft: color-mix(in srgb, var(--accent), transparent calc(100% - var(--soft-alpha)));
+  --brand-primary: #0071e3;
+  --error: #c4314b;
+  --error-soft: color-mix(in srgb, var(--error), transparent calc(100% - var(--soft-alpha)));
+  --success: #1f7a3a;
+  --success-soft: color-mix(in srgb, var(--success), transparent calc(100% - var(--soft-alpha)));
+  --text-on-accent: #ffffff;
+  --text-on-brand: #ffffff;
+  --text-on-error: #ffffff;
+  --text-on-success: #ffffff;
+  --text-on-warning: #ffffff;
+  --warning: #b25000;
+  --warning-soft: color-mix(in srgb, var(--warning), transparent calc(100% - var(--soft-alpha)));
+  --warning-surface: #fdf1e3;
+
+  /* Navigation and rows */
+  --bg-nav-rail: transparent;
+  --nav-hover-tint: var(--text-primary);
+  --nav-hover-strength: 5%;
+  --bg-nav-hover: rgba(22, 25, 29, 0.05);
+  --bg-nav-selected: rgba(22, 25, 29, 0.07);
+  --bg-row-selected: var(--accent-soft);
+  --border-nav-rail-hover: transparent;
+  --border-nav-rail-selected: transparent;
+  --border-row-hover: transparent;
+  --row-frame-hover-bg: color-mix(in srgb, var(--bg-base), var(--text-primary) 6%);
+  --border-row-selected: transparent;
+  --border-selected-card: transparent;
+  --nav-rail-indicator-color: transparent;
+  --nav-rail-indicator-display: none;
+  --nav-rail-item-border-width: 1px;
+  --row-radius: 10px;
+  --nav-row-radius: 10px;
+  --nav-corner-shape: normal;
+  --shadow-row-selected: none;
+  --sidebar-row-border-width: 1px;
+  --text-nav-rail: var(--text-secondary);
+  --text-nav-rail-hover: var(--text-primary);
+  --text-nav-selected: var(--text-primary);
+
+  /* Controls and actions */
+  --border-control: rgba(22, 25, 29, 0.28);
+  --border-control-hover: color-mix(in oklab, var(--text-primary) 26%, transparent);
+  --control-border-width: 1px;
+  --control-radius: 10px;
+  --field-border-color: initial;
+  --field-disabled-border-color: initial;
+  --field-disabled-shadow: initial;
+  --field-shadow: initial;
+  --field-shadow-focus: initial;
+  --field-transition: initial;
+  --select-content-radius: 14px;
+  --select-item-radius: 8px;
+  --tab-segment-radius: 8px;
+
+  /* Range controls */
+  --range-cursor: initial;
+  --range-focus-color: initial;
+  --range-focus-offset: initial;
+  --range-height: initial;
+  --range-radius: initial;
+  --range-thumb-active-bg: initial;
+  --range-thumb-active-cursor: initial;
+  --range-thumb-bg: initial;
+  --range-thumb-border: initial;
+  --range-thumb-cursor: initial;
+  --range-thumb-shadow: initial;
+  --range-track-bg: initial;
+  --range-track-height: initial;
+
+  /* Floating surfaces and shadows */
+  --bg-floating: #ffffff;
+  --bg-message-context: color-mix(in srgb, var(--chip-bg) 50%, transparent);
+  --floating-border: 0 solid transparent;
+  --floating-item-radius: 8px;
+  --floating-radius: 16px;
+  --overlay-backdrop: rgba(22, 25, 29, 0.28);
+  --shadow-base: 22, 25, 29;
+  --shadow-button: none;
+  --shadow-modal:
+    0 18px 48px -16px rgba(var(--shadow-base), 0.28), 0 0 0 0.5px rgba(var(--shadow-base), 0.08);
+  --shadow-popover:
+    0 10px 30px -10px rgba(var(--shadow-base), 0.24), 0 0 0 0.5px rgba(var(--shadow-base), 0.08);
+
+  /* Identity and profile */
+  --border-avatar: var(--border-subtle);
+  --border-avatar-width: 1px;
+  --profile-section-radius: var(--card-radius);
+  --message-activity-color: var(--accent);
+  --message-activity-radius: 3px;
+
+  /* Messages and activity */
+  --activity-cluster-rule: none;
+  --activity-status-opacity: 1;
+  --activity-meta: oklab(0 0 0 / 0.4);
+  --activity-params-bg: oklab(0 0 0 / 0.05);
+  --chip-bg: rgba(22, 25, 29, 0.06);
+  --chip-bg-hover: rgba(22, 25, 29, 0.1);
+  --chip-radius: 8px;
+  --message-bubble-radius: var(--card-radius);
+  --pill-radius: 9999px;
+  --message-framed-border: rgba(var(--shadow-base), 0.16);
+  --message-framed-bg: color-mix(in oklab, var(--accent) 6%, transparent);
+  --thread-preview-bg: var(--chip-bg);
+  --thread-preview-bg-hover: var(--chip-bg-hover);
+  --thread-preview-text: oklab(0 0 0 / 0.6);
+  --unread: #d32f2f;
+
+  /* Composer */
+  --composer-border-color: initial;
+  --composer-border-width: 2px;
+  --composer-shadow: initial;
+  --composer-shadow-focus: initial;
+  --composer-transition: initial;
+
+  /* Markdown, code and diagrams */
+  --bg-inline-code: #eef1f5;
+  --bg-island: #f5f6f8;
+  --bg-island-deep: #e7ebf0;
+  --border-inline-code: none;
+  --border-island: rgba(22, 25, 29, 0.09);
+  --code-block-border-width: 1px;
+  --code-block-header-bg: #ffffff;
+  --inline-code-radius: var(--radius-sm);
+  --mermaid-diagram-bg: var(--bg-island);
+  --text-inline-code: #353b44;
+  --text-island: #1d2127;
+
+  /* Syntax highlighting */
+  --hljs-addition: #22863a;
+  --hljs-base: var(--text-island);
+  --hljs-comment: #6a737d;
+  --hljs-deletion: #b31d28;
+  --hljs-keyword: #d73a49;
+  --hljs-meta: #6f42c1;
+  --hljs-number: #005cc5;
+  --hljs-selection-bg: #cfe3fb;
+  --hljs-selection-text: #1d2127;
+  --hljs-string: #032f62;
+
+  /* Task references and search */
+  --search-hit-bg: #ffe9a3;
+  --search-hit-bg-active: #ffd75e;
+  --search-hit-text: #16191d;
+  --task-ref-activity-color: var(--text-secondary);
+  --task-ref-activity-hover-bg: var(--accent);
+  --task-ref-activity-hover-color: var(--text-on-accent);
+  --task-ref-activity-margin: -0.125rem;
+  --task-ref-activity-marker: transparent;
+  --task-ref-activity-padding: 0.375rem;
+  --task-ref-color: var(--accent);
+  --task-ref-font: initial;
+  --task-ref-hover-decoration: underline;
+  --task-ref-line-height: initial;
+  --task-ref-marker: transparent;
+  --task-ref-marker-hover: transparent;
+  --task-ref-number-font: initial;
+  --task-ref-number-tracking: initial;
+  --task-ref-number-weight: initial;
+  --task-ref-weight: 500;
+
+  /* Task status */
+  --task-status-closed-bg: transparent;
+  --task-status-closed-border: 1px solid var(--border-subtle);
+  --task-status-closed-solid: var(--task-status-closed-text);
+  --task-status-closed-text: var(--text-muted);
+  --task-status-done-bg: var(--success-soft);
+  --task-status-done-border: 1px solid color-mix(in oklab, var(--success) 45%, transparent);
+  --task-status-done-solid: var(--task-status-done-text);
+  --task-status-done-text: var(--success);
+  --task-status-in-progress-bg: var(--warning-soft);
+  --task-status-in-progress-border: 1px solid color-mix(in oklab, var(--warning) 45%, transparent);
+  --task-status-in-progress-solid: var(--task-status-in-progress-text);
+  --task-status-in-progress-text: var(--warning);
+  --task-status-in-review-bg: var(--accent);
+  --task-status-in-review-border: 1px solid transparent;
+  --task-status-in-review-solid: var(--accent);
+  --task-status-in-review-text: var(--text-on-accent);
+  --task-status-radius: 9999px;
+  --task-status-todo-bg: transparent;
+  --task-status-todo-border: 1px solid var(--border);
+  --task-status-todo-solid: var(--task-status-todo-text);
+  --task-status-todo-text: var(--text-muted);
+
+  /* Panel geometry */
+  --panel-border-width: 1px;
+}
+
+/* Hooks: Application frame */
+
+[data-theme="glass"] [data-panel="sidebar"] {
+  --pane-bg: var(--glass-tint);
+  --pane-shadow: var(--glass-shadow);
+}
+
+/* Hooks: Floating surfaces and actions */
+
+[data-theme="glass"] :is([data-radix-menu-content], [data-popover-frame], [role="listbox"]) {
+  background-color: var(--glass-tint-strong);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.8);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.8);
+  box-shadow: var(--glass-shadow);
+}
+
+[data-theme="glass"] .glass-surface {
+  background: var(--glass-tint);
+  -webkit-backdrop-filter: blur(12px) saturate(1.9) brightness(1.04);
+  backdrop-filter: blur(12px) saturate(1.9) brightness(1.04);
+  box-shadow: var(--glass-shadow);
+  transition: transform 260ms linear(0, 0.4 12%, 1.08 32%, 0.98 50%, 1.01 68%, 1);
+}
+
+[data-theme="glass"] [data-modal-shell] {
+  border-width: 0;
+}
+
+/* Compact: next to iOS's capsule chrome, single-line controls become
+   capsules; containers that grow taller keep a rounded rectangle, and the
+   bottom sheet follows the screen's corner. */
+[data-theme="glass"][data-layout="compact"] {
+  --card-radius: 14px;
+  --floating-radius: 20px;
+  --floating-item-radius: 12px;
+  --select-content-radius: 20px;
+  --select-item-radius: 12px;
+  --row-radius: 12px;
+  --nav-row-radius: 12px;
+}
+
+[data-theme="glass"][data-layout="compact"]
+  :is(
+    [data-button-action],
+    [data-composer-action],
+    [data-filter-trigger],
+    [data-filter-chip],
+    [data-sidebar-cta],
+    [data-panel-tabs],
+    [data-panel-tabs] button
+  ) {
+  border-radius: 9999px;
+}
+
+[data-theme="glass"][data-layout="compact"] :is([data-input], [data-composer-editor]) {
+  border-radius: 16px;
+}
+
+[data-theme="glass"][data-layout="compact"] [data-dialog-content] {
+  border-top-left-radius: 28px;
+  border-top-right-radius: 28px;
+}
+
+/* With Reduce Transparency the glass turns solid; layout stays put. */
+@media (prefers-reduced-transparency: reduce) {
+  [data-theme="glass"] {
+    --glass-tint: var(--bg-base);
+    --glass-tint-strong: var(--bg-base);
+  }
+
+  [data-theme="glass"]
+    :is([data-radix-menu-content], [data-popover-frame], [role="listbox"], .glass-surface) {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}

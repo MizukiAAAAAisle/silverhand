@@ -1,4 +1,4 @@
-export const THEME_IDS = ["studio-light", "poster", "slack-dark", "iris"] as const;
+export const THEME_IDS = ["studio-light", "poster", "slack-dark", "iris", "glass"] as const;
 export type ThemeId = (typeof THEME_IDS)[number];
 
 /** Theme ids that shipped under a previous name, mapped to the id that

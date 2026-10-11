@@ -99,6 +99,13 @@ const THEME_META: Record<
     text: "#1F1A12",
     accent: "#6D28C9",
   },
+  glass: {
+    label: "Glass",
+    bg: "#EEF3F6",
+    surface: "#FFFFFF",
+    text: "#16191D",
+    accent: "#0071E3",
+  },
 };
 
 export function SettingsShell(): JSX.Element {

@@ -483,7 +483,7 @@ final class NetworkAcceptanceTests: XCTestCase {
         "document.querySelector('[data-scroll-bottom]')?.click()")
       try await waitFor("document.body.innerText.includes('WS after foreground')")
       // Each shipped theme must resolve the same navigation surface tokens.
-      for theme in ["studio-light", "poster", "slack-dark", "iris"] {
+      for theme in ["studio-light", "poster", "slack-dark", "iris", "glass"] {
         _ = try await view.evaluateJavaScript("document.documentElement.dataset.theme = '\(theme)'")
         try await Task.sleep(nanoseconds: 150_000_000)
         let themeShot = UIGraphicsImageRenderer(bounds: view.bounds).image { _ in
