@@ -80,10 +80,10 @@ const THEME_META: Record<
   },
   poster: {
     label: "Poster",
-    bg: "#F4F8E8",
-    surface: "#FF2C7A",
-    text: "#0A0A0A",
-    accent: "#D4F523",
+    bg: "#FFFDF7",
+    surface: "#F2EFE8",
+    text: "#0D0C0B",
+    accent: "#2448D8",
   },
   "slack-dark": {
     label: "Slack Dark",
