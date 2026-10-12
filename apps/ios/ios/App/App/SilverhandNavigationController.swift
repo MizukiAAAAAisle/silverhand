@@ -166,8 +166,11 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     // Another page's bars cross-fade in: the bar appears, leaves, or names
     // another page. Changes within a page apply in place. This reads the bars
     // alone, which arrive apart from the navigation state.
+    // One Tab root to another is a Tab switch, which swaps the page at once;
+    // its bars do too (a fading glass button shows as a grey disc).
     let fade = appliedBars?.host == next.host && appliedBars.map {
       Self.page(of: $0.bars) != Self.page(of: next.bars)
+        && !(Self.isTabRoot($0.bars) && Self.isTabRoot(next.bars))
     } == true && !UIAccessibility.isReduceMotionEnabled
     appliedBars = next
     defer { publishBarMetrics(in: stack) }
@@ -238,6 +241,11 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       view.insertSubview(image, belowSubview: tabBar)
       return image
     }
+  }
+
+  private static func isTabRoot(_ bars: Bars) -> Bool {
+    if case .page(let state, _) = bars { return state.largeTitle && state.back == nil }
+    return false
   }
 
   /// What a page's bars name it by, for telling one page's bars from another's.
