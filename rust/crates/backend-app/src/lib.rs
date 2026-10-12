@@ -55,9 +55,9 @@ use silverhand_backend_server::{
             agent_search::{AgentSearchState, agent_search_router},
             agent_thread_follow::{AgentThreadFollowState, agent_thread_follow_router},
             attachment::{
-                self, HostAttachmentEnvironment, agent_attachment_download_router,
-                agent_attachment_locate_router, agent_attachment_update_router,
-                agent_attachment_upload_router,
+                self, FirstSendAttachmentStore, HostAttachmentEnvironment,
+                agent_attachment_download_router, agent_attachment_locate_router,
+                agent_attachment_update_router, agent_attachment_upload_router,
             },
             attention_preference, attention_projection, channel_directory, channel_lifecycle,
             conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,

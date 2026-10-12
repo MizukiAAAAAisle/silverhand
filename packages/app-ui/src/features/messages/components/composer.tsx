@@ -135,7 +135,7 @@ type PendingAttachment = CachedPendingAttachment;
  *  as one group of peers: quiet by default, ground only on hover, no resting
  *  frame or fill (the composer shell is the frame here, and three framed chips
  *  inside it would be a lift on top of a lift). */
-const COMPOSER_TOOL_CLASS =
+export const COMPOSER_TOOL_CLASS =
   "inline-flex size-7 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-bg-elevated hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50";
 
 // Stable empty defaults for the workspace-scoped mention sources. While
@@ -159,7 +159,7 @@ const EMPTY_HUMANS: WorkspaceHumanMember[] = [];
  * whose extension lies about its content is still caught by the backend's
  * kind check at send time (a clear reject, never a silent misbinding).
  */
-function effectiveContentType(file: File): string {
+export function effectiveContentType(file: File): string {
   const hint = file.type;
   if (!isGenericMimeHint(hint)) return hint;
   return mimeFromFilename(file.name) ?? "application/octet-stream";

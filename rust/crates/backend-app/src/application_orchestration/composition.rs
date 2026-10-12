@@ -378,7 +378,14 @@ pub(super) async fn compose_after_audit(
             agent_detail_cold_read.clone(),
             SystemProcessClock,
         );
-    let (human_writes, agent_writes) = aftermath.write_doors(messaging_store, target_address);
+    let first_send_uploads = FirstSendAttachmentStore::new(
+        messaging_store.attachment_reads(),
+        messaging_store.attachment_writes(),
+        blob_store.clone(),
+        HostAttachmentEnvironment,
+    );
+    let (human_writes, agent_writes) =
+        aftermath.write_doors(messaging_store, target_address, first_send_uploads);
 
     let host = host_runtime::router(
         CreateHostInvite::new(host_store.clone(), OsEntropy, SystemClock),

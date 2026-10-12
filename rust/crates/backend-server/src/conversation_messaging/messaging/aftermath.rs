@@ -31,7 +31,7 @@ use silverhand_backend_core::conversation_messaging::messaging::{
 };
 
 use super::{
-    collaboration::direct_pair_initiation,
+    collaboration::{attachment::FirstSendUploads, direct_pair_initiation},
     router::{SendState, send_routers},
 };
 
@@ -141,8 +141,8 @@ where
     /// aftermath would take constructing a whole second one — a review-visible act rather
     /// than a silently swapped argument.
     ///
-    /// One `store` in every write role, and NO parameter for the winner-only pair-open
-    /// publication authority. That authority is this aftermath: `Self` is the
+    /// One `store` in every message write role, the first-send file store beside it, and
+    /// NO parameter for the winner-only pair-open publication authority. That authority is this aftermath: `Self` is the
     /// [`DirectPairOpenedPort`] (forwarding through the shared `Arc`), and
     /// `DirectPairInitiationSource<Self>` is what makes the store able to produce an
     /// initiation port bound to nothing else. So "announce the pair-open on a second hub
@@ -153,7 +153,12 @@ where
     /// The initiation door is merged into the human set here because it IS a human write
     /// door; the caller cannot receive it unbound. [`send_routers`] and
     /// [`direct_pair_initiation::router`] stay public as the component/spy substrate.
-    pub fn write_doors<S, T>(&self, store: S, target_address: T) -> (Router, Router)
+    pub fn write_doors<S, T, A>(
+        &self,
+        store: S,
+        target_address: T,
+        first_send_uploads: A,
+    ) -> (Router, Router)
     where
         S: ChannelAccess
             + SendCapability
@@ -165,6 +170,7 @@ where
             + Sync
             + 'static,
         T: TargetAddress + Send + Sync + 'static,
+        A: FirstSendUploads,
     {
         let (human_sends, agent_sends) = send_routers(SendState {
             channel_access: store.clone(),
@@ -179,6 +185,7 @@ where
             store.clone(),
             store,
             self.clone(),
+            first_send_uploads,
         );
         (human_sends.merge(initiation), agent_sends)
     }
@@ -349,9 +356,10 @@ mod tests {
     use super::*;
 
     /// The exact shape `write_doors` is allowed to have: the aftermath, the store, the
-    /// address. No fourth argument, so no publication authority a mount could name.
-    type WriteDoorSeam<E, D, M, U, S, T> =
-        fn(&MessagingAftermath<E, D, M, U>, S, T) -> (Router, Router);
+    /// address and the first-send file store. None of them is a publication authority a
+    /// mount could name.
+    type WriteDoorSeam<E, D, M, U, S, T, A> =
+        fn(&MessagingAftermath<E, D, M, U>, S, T, A) -> (Router, Router);
 
     /// The seam's ARGUMENT LIST is the guarantee, so pin it mechanically. This coercion
     /// only compiles while `write_doors` has [`WriteDoorSeam`]'s shape, and while the
@@ -365,8 +373,8 @@ mod tests {
     /// the method needs. The real effects stay with the composition root's own two-axis
     /// gate, which this does not replace.
     #[allow(dead_code)]
-    fn the_write_door_seam_takes_only_the_store_and_the_address<E, D, M, U, S, T>()
-    -> WriteDoorSeam<E, D, M, U, S, T>
+    fn the_write_door_seam_takes_only_the_store_and_the_address<E, D, M, U, S, T, A>()
+    -> WriteDoorSeam<E, D, M, U, S, T, A>
     where
         MessagingAftermath<E, D, M, U>: SendAftermath + Send + Sync + 'static,
         S: ChannelAccess
@@ -379,6 +387,7 @@ mod tests {
             + Sync
             + 'static,
         T: TargetAddress + Send + Sync + 'static,
+        A: FirstSendUploads,
     {
         MessagingAftermath::write_doors
     }

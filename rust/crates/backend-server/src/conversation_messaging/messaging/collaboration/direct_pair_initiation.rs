@@ -5,6 +5,13 @@
 //! Every side-effect-free refusal therefore precedes allocation. Once allocation
 //! wins, a later send refusal does not compensate the already committed and
 //! announced pair; the cold direct-pair list remains the existence authority.
+//!
+//! A multipart body carries the first message's files with it, because the pair
+//! they would be uploaded into does not exist yet. Every file is validated before
+//! allocation; after it, the files are stored under the pair through the ordinary
+//! upload units and the message references them. A failure there leaves the pair
+//! and any stored file in place, and a retry with the same client message id
+//! reuses both.
 
 use std::sync::Arc;
 
@@ -18,8 +25,9 @@ use axum::{
 use serde_json::json;
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
-        DirectLineAuthority, PrincipalIdentity, SendActor, SendDestination, SendMessageOutcome,
-        SendMessageUnitOfWork,
+        ClientMessageId, DirectLineAuthority, PrincipalIdentity, SendActor, SendDestination,
+        SendMessageError, SendMessageOutcome, SendMessageUnitOfWork,
+        attachments::{AttachmentLabel, AttachmentLabelKind},
         collaboration::direct_pair_initiation::{
             DirectPairFirstSendError, DirectPairInitiationPort, DirectPairInitiationRefusal,
             authorize_direct_pair_initiation,
@@ -30,8 +38,12 @@ use silverhand_backend_core::{
 
 use crate::conversation_messaging::messaging::{
     ack::send_ack,
-    admission::{PayloadRefusal, validate_human_payload},
+    admission::{PayloadRefusal, ecmascript_trim, validate_human_payload},
     aftermath::SendAftermath,
+    collaboration::attachment::{
+        FirstSendMultipart, FirstSendUploads, StagedFirstSendFile, UnplacedFirstSendFile,
+        UploadFailure, first_send_attachment_id, is_multipart, read_first_send_multipart,
+    },
     envelope::{BodyRead, read_message_send_body},
     execute::{ResolvedSendContext, execute},
     outcome::refused_send,
@@ -43,16 +55,17 @@ pub const HUMAN_DIRECT_PAIR_INITIATION_PATH: &str = "/api/users/{id}/direct-mess
 
 pub const DIRECT_PAIR_INITIATION_PATH: &str = "/api/agents/{id}/direct-messages";
 
-struct Inner<I, D, U, F> {
+struct Inner<I, D, U, F, A> {
     initiation: I,
     direct_lines: D,
     unit_of_work: U,
     aftermath: F,
+    uploads: A,
 }
 
-struct InitiationState<I, D, U, F>(Arc<Inner<I, D, U, F>>);
+struct InitiationState<I, D, U, F, A>(Arc<Inner<I, D, U, F, A>>);
 
-impl<I, D, U, F> Clone for InitiationState<I, D, U, F> {
+impl<I, D, U, F, A> Clone for InitiationState<I, D, U, F, A> {
     fn clone(&self) -> Self {
         Self(Arc::clone(&self.0))
     }
@@ -60,29 +73,37 @@ impl<I, D, U, F> Clone for InitiationState<I, D, U, F> {
 
 /// The isolated POST leaf. The executable mount supplies authenticated human
 /// identity and the real event/send adapters at the integration seam.
-pub fn router<I, D, U, F>(initiation: I, direct_lines: D, unit_of_work: U, aftermath: F) -> Router
+pub fn router<I, D, U, F, A>(
+    initiation: I,
+    direct_lines: D,
+    unit_of_work: U,
+    aftermath: F,
+    uploads: A,
+) -> Router
 where
     I: DirectPairInitiationPort + Send + Sync + 'static,
     D: DirectLineAuthority + Send + Sync + 'static,
     U: SendMessageUnitOfWork + Send + Sync + 'static,
     F: SendAftermath + Send + Sync + 'static,
+    A: FirstSendUploads,
 {
     Router::new()
-        .route(DIRECT_PAIR_INITIATION_PATH, post(initiate::<I, D, U, F>))
+        .route(DIRECT_PAIR_INITIATION_PATH, post(initiate::<I, D, U, F, A>))
         .route(
             HUMAN_DIRECT_PAIR_INITIATION_PATH,
-            post(initiate_human::<I, D, U, F>),
+            post(initiate_human::<I, D, U, F, A>),
         )
         .with_state(InitiationState(Arc::new(Inner {
             initiation,
             direct_lines,
             unit_of_work,
             aftermath,
+            uploads,
         })))
 }
 
-async fn initiate<I, D, U, F>(
-    State(state): State<InitiationState<I, D, U, F>>,
+async fn initiate<I, D, U, F, A>(
+    State(state): State<InitiationState<I, D, U, F, A>>,
     principal: Option<Extension<UserId>>,
     Path(raw_target): Path<String>,
     request: Request,
@@ -92,6 +113,7 @@ where
     D: DirectLineAuthority + Send + Sync,
     U: SendMessageUnitOfWork + Send + Sync,
     F: SendAftermath + Send + Sync,
+    A: FirstSendUploads,
 {
     let Ok(target) = AgentId::parse(raw_target) else {
         return error(StatusCode::BAD_REQUEST, "agent id required");
@@ -99,8 +121,8 @@ where
     initiate_target(state, principal, PrincipalIdentity::Agent(target), request).await
 }
 
-async fn initiate_human<I, D, U, F>(
-    State(state): State<InitiationState<I, D, U, F>>,
+async fn initiate_human<I, D, U, F, A>(
+    State(state): State<InitiationState<I, D, U, F, A>>,
     principal: Option<Extension<UserId>>,
     Path(raw_target): Path<String>,
     request: Request,
@@ -110,6 +132,7 @@ where
     D: DirectLineAuthority + Send + Sync,
     U: SendMessageUnitOfWork + Send + Sync,
     F: SendAftermath + Send + Sync,
+    A: FirstSendUploads,
 {
     let Ok(target) = UserId::parse(raw_target) else {
         return error(StatusCode::BAD_REQUEST, "user id required");
@@ -117,8 +140,8 @@ where
     initiate_target(state, principal, PrincipalIdentity::Human(target), request).await
 }
 
-async fn initiate_target<I, D, U, F>(
-    state: InitiationState<I, D, U, F>,
+async fn initiate_target<I, D, U, F, A>(
+    state: InitiationState<I, D, U, F, A>,
     principal: Option<Extension<UserId>>,
     target: PrincipalIdentity,
     request: Request,
@@ -128,13 +151,16 @@ where
     D: DirectLineAuthority + Send + Sync,
     U: SendMessageUnitOfWork + Send + Sync,
     F: SendAftermath + Send + Sync,
+    A: FirstSendUploads,
 {
     let Some(Extension(viewer)) = principal else {
         tracing::error!("direct-pair initiation route reached without human principal");
         return internal();
     };
     let authorized =
-        match authorize_direct_pair_initiation(&state.0.initiation, viewer.clone(), target).await {
+        match authorize_direct_pair_initiation(&state.0.initiation, viewer.clone(), target.clone())
+            .await
+        {
             Ok(Ok(authorized)) => authorized,
             Ok(Err(DirectPairInitiationRefusal::NotFound)) => {
                 return error(StatusCode::NOT_FOUND, "not found");
@@ -154,13 +180,25 @@ where
         };
 
     // Unlike the ordinary send doors, this route's authority is intentionally
-    // ahead of body polling. The helper still applies their single body bound.
-    let raw_body = match read_message_send_body(request).await {
-        BodyRead::Within(bytes) => serde_json::from_slice(&bytes).ok(),
-        BodyRead::OverCap => return envelope_too_large().into_response(),
-        // Production TS catches a non-limit JSON/body failure as `{}` before
-        // schema admission. `None` is that same empty-document input here.
-        BodyRead::Unreadable(_) => None,
+    // ahead of body polling. The helpers still apply their body bounds.
+    let (raw_body, files) = if is_multipart(&request) {
+        let FirstSendMultipart { payload, files } = match read_first_send_multipart(request).await {
+            Ok(value) => value,
+            Err(response) => return *response,
+        };
+        match first_send_body(payload, files, &viewer, &target) {
+            Ok(value) => value,
+            Err(response) => return *response,
+        }
+    } else {
+        let raw_body = match read_message_send_body(request).await {
+            BodyRead::Within(bytes) => serde_json::from_slice(&bytes).ok(),
+            BodyRead::OverCap => return envelope_too_large().into_response(),
+            // Production TS catches a non-limit JSON/body failure as `{}` before
+            // schema admission. `None` is that same empty-document input here.
+            BodyRead::Unreadable(_) => None,
+        };
+        (raw_body, Vec::new())
     };
     let admitted = match validate_human_payload(raw_body) {
         Ok(admitted) => admitted,
@@ -192,6 +230,13 @@ where
         .initiation
         .open_and_send(authorized, |opened| async move {
             let conversation = opened.conversation().clone();
+            for file in files {
+                send_inner
+                    .uploads
+                    .stage(&viewer, &conversation, file)
+                    .await
+                    .map_err(FirstSendFailure::Upload)?;
+            }
             execute(
                 ResolvedSendContext::resolved(
                     SendActor::User(viewer),
@@ -207,12 +252,20 @@ where
                 &send_inner.aftermath,
             )
             .await
+            .map_err(FirstSendFailure::Send)
         })
         .await;
 
     match result {
         Ok(outcome) => created(&outcome),
-        Err(DirectPairFirstSendError::Send(failure)) => refused_send(&failure),
+        Err(DirectPairFirstSendError::Send(FirstSendFailure::Send(failure))) => {
+            refused_send(&failure)
+        }
+        Err(DirectPairFirstSendError::Send(FirstSendFailure::Upload(failure))) => match failure {
+            UploadFailure::NotFound => error(StatusCode::NOT_FOUND, "not found"),
+            UploadFailure::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
+            UploadFailure::Internal => internal(),
+        },
         Err(failure) => {
             tracing::error!(
                 error_chain = crate::foundation::safe_log_field::safe_display(
@@ -223,6 +276,104 @@ where
             internal()
         }
     }
+}
+
+#[derive(Debug)]
+enum FirstSendFailure {
+    Upload(UploadFailure),
+    Send(SendMessageError),
+}
+
+impl std::fmt::Display for FirstSendFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Upload(_) => formatter.write_str("first-send attachment was not stored"),
+            Self::Send(failure) => failure.fmt(formatter),
+        }
+    }
+}
+
+impl std::error::Error for FirstSendFailure {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Upload(failure) => Some(failure),
+            Self::Send(failure) => failure.source(),
+        }
+    }
+}
+
+/// The JSON body the send admission reads, built from the multipart `payload`
+/// part and the validated files: each file becomes one attachment reference,
+/// in order, carrying the label at its position.
+///
+/// A label must agree with its file's type here, before the pair is opened; the
+/// send unit would otherwise refuse it only after.
+fn first_send_body(
+    payload: Option<serde_json::Value>,
+    files: Vec<UnplacedFirstSendFile>,
+    viewer: &UserId,
+    target: &PrincipalIdentity,
+) -> Result<(Option<serde_json::Value>, Vec<StagedFirstSendFile>), Box<Response>> {
+    let Some(serde_json::Value::Object(mut body)) = payload else {
+        return Err(Box::new(crate::foundation::wire_admission::invalid_input()));
+    };
+    if body.contains_key("attachment_ids") {
+        return Err(Box::new(crate::foundation::wire_admission::invalid_input()));
+    }
+    let labels = match body.remove("attachment_labels") {
+        None => Vec::new(),
+        Some(serde_json::Value::Array(labels)) => labels,
+        Some(_) => return Err(Box::new(crate::foundation::wire_admission::invalid_input())),
+    };
+    if labels.len() > files.len() {
+        return Err(Box::new(crate::foundation::wire_admission::invalid_input()));
+    }
+    // A retry must name the same files, so a first send with files has to say
+    // which send it is.
+    let client_message_id = match body.get("client_message_id") {
+        Some(serde_json::Value::String(raw)) => ClientMessageId::parse(raw.clone())
+            .map_err(|_| Box::new(crate::foundation::wire_admission::invalid_input()))?,
+        _ if files.is_empty() => {
+            return Ok((Some(serde_json::Value::Object(body)), Vec::new()));
+        }
+        _ => return Err(Box::new(crate::foundation::wire_admission::invalid_input())),
+    };
+    let mut references = Vec::with_capacity(files.len());
+    let mut staged = Vec::with_capacity(files.len());
+    for (ordinal, file) in files.into_iter().enumerate() {
+        let id = first_send_attachment_id(viewer, target, &client_message_id, ordinal);
+        let reference = match labels.get(ordinal) {
+            None | Some(serde_json::Value::Null) => json!({ "id": id.as_str() }),
+            Some(serde_json::Value::String(label)) => {
+                let kind =
+                    AttachmentLabel::parse(ecmascript_trim(label)).map(AttachmentLabel::kind);
+                if kind.is_some_and(|kind| {
+                    kind != AttachmentLabelKind::of_content_type(file.content_type().as_str())
+                }) {
+                    return Err(Box::new(
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(json!({
+                                "error": "attachment label kind does not match its content type",
+                                "code": "attachment_label_kind_mismatch",
+                                "attachment_id": id.as_str(),
+                            })),
+                        )
+                            .into_response(),
+                    ));
+                }
+                json!({ "id": id.as_str(), "label": label })
+            }
+            Some(_) => return Err(Box::new(crate::foundation::wire_admission::invalid_input())),
+        };
+        references.push(reference);
+        staged.push(file.place(id));
+    }
+    body.insert(
+        "attachment_ids".into(),
+        serde_json::Value::Array(references),
+    );
+    Ok((Some(serde_json::Value::Object(body)), staged))
 }
 
 fn created(outcome: &SendMessageOutcome) -> Response {

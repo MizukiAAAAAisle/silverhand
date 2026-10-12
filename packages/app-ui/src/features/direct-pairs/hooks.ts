@@ -7,7 +7,7 @@ import type {
   MessageSendAck,
 } from "@silverhand/shared";
 import { apiPaths } from "@silverhand/shared";
-import { api } from "@/lib/api";
+import { api, apiUpload } from "@/lib/api";
 import { isCurrentViewerScope, onWsFrame, subscribeViewerScope } from "@/lib/ws-client";
 
 /** Query key for the viewer's direct-pair list. ONE cache entry: the list is
@@ -347,17 +347,40 @@ export function useDirectPairsSync(): void {
  */
 export function useInitiateDirectMessage(target: DirectMessageTarget) {
   const qc = useQueryClient();
-  return useMutation<MessageSendAck, Error, { content: string; client_message_id: string }>({
-    mutationFn: async ({ content, client_message_id }) =>
-      api<MessageSendAck>(
+  return useMutation<
+    MessageSendAck,
+    Error,
+    {
+      content: string;
+      client_message_id: string;
+      attachments?: ReadonlyArray<{ file: File; label: string }>;
+    }
+  >({
+    mutationFn: async ({ content, client_message_id, attachments = [] }) => {
+      const path =
         target.kind === "agent"
           ? apiPaths.agentDirectMessages(target.id)
-          : apiPaths.userDirectMessages(target.id),
-        {
+          : apiPaths.userDirectMessages(target.id);
+      if (attachments.length === 0) {
+        return api<MessageSendAck>(path, {
           method: "POST",
           body: JSON.stringify({ content, client_message_id }),
-        },
-      ),
+        });
+      }
+      // The pair the files belong to does not exist yet, so they travel with
+      // the first message and the server stores them once it opens the pair.
+      const form = new FormData();
+      form.append(
+        "payload",
+        JSON.stringify({
+          content,
+          client_message_id,
+          attachment_labels: attachments.map((item) => item.label),
+        }),
+      );
+      for (const item of attachments) form.append("file", item.file);
+      return apiUpload<MessageSendAck>(path, form);
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: directPairsKey });
     },

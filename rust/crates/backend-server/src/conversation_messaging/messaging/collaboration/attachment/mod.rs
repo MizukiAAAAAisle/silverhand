@@ -6,12 +6,18 @@
 //! can only be reported and never compensate the committed row.
 
 mod agent;
+mod first_send;
 
 pub use agent::{
     INTERNAL_AGENT_ATTACHMENT_DOWNLOAD_PATH, INTERNAL_AGENT_ATTACHMENT_LOCATE_PATH,
     INTERNAL_AGENT_ATTACHMENT_PATH, INTERNAL_AGENT_ATTACHMENTS_PATH,
     agent_attachment_download_router, agent_attachment_locate_router,
     agent_attachment_update_router, agent_attachment_upload_router,
+};
+pub use first_send::{FirstSendAttachmentStore, FirstSendUploads, StagedFirstSendFile};
+pub(crate) use first_send::{
+    FirstSendMultipart, UnplacedFirstSendFile, first_send_attachment_id, is_multipart,
+    read_first_send_multipart,
 };
 
 #[cfg(test)]
@@ -47,9 +53,9 @@ use silverhand_backend_core::{
             AttachmentListCursor, AttachmentListQuery, AttachmentListReadPort,
             AttachmentPostCommitMaintenance, AttachmentRecord, AttachmentSenderFacet,
             AttachmentSenderFacetReadPort, AttachmentSenderFilter, AttachmentSourceActor,
-            AttachmentWriteAdmissionPort, AttachmentWriteAdmissionRefusal, BoundAttachmentListPage,
-            BoundAttachmentSenderFacets, ChannelAttachmentReadRefusal, maintain_committed_delete,
-            maintain_committed_update,
+            AttachmentWriteAdmissionPort, AttachmentWriteAdmissionRefusal,
+            BoundAttachmentCreateAdmission, BoundAttachmentListPage, BoundAttachmentSenderFacets,
+            ChannelAttachmentReadRefusal, maintain_committed_delete, maintain_committed_update,
         },
         environment::EnvironmentUnavailable,
     },
@@ -407,7 +413,69 @@ where
             return internal();
         }
     };
-    let created_at = match state.0.environment.now_unix_ms() {
+    match persist_upload(
+        &state.0.writes,
+        &state.0.blobs,
+        &state.0.environment,
+        &admission,
+        &viewer,
+        &conversation,
+        attachment,
+        filename,
+        content_type,
+        file.bytes,
+    )
+    .await
+    {
+        Ok(record) => (StatusCode::CREATED, Json(record_json(&record))).into_response(),
+        Err(UploadFailure::NotFound) => error(StatusCode::NOT_FOUND, "channel not found"),
+        Err(UploadFailure::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
+        Err(UploadFailure::Internal) => internal(),
+    }
+}
+
+/// Why a validated file was not stored. Our own failures are logged where
+/// they happen and carry nothing further.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UploadFailure {
+    NotFound,
+    Forbidden,
+    Internal,
+}
+
+impl fmt::Display for UploadFailure {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(match self {
+            Self::NotFound => "attachment conversation not found",
+            Self::Forbidden => "viewer cannot upload into the conversation",
+            Self::Internal => "attachment upload failed",
+        })
+    }
+}
+
+impl Error for UploadFailure {}
+
+/// Writes one validated file under an admitted conversation: the blob first,
+/// then the row, removing the blob when the row is not committed.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn persist_upload<W, B, E>(
+    writes: &W,
+    blobs: &B,
+    environment: &E,
+    admission: &BoundAttachmentCreateAdmission,
+    viewer: &UserId,
+    conversation: &ConversationId,
+    attachment: AttachmentId,
+    filename: AttachmentFilename,
+    content_type: AttachmentContentType,
+    bytes: Vec<u8>,
+) -> Result<AttachmentRecord, UploadFailure>
+where
+    W: AttachmentCreateUnitOfWork,
+    B: BlobStore,
+    E: SendClock,
+{
+    let created_at = match environment.now_unix_ms() {
         Ok(value) => value,
         Err(error) => {
             tracing::error!(
@@ -416,7 +484,7 @@ where
                 ),
                 "attachment clock unavailable"
             );
-            return internal();
+            return Err(UploadFailure::Internal);
         }
     };
     let namespace = match BlobNamespace::for_semantic_id(
@@ -431,16 +499,11 @@ where
                 ),
                 "attachment namespace projection failed"
             );
-            return internal();
+            return Err(UploadFailure::Internal);
         }
     };
-    let size = file.bytes.len() as i64;
-    let blob = match state
-        .0
-        .blobs
-        .put(&namespace, content_type.as_str(), file.bytes)
-        .await
-    {
+    let size = bytes.len() as i64;
+    let blob = match blobs.put(&namespace, content_type.as_str(), bytes).await {
         Ok(value) => value,
         Err(error) => {
             tracing::error!(
@@ -449,7 +512,7 @@ where
                 ),
                 "attachment blob write failed"
             );
-            return internal();
+            return Err(UploadFailure::Internal);
         }
     };
     let command = match AttachmentCreateCommand::new(
@@ -464,19 +527,19 @@ where
     ) {
         Ok(value) => value,
         Err(error) => {
-            cleanup_uncommitted(&state.0.blobs, &blob, "invalid upload command").await;
+            cleanup_uncommitted(blobs, &blob, "invalid upload command").await;
             tracing::error!(
                 error_chain = crate::foundation::safe_log_field::safe_display(
                     &(crate::foundation::error::describe(&error))
                 ),
                 "attachment upload command projection failed"
             );
-            return internal();
+            return Err(UploadFailure::Internal);
         }
     };
-    match state.0.writes.create(command).await {
-        Ok(Ok(fact)) => match fact.bind(&viewer, &conversation) {
-            Ok(bound) => (StatusCode::CREATED, Json(record_json(bound.record()))).into_response(),
+    match writes.create(command).await {
+        Ok(Ok(fact)) => match fact.bind(viewer, conversation) {
+            Ok(bound) => Ok(bound.record().clone()),
             Err(error) => {
                 tracing::error!(
                     error_chain = crate::foundation::safe_log_field::safe_display(
@@ -484,27 +547,25 @@ where
                     ),
                     "attachment create identity seal failed"
                 );
-                internal()
+                Err(UploadFailure::Internal)
             }
         },
         Ok(Err(refusal)) => {
-            cleanup_uncommitted(&state.0.blobs, &blob, "refused upload").await;
-            match refusal {
-                AttachmentCreateRefusal::NotFound => {
-                    error(StatusCode::NOT_FOUND, "channel not found")
-                }
-                AttachmentCreateRefusal::Forbidden => error(StatusCode::FORBIDDEN, "forbidden"),
-            }
+            cleanup_uncommitted(blobs, &blob, "refused upload").await;
+            Err(match refusal {
+                AttachmentCreateRefusal::NotFound => UploadFailure::NotFound,
+                AttachmentCreateRefusal::Forbidden => UploadFailure::Forbidden,
+            })
         }
         Err(error) => {
-            cleanup_uncommitted(&state.0.blobs, &blob, "failed upload persistence").await;
+            cleanup_uncommitted(blobs, &blob, "failed upload persistence").await;
             tracing::error!(
                 error_chain = crate::foundation::safe_log_field::safe_display(
                     &(crate::foundation::error::describe(&error))
                 ),
                 "attachment upload persistence failed"
             );
-            internal()
+            Err(UploadFailure::Internal)
         }
     }
 }

@@ -37,8 +37,26 @@ use tower::ServiceExt;
 
 use super::{DIRECT_PAIR_INITIATION_PATH, router};
 use crate::conversation_messaging::messaging::{
-    MESSAGE_SEND_MAX_BODY_BYTES, aftermath::SendAftermath,
+    MESSAGE_SEND_MAX_BODY_BYTES,
+    aftermath::SendAftermath,
+    collaboration::attachment::{
+        FirstSendAttachmentStore, FirstSendUploads, StagedFirstSendFile, UploadFailure,
+    },
 };
+
+/// A first-send file store for doors that never receive a file.
+struct NoUploads;
+
+impl FirstSendUploads for NoUploads {
+    async fn stage(
+        &self,
+        _viewer: &UserId,
+        _conversation: &ConversationId,
+        _file: StagedFirstSendFile,
+    ) -> Result<(), UploadFailure> {
+        unreachable!("a JSON first send carries no file")
+    }
+}
 
 fn user(raw: &str) -> UserId {
     UserId::parse(raw).unwrap()
@@ -232,7 +250,7 @@ fn app<U>(initiation: Initiation, unit: U) -> axum::Router
 where
     U: SendMessageUnitOfWork + Send + Sync + 'static,
 {
-    router(initiation, DirectLines, unit, NoAftermath).layer(Extension(user("user-1")))
+    router(initiation, DirectLines, unit, NoAftermath, NoUploads).layer(Extension(user("user-1")))
 }
 
 async fn call(app: axum::Router, body: Body, declared: Option<usize>) -> (StatusCode, Value) {
@@ -494,6 +512,7 @@ async fn missing_authentication_never_polls_or_consults_product_authority() {
             calls: unit_calls.clone(),
         },
         NoAftermath,
+        NoUploads,
     );
     let (status, body) = call(app, body, Some(MESSAGE_SEND_MAX_BODY_BYTES + 1)).await;
     assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -590,6 +609,7 @@ async fn production_sqlite_route_keeps_a_minted_pair_when_the_existing_send_unit
         store.clone(),
         store.clone(),
         NoAftermath,
+        NoUploads,
     )
     .layer(Extension(user("local")));
 
@@ -693,6 +713,7 @@ async fn production_sqlite_router_consumes_every_typescript_signed_wire_cell() {
             store.clone(),
             store,
             NoAftermath,
+            NoUploads,
         )
         .layer(Extension(user("local")));
         let (status, body) = call_path(
@@ -759,4 +780,153 @@ async fn production_sqlite_router_consumes_every_typescript_signed_wire_cell() {
             "{name}"
         );
     }
+}
+
+const FIRST_SEND_CLIENT_ID: &str = "3f2b8c1e-7a4d-4b6e-9c2f-1a2b3c4d5e6f";
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR";
+
+async fn multipart_app(
+    directory: &tempfile::TempDir,
+    store: MessagingStore<FixedEnvironment>,
+) -> axum::Router {
+    let blobs = silverhand_backend_filesystem::foundation::blob_store::LocalBlobStore::open(
+        directory.path().join("blobs"),
+    )
+    .await
+    .unwrap();
+    router(
+        store
+            .clone()
+            .bind_initiation(Opened(Arc::new(AtomicUsize::new(0)))),
+        store.clone(),
+        store.clone(),
+        NoAftermath,
+        FirstSendAttachmentStore::new(
+            store.attachment_reads(),
+            store.attachment_writes(),
+            blobs,
+            FixedEnvironment,
+        ),
+    )
+    .layer(Extension(user("local")))
+}
+
+async fn call_multipart(
+    app: axum::Router,
+    payload: Value,
+    files: &[(&str, &str, &[u8])],
+) -> (StatusCode, Value) {
+    let boundary = "silverhand-first-send-boundary";
+    let mut body = Vec::new();
+    body.extend_from_slice(
+        format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"payload\"\r\n\r\n{payload}\r\n"
+        )
+        .as_bytes(),
+    );
+    for (filename, content_type, bytes) in files {
+        body.extend_from_slice(
+            format!(
+                "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; \
+                 filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(b"\r\n");
+    }
+    body.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    let request = Request::builder()
+        .method("POST")
+        .uri(DIRECT_PAIR_INITIATION_PATH.replace("{id}", "agent-1"))
+        .header(
+            "content-type",
+            format!("multipart/form-data; boundary={boundary}"),
+        )
+        .body(Body::from(body))
+        .unwrap();
+    let response = app.oneshot(request).await.unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(Value::Null),
+    )
+}
+
+async fn counts(path: &std::path::Path) -> (i64, i64, i64) {
+    let mut db = sqlx::SqliteConnection::connect(path.to_str().unwrap())
+        .await
+        .unwrap();
+    sqlx::query_as(
+        "SELECT (SELECT count(*) FROM conversations), (SELECT count(*) FROM messages), \
+         (SELECT count(*) FROM attachments)",
+    )
+    .fetch_one(&mut db)
+    .await
+    .unwrap()
+}
+
+#[tokio::test]
+async fn a_multipart_first_send_refused_by_validation_opens_no_pair_and_stores_no_file() {
+    let (directory, path, store) = seeded_store().await;
+    let app = multipart_app(&directory, store).await;
+
+    for (payload, files) in [
+        // A file without a client message id could not be retried safely.
+        (
+            json!({"content": "hello"}),
+            vec![("a.png", "image/png", PNG)],
+        ),
+        // The label claims an image; the file is text.
+        (
+            json!({
+                "content": "see Image #1",
+                "client_message_id": FIRST_SEND_CLIENT_ID,
+                "attachment_labels": ["Image #1"],
+            }),
+            vec![("notes.txt", "text/plain", b"plain".as_slice())],
+        ),
+        // A valid file before an empty one still refuses the whole send.
+        (
+            json!({"content": "", "client_message_id": FIRST_SEND_CLIENT_ID}),
+            vec![
+                ("a.png", "image/png", PNG),
+                ("b.png", "image/png", b"".as_slice()),
+            ],
+        ),
+    ] {
+        let (status, _) = call_multipart(app.clone(), payload, &files).await;
+        assert!(status.is_client_error(), "{status}");
+        assert_eq!(counts(&path).await, (0, 0, 0));
+    }
+}
+
+#[tokio::test]
+async fn a_retried_multipart_first_send_commits_one_message_and_one_set_of_files() {
+    let (directory, path, store) = seeded_store().await;
+    let app = multipart_app(&directory, store).await;
+    let payload = json!({
+        "content": "Image #1",
+        "client_message_id": FIRST_SEND_CLIENT_ID,
+        "attachment_labels": ["Image #1"],
+    });
+    let files = [
+        ("a.png", "image/png", PNG),
+        ("b.txt", "text/plain", b"plain".as_slice()),
+    ];
+
+    let (status, first) = call_multipart(app.clone(), payload.clone(), &files).await;
+    assert_eq!(status, StatusCode::CREATED, "{first}");
+    let attachments = first["message"]["attachments"].as_array().unwrap();
+    assert_eq!(attachments.len(), 2);
+    assert_eq!(attachments[0]["label"], "Image #1");
+    assert_eq!(attachments[0]["filename"], "a.png");
+    assert_eq!(attachments[1]["filename"], "b.txt");
+    assert_eq!(counts(&path).await, (1, 1, 2));
+
+    let (status, retried) = call_multipart(app, payload, &files).await;
+    assert!(status.is_success(), "{status} {retried}");
+    assert_eq!(retried["message"]["id"], first["message"]["id"]);
+    assert_eq!(counts(&path).await, (1, 1, 2));
 }

@@ -50,11 +50,14 @@ export const PendingAttachmentMotion = forwardRef<HTMLDivElement, { children: Re
 export function AttachmentChip({
   item,
   onRemove,
+  removeDisabled = false,
   onInsertLabel,
   onPreview,
 }: {
   item: PendingAttachment;
   onRemove: () => void;
+  /** Kept in place but inert while the message carrying it is being sent. */
+  removeDisabled?: boolean;
   /** Insert this attachment's stable label into the message body. Omitted when
    *  the attachment has no label yet or failed to upload. */
   onInsertLabel?: () => void;
@@ -126,7 +129,8 @@ export function AttachmentChip({
       <button
         type="button"
         onClick={onRemove}
-        className="ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-text-muted hover:text-text-primary"
+        disabled={removeDisabled}
+        className="ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-text-muted hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
         aria-label="Remove attachment"
       >
         <CloseIcon className="size-3" />
