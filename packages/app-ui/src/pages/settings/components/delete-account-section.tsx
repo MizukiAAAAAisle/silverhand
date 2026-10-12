@@ -27,18 +27,29 @@ interface Preflight {
   blockers: Blockers | null;
 }
 
-function BlockerList({ blockers }: { blockers: Blockers }): JSX.Element {
+function BlockerGroup({ label, items }: { label: string; items: Blocker[] }): JSX.Element | null {
+  if (items.length === 0) return null;
   return (
-    <div className="flex flex-col gap-1 text-xs text-text-muted">
-      <p>Resolve the following before deleting:</p>
+    <div className="flex flex-col gap-1">
+      <p className="font-medium text-text-secondary">{label}</p>
       <ul className="list-disc pl-4">
-        {blockers.workspaces.map((w) => (
-          <li key={w.id}>{`Transfer ownership of or delete the workspace “${w.name}”`}</li>
-        ))}
-        {blockers.agents.map((a) => (
-          <li key={a.id}>{`Delete the agent @${a.name}`}</li>
+        {items.map((item) => (
+          <li key={item.id}>{item.name}</li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+function BlockerList({ blockers }: { blockers: Blockers }): JSX.Element {
+  return (
+    <div className="flex flex-col gap-3 text-xs text-text-muted">
+      <p>Resolve the following before deleting:</p>
+      <BlockerGroup label="Workspaces to transfer or delete" items={blockers.workspaces} />
+      <BlockerGroup
+        label="Agents to delete"
+        items={blockers.agents.map((a) => ({ id: a.id, name: `@${a.name}` }))}
+      />
     </div>
   );
 }
