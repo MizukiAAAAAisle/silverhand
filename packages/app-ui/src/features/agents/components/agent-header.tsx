@@ -1,10 +1,10 @@
 import { ProfileHeaderContent } from "@/features/profile/profile-header-content";
 import { useState } from "react";
-import { DeleteIcon, MessageIcon, PowerIcon } from "@/icons";
+import { DeleteIcon, MessageIcon, MoreIcon, PowerIcon } from "@/icons";
 import type { AgentDto, AgentRuntimeStateDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { iconMarkup } from "@/components/layout/native-page-bar";
+import { iconMarkup, useNativeBar } from "@/components/layout/native-page-bar";
 import { SidePanelHeader } from "@/components/layout/side-panel-header";
 import { ProfileHeaderAction as HeaderAction } from "@/features/profile/profile-header-action";
 import { useAgentPresence, useStopAgent } from "../hooks/hooks";
@@ -102,6 +102,55 @@ export function AgentHeader({
     </>
   );
 
+  // A full page on compact iOS: the bar names the section, as the page under
+  // it is the member list; Message stays out and the rest go behind More. The
+  // identity is the profile's own hero.
+  const fullBar = useNativeBar(
+    compact
+      ? null
+      : {
+          title: "Members",
+          titleAction: null,
+          actions: [
+            [
+              ...(canMessage
+                ? [
+                    {
+                      id: "message",
+                      label: `Message @${agent.name}`,
+                      icon: iconMarkup(MessageIcon),
+                      primary: true,
+                    },
+                  ]
+                : []),
+              ...(runningCount > 0
+                ? [{ id: "stop", label: "Stop", icon: iconMarkup(PowerIcon) }]
+                : []),
+              {
+                id: "delete",
+                label: "Delete",
+                icon: iconMarkup(DeleteIcon),
+                destructive: true,
+              },
+            ],
+          ],
+          overflow: { label: "More", icon: iconMarkup(MoreIcon) },
+          tabs: null,
+          addTabs: null,
+        },
+    {
+      action: ({ id }) => {
+        if (id === "message") {
+          onMessageAgent?.(agent.id);
+        } else if (id === "stop" && !stopAgent.isPending) {
+          stopAgent.mutate();
+        } else if (id === "delete") {
+          setDeleteOpen(true);
+        }
+      },
+    },
+  );
+
   const content = (
     <ProfileHeaderContent
       compact={compact}
@@ -159,6 +208,8 @@ export function AgentHeader({
         >
           {content}
         </SidePanelHeader>
+      ) : fullBar.active ? (
+        fullBar.clearance
       ) : (
         <header className="agent-header-full">{content}</header>
       )}

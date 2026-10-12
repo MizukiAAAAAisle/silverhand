@@ -4,7 +4,7 @@ import type { UserDto } from "@silverhand/shared";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { SidePanelHeader } from "@/components/layout/side-panel-header";
-import { iconMarkup } from "@/components/layout/native-page-bar";
+import { iconMarkup, nativeActionBar, useNativeBar } from "@/components/layout/native-page-bar";
 import { ProfileHeaderContent } from "@/features/profile/profile-header-content";
 import { usePresenceById, presenceDotStatus, humanPresenceText } from "@/features/users/presence";
 import { useHumanAvatar } from "./use-human-avatar";
@@ -19,10 +19,26 @@ export function HumanHeader({
   compact?: boolean;
   onClose?: () => void;
   onMessage?: () => void;
-}): JSX.Element {
+}): JSX.Element | null {
   const avatarObjectUrl = useHumanAvatar(user.id);
   const presence = usePresenceById().get(user.id);
   const online = presenceDotStatus(presence?.presence) === "active";
+  // A full page on compact iOS: the bar names the section and carries Message;
+  // the identity is the profile's own hero.
+  const [memberBar, memberHandlers] = nativeActionBar(
+    { title: "Members", titleAction: null, tabs: null, addTabs: null },
+    [
+      onMessage
+        ? {
+            id: "message",
+            label: `Message @${user.name}`,
+            icon: iconMarkup(MessageIcon),
+            run: onMessage,
+          }
+        : null,
+    ],
+  );
+  const fullBar = useNativeBar(compact ? null : memberBar, memberHandlers);
   const content = (
     <ProfileHeaderContent
       compact={compact}
@@ -79,6 +95,8 @@ export function HumanHeader({
     >
       {content}
     </SidePanelHeader>
+  ) : fullBar.active ? (
+    fullBar.clearance
   ) : (
     <header className="agent-header-full">{content}</header>
   );

@@ -17,6 +17,9 @@ struct BarAction: Equatable {
   /// PNG of the web control's glyph; drawn as a template so it takes the bar's ink.
   let icon: String
   let selected, dot: Bool
+  var destructive = false
+  /// The page's main action; a bar keeps it out of the overflow menu.
+  var primary = false
 }
 
 /// Web glyphs as template images, decoded once.
@@ -203,7 +206,16 @@ final class PageBar {
     for action in actions.joined() where action.isSelected {
       action.image = action.image?.withTintColor(.systemBackground, renderingMode: .alwaysOriginal)
     }
-    let trailing = state.overflow.map { [[menuItem($0, actions: state.actions, enabled: enabled, onTap: send)]] } ?? actions
+    // The overflow menu gathers every action but the primary ones, which stay
+    // in the bar ahead of it.
+    let trailing =
+      state.overflow.map { more in
+        let pinned = zip(state.actions, actions).map { declared, items in
+          zip(declared, items).filter { $0.0.primary }.map(\.1)
+        }.filter { !$0.isEmpty }
+        let gathered = state.actions.map { $0.filter { !$0.primary } }.filter { !$0.isEmpty }
+        return pinned + [[menuItem(more, actions: gathered, enabled: enabled, onTap: send)]]
+      } ?? actions
     if #available(iOS 16.0, *) {
       item.trailingItemGroups = BarGlyphs.groups(trailing)
     } else {
@@ -232,6 +244,7 @@ final class PageBar {
         children: group.map { action in
           UIAction(
             title: action.label, image: BarGlyphs.image(action.icon, size: 18),
+            attributes: action.destructive ? .destructive : [],
             state: action.selected ? .on : .off
           ) { _ in onTap(action.id) }
         })

@@ -183,6 +183,10 @@ export interface PageBarItem {
   selected?: boolean;
   /** Shows the unread dot. */
   dot?: boolean;
+  /** The action destroys something; a menu marks it so. */
+  destructive?: boolean;
+  /** The page's main action, which a bar keeps out of its overflow menu. */
+  primary?: boolean;
 }
 export interface PageBarTab extends PageBarItem {
   /** The menu item that closes the tab; null when it cannot close. */
@@ -210,8 +214,9 @@ export interface PageBarState {
   back: string | null;
   /** One glass capsule per group. */
   actions: PageBarItem[][];
-  /** The button a horizontal bar gathers the actions behind, opening them as
-   * a menu; a vertical bar, with room for them, lays them out. */
+  /** The button a horizontal bar gathers the actions behind, all but the
+   * primary ones, opening them as a menu; a vertical bar, with room for them,
+   * lays them out. */
   overflow?: { label: string; icon: string };
   /** View tabs under the bar; null shows none. */
   tabs: PageBarTab[] | null;

@@ -186,7 +186,9 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         id: id, label: item["label"] as? String ?? "",
         accessibilityLabel: item["accessibilityLabel"] as? String,
         icon: item["icon"] as? String ?? "",
-        selected: item["selected"] as? Bool ?? false, dot: item["dot"] as? Bool ?? false)
+        selected: item["selected"] as? Bool ?? false, dot: item["dot"] as? Bool ?? false,
+        destructive: item["destructive"] as? Bool ?? false,
+        primary: item["primary"] as? Bool ?? false)
     }
     let state = call.getObject("state").map { state in
       PageBarState(

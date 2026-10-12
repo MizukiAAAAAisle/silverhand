@@ -35,3 +35,9 @@
 [data-fact] {
   display: contents;
 }
+
+/* A phone is just past the two-fact width, which wraps an ID mid-value; it
+   takes one fact per row. */
+[data-layout="compact"] [data-fact-band-grid] {
+  grid-template-columns: auto auto auto;
+}
