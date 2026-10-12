@@ -131,6 +131,10 @@ impl SqliteUserStore {
         Self { pool }
     }
 
+    pub(crate) fn pool(&self) -> &SqlitePool {
+        &self.pool
+    }
+
     async fn write_display_name(
         &self,
         user_id: &UserId,

@@ -663,6 +663,18 @@ pub(super) async fn compose_after_audit(
     let agent_avatar_blobs = SingleKindAvatarBlobs::new(blob_store.clone(), StorageKind::Local);
     let related_users =
         silverhand_backend_server::identity_access::related_users::router(user_store.clone());
+    let account_deletion_router =
+        silverhand_backend_server::identity_access::account_deletion::router(
+            silverhand_backend_server::identity_access::account_deletion::AccountDeletionDeps {
+                store: user_store.clone(),
+                hasher: password_hasher.clone(),
+                avatars: avatar_blobs.clone(),
+                changed: hub.user_changed_sink(),
+                daemons: daemon_controller.connection_control(),
+                profile: config.deployment_profile,
+            },
+            sessions.clone(),
+        );
     let users_router = users::router(
         UsersDeps {
             directory: user_store.clone(),
@@ -803,6 +815,10 @@ pub(super) async fn compose_after_audit(
             runtime_control.clone(),
         ))
         .merge(access::workspace_membership::router(
+            access_store.clone(),
+            lane_effects.clone(),
+        ))
+        .merge(access::workspace_membership::ownership_transfer_router(
             access_store.clone(),
             lane_effects.clone(),
         ))
@@ -1492,6 +1508,7 @@ pub(super) async fn compose_after_audit(
             // unreachable before a session exists.
             .merge(human_auth_router)
             .merge(password_change_router)
+            .merge(account_deletion_router)
             .merge(embedded_profile_router)
             // #2223 CP4: the human-directory + avatar family also mounts at the top level.
             // `users::router` self-wraps `require_human_session` around all four of its

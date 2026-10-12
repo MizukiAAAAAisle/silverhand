@@ -8,16 +8,27 @@ import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { cn } from "@/lib/cn";
+import { useState } from "react";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
 import { useUpdateWorkspaceHumanMemberRole, useWorkspaceMemberLists } from "./hooks";
+import { useTransferWorkspaceOwnership } from "./member-mutations";
 
 /** Stable empty reference so the avatar batch hook doesn't re-fetch on
  *  every render while members are still loading. */
 const EMPTY_HUMANS: WorkspaceHumanMemberDto[] = [];
 
-/** Roles a human can be reassigned to. `owner` is intentionally absent:
- *  owner transfer is unsupported on the backend (any owner-involving change
- *  → `owner_role_change_unsupported` 400), so the client never offers it. */
+/** Roles a human can be reassigned to. `owner` goes through the separate
+ *  transfer endpoint (PATCH role rejects owner-involving changes). */
 const ASSIGNABLE_ROLES: readonly Exclude<WorkspaceRole, "owner">[] = ["admin", "member"];
+const TRANSFER_OWNER = "transfer-owner";
 
 const ROLE_LABEL: Record<WorkspaceRole, string> = {
   owner: "Owner",
@@ -65,6 +76,8 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
   const canEdit = viewerRole === "owner";
   const avatarUrls = useUserAvatarObjectUrls(humans);
   const update = useUpdateWorkspaceHumanMemberRole(workspaceId);
+  const transfer = useTransferWorkspaceOwnership(workspaceId);
+  const [transferTarget, setTransferTarget] = useState<WorkspaceHumanMemberDto | null>(null);
 
   if (membersQuery.isLoading) {
     return <PanelSkeleton />;
@@ -131,8 +144,9 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
               {editable ? (
                 <RoleSelect
                   value={member.role as Exclude<WorkspaceRole, "owner">}
-                  disabled={update.isPending}
+                  disabled={update.isPending || transfer.isPending}
                   onChange={(role) => onChangeRole(member, role)}
+                  onTransfer={() => setTransferTarget(member)}
                 />
               ) : (
                 <RoleBadge role={member.role} />
@@ -141,7 +155,59 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
           );
         })}
       </ul>
+      <TransferOwnershipDialog
+        target={transferTarget}
+        pending={transfer.isPending}
+        onCancel={() => setTransferTarget(null)}
+        onConfirm={(member) =>
+          transfer.mutate(member.user_id, {
+            onSuccess: () => {
+              setTransferTarget(null);
+              toast.success(`${member.display_name || member.name} is now the owner`);
+            },
+            onError: (err) => toast.error(describeRoleSaveError(err)),
+          })
+        }
+      />
     </div>
+  );
+}
+
+function TransferOwnershipDialog({
+  target,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  target: WorkspaceHumanMemberDto | null;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: (member: WorkspaceHumanMemberDto) => void;
+}): JSX.Element {
+  const name = target ? target.display_name || target.name : "";
+  return (
+    <Dialog
+      open={target !== null}
+      onOpenChange={(next) => (!next && !pending ? onCancel() : undefined)}
+    >
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{`Transfer ownership to ${name}?`}</DialogTitle>
+        </DialogHeader>
+        <DialogDescription className="text-sm leading-relaxed text-text-muted">
+          {name} becomes the owner of this workspace. You stay as an admin and can no longer change
+          roles or delete the workspace.
+        </DialogDescription>
+        <DialogFooter>
+          <Button variant="cancel" onClick={onCancel} disabled={pending}>
+            Cancel
+          </Button>
+          <Button variant="primary" onClick={() => target && onConfirm(target)} disabled={pending}>
+            {pending ? "Transferring…" : "Transfer ownership"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -166,15 +232,19 @@ function RoleSelect({
   value,
   disabled,
   onChange,
+  onTransfer,
 }: {
   value: Exclude<WorkspaceRole, "owner">;
   disabled: boolean;
   onChange: (role: Exclude<WorkspaceRole, "owner">) => void;
+  onTransfer: () => void;
 }): JSX.Element {
   return (
     <Select.Root
       value={value}
-      onValueChange={(v) => onChange(v as Exclude<WorkspaceRole, "owner">)}
+      onValueChange={(v) =>
+        v === TRANSFER_OWNER ? onTransfer() : onChange(v as Exclude<WorkspaceRole, "owner">)
+      }
       disabled={disabled}
     >
       <Select.Trigger
@@ -216,6 +286,16 @@ function RoleSelect({
                 </Select.ItemText>
               </Select.Item>
             ))}
+            <Select.Separator className="my-1 h-px bg-border-subtle" />
+            <Select.Item
+              value={TRANSFER_OWNER}
+              className="flex cursor-default items-center gap-2 rounded-(--control-radius) px-2 py-1.5 text-text-primary outline-none data-highlighted:bg-bg-hover"
+            >
+              <span className="w-3.5 shrink-0" />
+              <Select.ItemText asChild>
+                <span className="text-xs font-medium">Transfer ownership…</span>
+              </Select.ItemText>
+            </Select.Item>
           </Select.Viewport>
         </Select.Content>
       </Select.Portal>

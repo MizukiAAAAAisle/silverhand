@@ -29,11 +29,11 @@ pub use human_enrollment::{
 };
 pub use membership::{
     AgentCapabilitySet, CapabilityReadOutcome, CapabilityReplaceOutcome,
-    CapabilityReplacePreflight, HumanRoleChange, HumanRoleChangeOutcome,
+    CapabilityReplacePreflight, HumanRoleChange, HumanRoleChangeOutcome, OwnershipTransferOutcome,
     WorkspaceAgentRemovalOutcome, WorkspaceAgentRemovalPreflight, WorkspaceAgentRosterEntry,
     WorkspaceCapabilityPort, WorkspaceHumanRemovalOutcome, WorkspaceHumanRosterEntry,
     WorkspaceLeaveOutcome, WorkspaceMembershipAftermath, WorkspaceMembershipChanged,
-    WorkspaceMembershipPort, WorkspaceRoster, WorkspaceRosterRead,
+    WorkspaceMembershipPort, WorkspaceOwnershipTransferPort, WorkspaceRoster, WorkspaceRosterRead,
     WorkspaceViewerMembershipChangeKind, WorkspaceViewerMembershipChanged,
     may_edit_agent_capabilities, role_meets,
 };

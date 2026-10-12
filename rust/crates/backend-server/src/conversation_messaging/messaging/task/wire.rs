@@ -200,7 +200,7 @@ fn assignee_of(assignee: &Assignee, display: &TaskDisplaySidecars) -> Option<Act
         Assignee::User(user) => Some(ActorDto {
             kind: "user",
             id: Some(user.as_str().to_owned()),
-            name: name_or_id(display.assignee_user_name.as_deref(), user.as_str()),
+            name: user_name(display.assignee_user_name.as_deref()),
         }),
     }
 }
@@ -217,7 +217,7 @@ fn creator_of(creator: &Creator, display: &TaskDisplaySidecars) -> ActorDto {
         Creator::User(user) => ActorDto {
             kind: "user",
             id: Some(user.as_str().to_owned()),
-            name: name_or_id(display.creator_user_name.as_deref(), user.as_str()),
+            name: user_name(display.creator_user_name.as_deref()),
         },
         Creator::System => ActorDto {
             kind: "system",
@@ -229,6 +229,11 @@ fn creator_of(creator: &Creator, display: &TaskDisplaySidecars) -> ActorDto {
 
 /// The joined display name if the actor join matched, else the id — the parity of the TS
 /// `name ?? id`.
+/// A user id with no `users` row is a deleted account (task user ids carry no FK).
+fn user_name(name: Option<&str>) -> String {
+    name.unwrap_or("Deleted account").to_owned()
+}
+
 fn name_or_id(name: Option<&str>, id: &str) -> String {
     name.unwrap_or(id).to_owned()
 }

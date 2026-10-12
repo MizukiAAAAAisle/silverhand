@@ -3,6 +3,7 @@ import { useLocation } from "react-router-dom";
 import { useNav } from "@/router";
 import { AccountSkeleton } from "./components/account-skeleton";
 import { ChangePasswordForm } from "./components/change-password-form";
+import { DeleteAccountSection } from "./components/delete-account-section";
 import { RangeInput } from "@/components/ui/range-input";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
@@ -483,6 +484,7 @@ function AccountPane(): JSX.Element {
             </p>
           ) : null}
         </div>
+        <DeleteAccountSection handle={dto.name} />
       </div>
     </section>
   );
