@@ -211,7 +211,7 @@ export function NativeTitlebarSearch({
       }}
     >
       {/* Stands where the native field ends, so the results open beneath it. */}
-      <Popover.Anchor className="pointer-events-none fixed top-[env(safe-area-inset-top,0px)] left-1/2 h-0 w-[clamp(420px,52vw,720px)] -translate-x-1/2" />
+      <Popover.Anchor className="pointer-events-none fixed top-(--native-bar-bottom,env(safe-area-inset-top,0px)) left-1/2 h-0 w-[clamp(420px,52vw,720px)] -translate-x-1/2" />
       <Popover.Portal>
         <Popover.Content
           align="center"
