@@ -5,6 +5,7 @@ import {
   messageActivityLevel,
   type MessageActivityDay,
 } from "./message-activity-calendar";
+import { useCoarsePointer } from "@/navigation/layout";
 import "./message-activity.css";
 
 interface Props {
@@ -56,6 +57,10 @@ export function MessageActivityCalendar({
     fit && fitWeeks ? allCells.slice(-Math.min(fitWeeks * 7, allCells.length)) : allCells;
 
   const [focusedDate, setFocusedDate] = useState<string | null>(null);
+  // A tooltip opens on hover or keyboard focus, never on touch: on a touch
+  // screen a tap shows the day instead, until the next tap elsewhere.
+  const coarse = useCoarsePointer();
+  const [tappedDate, setTappedDate] = useState<string | null>(null);
 
   const scrollContainer = useRef<HTMLDivElement>(null);
 
@@ -131,8 +136,24 @@ export function MessageActivityCalendar({
               >
                 {cells.map((cell, index) =>
                   cell.visible ? (
-                    <Tooltip key={cell.date}>
-                      <TooltipTrigger asChild>
+                    <Tooltip
+                      key={cell.date}
+                      open={coarse ? tappedDate === cell.date : undefined}
+                      onOpenChange={(open) => {
+                        if (coarse && !open) {
+                          setTappedDate((date) => (date === cell.date ? null : date));
+                        }
+                      }}
+                    >
+                      <TooltipTrigger
+                        asChild
+                        onClick={(event) => {
+                          if (coarse) {
+                            event.preventDefault();
+                            setTappedDate(cell.date);
+                          }
+                        }}
+                      >
                         <button
                           type="button"
                           className="message-activity-cell"
