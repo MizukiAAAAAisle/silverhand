@@ -6,7 +6,12 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { Button } from "@/components/ui/button";
 import { resizeTextarea } from "@/features/messages/components/composer";
 import { EmptyConversation } from "@/features/conversation-shell/components/channel-view/empty-conversation";
-import { ConversationHeaderIdentity } from "@/features/conversation-shell/components/channel-view/conversation-header-identity";
+import {
+  ConversationHeaderIdentity,
+  useHeaderIdentityIcon,
+} from "@/features/conversation-shell/components/channel-view/conversation-header-identity";
+import { focusAgentSideSection } from "@/features/agents/components/agent-view";
+import { useNav } from "@/router";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { ApiError } from "@/lib/api";
 import type { DirectMessageTarget } from "./target";
@@ -61,8 +66,36 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
   // otherwise — so the title does not change under the user on convergence.
   const title =
     counterpart?.status === "active" ? counterpart.display_name.trim() || counterpart.name : "";
+  // The same title capsule the pair's own bar shows: the face and name, opening
+  // the agent's Activity or the human's profile.
+  const nav = useNav();
+  const titleIcon = useHeaderIdentityIcon("counterpart", counterpart ?? null);
+  const active = counterpart?.status === "active" ? counterpart : null;
   const native = useNativeBar(
-    counterpart ? { title, titleAction: null, actions: [], tabs: null, addTabs: null } : null,
+    counterpart
+      ? {
+          title,
+          titleAction: active
+            ? active.kind === "agent"
+              ? "Opens activity"
+              : "Opens profile"
+            : null,
+          titleIcon: active ? titleIcon : undefined,
+          actions: [],
+          tabs: null,
+          addTabs: null,
+        }
+      : null,
+    {
+      title: () => {
+        if (active?.kind === "agent") {
+          focusAgentSideSection(active.id, "activity");
+          nav.openAgentPanel(active.id);
+        } else if (active) {
+          nav.openHumanPanel(active.id);
+        }
+      },
+    },
   );
 
   const submit = (): void => {
@@ -158,8 +191,9 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
       </div>
 
       <form
+        data-composer
         onSubmit={onSubmit}
-        className="shrink-0 border-t border-border-subtle bg-bg-primary px-3 py-3"
+        className="shrink-0 border-t border-border-subtle bg-(--pane-bg,var(--bg-base)) px-3 py-3"
       >
         {initiate.isError ? (
           <div className="mb-2 text-xs text-error" role="alert">
@@ -170,24 +204,26 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
           data-composer-shell
           className="flex flex-col overflow-hidden rounded-(--control-radius) border border-border-subtle bg-bg-floating focus-within:border-border-focus"
         >
-          <textarea
-            ref={textareaRef}
-            autoFocus
-            value={draft}
-            data-composer-input
-            disabled={initiate.isPending}
-            onChange={(e) => {
-              attemptRef.current = undefined;
-              setDraft(e.target.value);
-            }}
-            onKeyDown={onKeyDown}
-            onCompositionStart={() => setComposing(true)}
-            onCompositionEnd={() => setComposing(false)}
-            aria-label={`Message ${title}`}
-            placeholder="Enter to send, Shift + Enter for a new line"
-            className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-          />
-          <div className="flex items-center justify-end px-2 py-1.5">
+          <div data-composer-editor>
+            <textarea
+              ref={textareaRef}
+              autoFocus
+              value={draft}
+              data-composer-input
+              disabled={initiate.isPending}
+              onChange={(e) => {
+                attemptRef.current = undefined;
+                setDraft(e.target.value);
+              }}
+              onKeyDown={onKeyDown}
+              onCompositionStart={() => setComposing(true)}
+              onCompositionEnd={() => setComposing(false)}
+              aria-label={`Message ${title}`}
+              placeholder="Message…"
+              className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+            />
+          </div>
+          <div data-composer-toolbar className="flex items-center justify-end px-2 py-1.5">
             <Button
               type="submit"
               variant="default"
@@ -195,6 +231,8 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
               disabled={sendDisabled}
               title="Send (Enter)"
               data-composer-action="send"
+              data-sticker
+              data-sticker-size="md"
               className="h-7"
             >
               {initiate.isPending ? "Sending…" : "Send"}
