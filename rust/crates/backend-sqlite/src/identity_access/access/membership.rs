@@ -13,11 +13,12 @@ use silverhand_backend_core::{
     identity_access::access::{
         AgentCapabilitySet, Capability, CapabilityReadOutcome, CapabilityReplaceOutcome,
         CapabilityReplacePreflight, HumanRoleChange, HumanRoleChangeOutcome,
-        WorkspaceAgentRemovalOutcome, WorkspaceAgentRemovalPreflight, WorkspaceAgentRosterEntry,
-        WorkspaceCapabilityPort, WorkspaceHumanRemovalOutcome, WorkspaceHumanRosterEntry,
-        WorkspaceLeaveOutcome, WorkspaceMembershipChanged, WorkspaceMembershipPort, WorkspaceRole,
-        WorkspaceRoster, WorkspaceRosterRead, WorkspaceViewerMembershipChangeKind,
-        WorkspaceViewerMembershipChanged, may_edit_agent_capabilities, role_meets,
+        OwnershipTransferOutcome, WorkspaceAgentRemovalOutcome, WorkspaceAgentRemovalPreflight,
+        WorkspaceAgentRosterEntry, WorkspaceCapabilityPort, WorkspaceHumanRemovalOutcome,
+        WorkspaceHumanRosterEntry, WorkspaceLeaveOutcome, WorkspaceMembershipChanged,
+        WorkspaceMembershipPort, WorkspaceOwnershipTransferPort, WorkspaceRole, WorkspaceRoster,
+        WorkspaceRosterRead, WorkspaceViewerMembershipChangeKind, WorkspaceViewerMembershipChanged,
+        may_edit_agent_capabilities, role_meets,
     },
 };
 use sqlx::Row;
@@ -270,6 +271,58 @@ async fn insert_departure_notices(
             })
         })
         .collect()
+}
+
+impl WorkspaceOwnershipTransferPort for SqliteAccessStore {
+    async fn transfer_ownership(
+        &self,
+        owner: &UserId,
+        workspace: &WorkspaceId,
+        target: &UserId,
+    ) -> Result<OwnershipTransferOutcome, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with(super::ROOT_WRITE_BEGIN)
+            .await
+            .map_err(failure)?;
+        if !regular_workspace(&mut *tx, workspace).await? {
+            return Ok(OwnershipTransferOutcome::WorkspaceNotFound);
+        }
+        match human_role(&mut *tx, workspace, owner).await? {
+            Some(WorkspaceRole::Owner) => {}
+            None => return Ok(OwnershipTransferOutcome::WorkspaceNotFound),
+            Some(_) => return Ok(OwnershipTransferOutcome::Forbidden),
+        }
+        if target == owner || human_role(&mut *tx, workspace, target).await?.is_none() {
+            return Ok(OwnershipTransferOutcome::MemberNotFound);
+        }
+        for (role, user) in [("admin", owner), ("owner", target)] {
+            sqlx::query("UPDATE workspace_users SET role=? WHERE workspace_id=? AND user_id=?")
+                .bind(role)
+                .bind(workspace.as_str())
+                .bind(user.as_str())
+                .execute(&mut *tx)
+                .await
+                .map_err(failure)?;
+        }
+        sqlx::query("UPDATE workspaces SET owner_user_id=? WHERE id=?")
+            .bind(target.as_str())
+            .bind(workspace.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(failure)?;
+        tx.commit().await.map_err(failure)?;
+        let changed = |user: &UserId, role| WorkspaceViewerMembershipChanged {
+            workspace_id: workspace.clone(),
+            user_id: user.clone(),
+            kind: WorkspaceViewerMembershipChangeKind::RoleChanged,
+            role: Some(role),
+        };
+        Ok(OwnershipTransferOutcome::Transferred {
+            previous_owner: changed(owner, WorkspaceRole::Admin),
+            new_owner: changed(target, WorkspaceRole::Owner),
+        })
+    }
 }
 
 impl WorkspaceMembershipPort for SqliteAccessStore {

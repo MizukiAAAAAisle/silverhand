@@ -6,6 +6,7 @@
 //! domain logic itself.
 
 pub mod access;
+pub mod account_deletion;
 pub mod agent_audit_read;
 pub mod agent_avatar;
 pub mod agent_avatar_write;

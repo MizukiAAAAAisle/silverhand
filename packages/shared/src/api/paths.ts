@@ -250,11 +250,13 @@ export const apiPaths = {
    *  is the member/admin counterpart of `workspace` DELETE (owner-only): it ends
    *  the caller's own workspace membership and, in the same transaction, EVERY
    *  channel membership they hold in that workspace. The owner is refused
-   *  (`owner_removal_unsupported`) — a workspace always has an owner and
-   *  ownership transfer is unsupported, so the owner's only exit is Delete.
+   *  (`owner_removal_unsupported`) — a workspace always has an owner, so the
+   *  owner first transfers ownership or deletes the workspace.
    *  Agents the caller enrolled here are NOT touched (shiki 2026-08-09).
    *  Regular workspace only (agent-home / DM containers 404). */
   workspaceLeave: (id: string) => `/api/workspaces/${id}/leave`,
+  /** Owner-only, one step: target human member becomes owner, caller becomes admin. */
+  workspaceTransferOwnership: (id: string) => `/api/workspaces/${id}/transfer-ownership`,
   /** Agent capability set within a workspace (graded-permissions cut 2).
    *  GET reads the effective set (any workspace viewer); PUT replaces it
    *  (workspace admin, or a member who created the target agent — #task:1777). */
@@ -468,6 +470,8 @@ export const apiPaths = {
   relatedUsers: '/api/users/related',
   mePassword: '/api/me/password',
   me: '/api/me',
+  /** GET: whether account deletion is offered and what still blocks it. */
+  meDeletion: '/api/me/deletion',
   embeddedProfileSetup: '/api/me/embedded-profile-setup',
   meAvatar: '/api/me/avatar',
   /** Public avatar fetch for any user. Returns the blob bytes (auth

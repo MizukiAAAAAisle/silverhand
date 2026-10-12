@@ -10,7 +10,7 @@ import type {
 } from "@silverhand/shared";
 import { apiPaths } from "@silverhand/shared";
 import { api } from "@/lib/api";
-import { capabilitiesKey, membersKey } from "./query-keys";
+import { capabilitiesKey, membersKey, workspacesKey } from "./query-keys";
 
 export function useAddWorkspaceMember(workspaceId: string | null) {
   const qc = useQueryClient();
@@ -149,6 +149,25 @@ export function useUpdateWorkspaceHumanMemberRole(workspaceId: string | null) {
     },
     onSettled: () => {
       if (workspaceId) qc.invalidateQueries({ queryKey: membersKey(workspaceId) });
+    },
+  });
+}
+
+/** Owner hands the workspace to another human member; the caller becomes admin. */
+export function useTransferWorkspaceOwnership(workspaceId: string | null) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (userId: string) => {
+      if (!workspaceId) throw new Error("no workspace selected");
+      await api<{ ok: true }>(apiPaths.workspaceTransferOwnership(workspaceId), {
+        method: "POST",
+        body: JSON.stringify({ user_id: userId }),
+      });
+    },
+    onSettled: () => {
+      if (!workspaceId) return;
+      qc.invalidateQueries({ queryKey: membersKey(workspaceId) });
+      qc.invalidateQueries({ queryKey: workspacesKey });
     },
   });
 }

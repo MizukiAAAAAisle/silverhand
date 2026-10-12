@@ -18,12 +18,12 @@ use silverhand_backend_core::{
     },
     identity_access::access::{
         AgentCapabilitySet, Capability, CapabilityReadOutcome, CapabilityReplaceOutcome,
-        CapabilityReplacePreflight, HumanRoleChangeOutcome, WorkspaceAgentRemovalOutcome,
-        WorkspaceAgentRemovalPreflight, WorkspaceCapabilityPort, WorkspaceGovernanceFactsRead,
-        WorkspaceGovernanceFloor, WorkspaceHumanRemovalOutcome, WorkspaceLeaveOutcome,
-        WorkspaceMembershipAftermath, WorkspaceMembershipChanged, WorkspaceMembershipPort,
-        WorkspaceRole, WorkspaceRoster, WorkspaceRosterRead, WorkspaceViewerMembershipChanged,
-        governance_floor_verdict,
+        CapabilityReplacePreflight, HumanRoleChangeOutcome, OwnershipTransferOutcome,
+        WorkspaceAgentRemovalOutcome, WorkspaceAgentRemovalPreflight, WorkspaceCapabilityPort,
+        WorkspaceGovernanceFactsRead, WorkspaceGovernanceFloor, WorkspaceHumanRemovalOutcome,
+        WorkspaceLeaveOutcome, WorkspaceMembershipAftermath, WorkspaceMembershipChanged,
+        WorkspaceMembershipPort, WorkspaceOwnershipTransferPort, WorkspaceRole, WorkspaceRoster,
+        WorkspaceRosterRead, WorkspaceViewerMembershipChanged, governance_floor_verdict,
     },
 };
 
@@ -34,6 +34,7 @@ pub const HUMAN_ROLE_PATH: &str = "/api/workspaces/{id}/members/users/{user_id}/
 pub const AGENT_MEMBER_PATH: &str = "/api/workspaces/{id}/members/{agent_id}";
 pub const HUMAN_MEMBER_PATH: &str = "/api/workspaces/{id}/members/users/{user_id}";
 pub const LEAVE_PATH: &str = "/api/workspaces/{id}/leave";
+pub const TRANSFER_OWNERSHIP_PATH: &str = "/api/workspaces/{id}/transfer-ownership";
 pub const CAPABILITIES_PATH: &str = "/api/workspaces/{id}/agents/{agent_id}/capabilities";
 
 #[derive(Clone)]
@@ -66,6 +67,79 @@ where
             get(read_capabilities::<P, A>).put(replace_capabilities::<P, A>),
         )
         .with_state(MembershipState { port, aftermath })
+}
+
+/// `POST /api/workspaces/{id}/transfer-ownership` `{"user_id"}` — one-step handover.
+pub fn ownership_transfer_router<P, A>(port: P, aftermath: A) -> Router
+where
+    P: WorkspaceOwnershipTransferPort,
+    A: WorkspaceMembershipAftermath,
+{
+    Router::new()
+        .route(TRANSFER_OWNERSHIP_PATH, post(transfer_ownership::<P, A>))
+        .with_state(TransferState { port, aftermath })
+}
+
+#[derive(Clone)]
+struct TransferState<P, A> {
+    port: P,
+    aftermath: A,
+}
+
+#[derive(Debug, Deserialize, Validate)]
+struct TransferBody {
+    #[garde(skip)]
+    user_id: String,
+}
+
+async fn transfer_ownership<P, A>(
+    State(state): State<TransferState<P, A>>,
+    viewer: Option<Extension<UserId>>,
+    Path(raw_workspace): Path<String>,
+    ValidatedJson(body): ValidatedJson<TransferBody>,
+) -> Response
+where
+    P: WorkspaceOwnershipTransferPort,
+    A: WorkspaceMembershipAftermath,
+{
+    let (owner, _) = match human_principal(viewer, "workspace_ownership_transfer") {
+        Ok(value) => value,
+        Err(value) => return value,
+    };
+    let workspace = match workspace(raw_workspace) {
+        Ok(value) => value,
+        Err(value) => return value,
+    };
+    let target = match user(body.user_id) {
+        Ok(value) => value,
+        Err(value) => return value,
+    };
+    match state
+        .port
+        .transfer_ownership(&owner, &workspace, &target)
+        .await
+    {
+        Ok(OwnershipTransferOutcome::Transferred {
+            previous_owner,
+            new_owner,
+        }) => {
+            announce_viewer(&state.aftermath, &previous_owner).await;
+            announce_viewer(&state.aftermath, &new_owner).await;
+            Json(serde_json::json!({"ok": true})).into_response()
+        }
+        Ok(OwnershipTransferOutcome::WorkspaceNotFound) => {
+            response(StatusCode::NOT_FOUND, "workspace not found", None)
+        }
+        Ok(OwnershipTransferOutcome::Forbidden) => {
+            response(StatusCode::FORBIDDEN, "forbidden", None)
+        }
+        Ok(OwnershipTransferOutcome::MemberNotFound) => response(
+            StatusCode::NOT_FOUND,
+            "workspace human member not found",
+            None,
+        ),
+        Err(cause) => failed("workspace ownership transfer failed", &cause),
+    }
 }
 
 #[allow(clippy::result_large_err)]

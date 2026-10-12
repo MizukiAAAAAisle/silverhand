@@ -232,6 +232,29 @@ pub trait WorkspaceMembershipPort: Clone + Send + Sync + 'static {
     ) -> impl Future<Output = Result<WorkspaceLeaveOutcome, PersistenceFailure>> + Send;
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OwnershipTransferOutcome {
+    WorkspaceNotFound,
+    Forbidden,
+    MemberNotFound,
+    /// Both role edges, committed in one transaction.
+    Transferred {
+        previous_owner: WorkspaceViewerMembershipChanged,
+        new_owner: WorkspaceViewerMembershipChanged,
+    },
+}
+
+/// One-step owner handover of a regular workspace: the current owner names another
+/// human member, who becomes owner; the previous owner becomes admin.
+pub trait WorkspaceOwnershipTransferPort: Clone + Send + Sync + 'static {
+    fn transfer_ownership(
+        &self,
+        owner: &UserId,
+        workspace: &WorkspaceId,
+        target: &UserId,
+    ) -> impl Future<Output = Result<OwnershipTransferOutcome, PersistenceFailure>> + Send;
+}
+
 /// Capability list/replace lives on the existing agent-capability axis.  The
 /// replacement is an atomic set write whose authorization and membership check
 /// are replayed after the write lock is acquired.

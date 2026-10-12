@@ -23,6 +23,7 @@
 //! own SQL, transaction semantics, and error taxonomy.
 
 pub mod access;
+pub mod account_deletion;
 pub mod agent_audit_read;
 pub mod agent_avatar_read;
 pub mod agent_detail_read;

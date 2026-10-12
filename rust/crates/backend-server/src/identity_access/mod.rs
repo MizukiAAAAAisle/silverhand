@@ -7,6 +7,7 @@
 //! write admission remains a separate private wire leaf beside the self-profile write handler.
 
 pub mod access;
+pub mod account_deletion;
 pub mod agent_audit;
 pub mod agent_avatar;
 pub mod agent_avatar_write;
