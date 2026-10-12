@@ -30,6 +30,11 @@
   :root[data-theme="iris"] [data-section-sheet] {
     border: 1px solid var(--border-subtle);
   }
+  /* Glass separates its panes by shadow and tint over the wallpaper; on the
+     plain frame they keep a hairline edge instead. */
+  :root[data-theme="glass"] {
+    --pane-border: 1px solid var(--border-subtle);
+  }
 }
 /* iOS navigation bar: back, centered title, page action. Equal side columns
    keep the title centered whatever the sides hold. */
