@@ -7,7 +7,8 @@ import "./mobile.css";
 // This WebView has one native profile. Never retain server-scoped browser state
 // across logout or origin changes, including modules hydrated at import time.
 // Appearance is a device preference, not server state, so it survives.
-const DEVICE_PREFERENCE_KEYS = ["silverhand:appearance"];
+const APPEARANCE_KEY = "silverhand:appearance";
+const DEVICE_PREFERENCE_KEYS = [APPEARANCE_KEY];
 
 function resetApplication(): void {
   const kept = DEVICE_PREFERENCE_KEYS.map((key) => [key, localStorage.getItem(key)] as const);
@@ -24,6 +25,10 @@ function resetApplication(): void {
 async function start(): Promise<void> {
   const root = document.getElementById("root");
   if (!root) throw new Error("Missing root element");
+  // The phone's default theme. A stored choice, once made, is kept.
+  if (localStorage.getItem(APPEARANCE_KEY) === null) {
+    localStorage.setItem(APPEARANCE_KEY, JSON.stringify({ theme: "glass" }));
+  }
   await nativeBridge.addListener("sessionInvalidated", resetApplication);
   // Keep the React tree and pending send identities alive across suspension.
   // Native closes sockets in the background; resume revalidates and refetches.
