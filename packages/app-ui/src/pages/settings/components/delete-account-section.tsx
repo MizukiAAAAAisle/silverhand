@@ -30,7 +30,7 @@ interface Preflight {
 function BlockerList({ blockers }: { blockers: Blockers }): JSX.Element {
   return (
     <div className="flex flex-col gap-1 text-xs text-text-muted">
-      <p>Before deleting your account:</p>
+      <p>Resolve the following before deleting:</p>
       <ul className="list-disc pl-4">
         {blockers.workspaces.map((w) => (
           <li key={w.id}>{`Transfer ownership of or delete the workspace “${w.name}”`}</li>
@@ -56,8 +56,7 @@ export function DeleteAccountSection({ handle }: { handle: string }): JSX.Elemen
       <div className="min-w-0">
         <p className="text-xs font-medium text-text-secondary">Delete account</p>
         <p className="text-(length:--text-meta) text-text-muted">
-          Permanently removes your account. Messages and attachments you sent stay in their
-          conversations.
+          Permanently delete this account.
         </p>
       </div>
       <Button
@@ -143,9 +142,8 @@ function DeleteAccountDialog({
           <DialogTitle>Delete your account?</DialogTitle>
         </DialogHeader>
         <DialogDescription className="text-sm leading-relaxed text-text-muted">
-          This signs you out everywhere and removes your account data, memberships, and computers.
-          Messages, attachments, and tasks you created stay in their conversations and show as from
-          a deleted account. This cannot be undone.
+          Account data, memberships, and computers will be removed. Messages and attachments remain
+          in their conversations. This action cannot be undone.
         </DialogDescription>
         {blocked && shown ? (
           <BlockerList blockers={shown} />
