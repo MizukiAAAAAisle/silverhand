@@ -1,6 +1,7 @@
 import type { JSX } from "react";
 import type { AppUpdateState } from "@silverhand/client";
 import { Button } from "@/components/ui/button";
+import { SpinnerIcon } from "@/icons";
 import {
   Dialog,
   DialogContent,
@@ -20,8 +21,8 @@ function describe(state: AppUpdateState): string {
   switch (state.status) {
     case "idle":
       return state.lastCheckedAt === null
-        ? "Silverhand has not checked for updates yet."
-        : "Silverhand is up to date.";
+        ? `Silverhand ${state.currentVersion} has not checked for updates yet.`
+        : `Silverhand ${state.currentVersion} is the latest version.`;
     case "checking":
       return "Checking for updates…";
     case "available":
@@ -54,7 +55,12 @@ export function AppUpdateDialog(): JSX.Element | null {
       <DialogContent className="max-w-md">
         <DialogHeader>
           <DialogTitle>Software update</DialogTitle>
-          <DialogDescription>{describe(state)}</DialogDescription>
+          <DialogDescription className="flex items-center gap-2">
+            {state.status === "checking" ? (
+              <SpinnerIcon aria-hidden className="size-3.5 shrink-0 motion-safe:animate-spin" />
+            ) : null}
+            <span>{describe(state)}</span>
+          </DialogDescription>
         </DialogHeader>
         {state.status === "downloading" ? (
           <div
@@ -88,9 +94,22 @@ export function AppUpdateDialog(): JSX.Element | null {
             <Button variant="primary" onClick={() => void appUpdateActions.download()}>
               {state.status === "error" ? "Retry download" : "Download"}
             </Button>
-          ) : state.status === "idle" || state.status === "error" ? (
-            <Button variant="neutral" onClick={() => void appUpdateActions.check()}>
-              Check again
+          ) : state.status === "error" ? (
+            <>
+              <Button variant="neutral" onClick={() => void appUpdateActions.check()}>
+                Try Again
+              </Button>
+              <Button variant="primary" onClick={closeAppUpdateDialog}>
+                OK
+              </Button>
+            </>
+          ) : state.status === "idle" && state.lastCheckedAt === null ? (
+            <Button variant="primary" onClick={() => void appUpdateActions.check()}>
+              Check for Updates
+            </Button>
+          ) : state.status === "idle" ? (
+            <Button variant="primary" onClick={closeAppUpdateDialog}>
+              OK
             </Button>
           ) : null}
         </DialogFooter>

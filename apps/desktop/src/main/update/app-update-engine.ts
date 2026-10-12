@@ -66,5 +66,5 @@ export function createAppUpdateController(logger?: UpdaterLogger): AppUpdateCont
   if (!existsSync(join(process.resourcesPath, 'app-update.yml'))) return null;
   const updater = new MacUpdater();
   updater.logger = logger ?? null;
-  return new AppUpdateController(createElectronUpdaterEngine(updater));
+  return new AppUpdateController(createElectronUpdaterEngine(updater), app.getVersion());
 }

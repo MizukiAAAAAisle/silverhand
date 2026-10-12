@@ -15,7 +15,7 @@ export const APP_UPDATE_CHECK_INTERVAL_MS = 60 * 60 * 1000;
 
 /** Owns the single update state; checks never download, downloads and installs need a user action. */
 export class AppUpdateController {
-  private state: AppUpdateState = { status: 'idle', lastCheckedAt: null };
+  private state: AppUpdateState;
   private readonly listeners = new Set<(state: AppUpdateState) => void>();
   private inflightCheck: Promise<void> | null = null;
   private inflightDownload: Promise<void> | null = null;
@@ -25,8 +25,11 @@ export class AppUpdateController {
 
   constructor(
     private readonly engine: AppUpdateEngine,
+    private readonly currentVersion: string,
     private readonly now: () => number = Date.now,
-  ) {}
+  ) {
+    this.state = { status: 'idle', currentVersion, lastCheckedAt: null };
+  }
 
   getState(): AppUpdateState {
     return this.state;
@@ -65,7 +68,7 @@ export class AppUpdateController {
           this.set(
             found
               ? { status: 'available', version: found.version }
-              : { status: 'idle', lastCheckedAt: this.now() },
+              : { status: 'idle', currentVersion: this.currentVersion, lastCheckedAt: this.now() },
           ),
         (err: unknown) =>
           this.set(

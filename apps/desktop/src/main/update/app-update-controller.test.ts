@@ -20,7 +20,7 @@ function harness(overrides: Partial<AppUpdateEngine> = {}) {
     quitAndInstall: vi.fn(),
     ...overrides,
   };
-  const controller = new AppUpdateController(engine, () => 42);
+  const controller = new AppUpdateController(engine, '1.1.0', () => 42);
   const states: AppUpdateState[] = [];
   controller.subscribe((s) => states.push(s));
   return { engine, controller, states };
@@ -45,7 +45,11 @@ describe('AppUpdateController', () => {
   it('reports up to date with the check time', async () => {
     const { controller } = harness({ check: vi.fn(async () => null) });
     await controller.check();
-    expect(controller.getState()).toEqual({ status: 'idle', lastCheckedAt: 42 });
+    expect(controller.getState()).toEqual({
+      status: 'idle',
+      currentVersion: '1.1.0',
+      lastCheckedAt: 42,
+    });
   });
 
   it('checks on start and then every interval', async () => {

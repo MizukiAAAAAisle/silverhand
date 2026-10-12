@@ -88,7 +88,8 @@ export type AppUpdateInstallMode = "now" | "on-quit";
 
 /** One app-wide update state; every entry point reads it and acts through the same capability. */
 export type AppUpdateState =
-  | { status: "idle"; lastCheckedAt: number | null }
+  /** `currentVersion` is the running build, so "up to date" can say which one. */
+  | { status: "idle"; currentVersion: string; lastCheckedAt: number | null }
   | { status: "checking" }
   | { status: "available"; version: string }
   | { status: "downloading"; version: string; transferred: number; total: number | null }
