@@ -24,6 +24,12 @@
   :root[data-theme="poster"][data-layout="regular"] .app-shell {
     background-color: var(--bg-app);
   }
+  /* Iris draws its sheet with a shadow, which the gradient paper sets off.
+     On the plain frame it needs an edge, and a border: the frame clips the
+     shadow above the sheet. */
+  :root[data-theme="iris"] [data-section-sheet] {
+    border: 1px solid var(--border-subtle);
+  }
 }
 /* iOS navigation bar: back, centered title, page action. Equal side columns
    keep the title centered whatever the sides hold. */

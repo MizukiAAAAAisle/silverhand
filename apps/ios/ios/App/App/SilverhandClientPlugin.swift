@@ -191,6 +191,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         host.titlebar.state = state
         host.titlebar.onEvent = { [weak self] event in self?.notifyListeners("titlebar", data: event) }
         host.applyBars()
+        host.observeContentScroll()
       }
       call.resolve()
     }

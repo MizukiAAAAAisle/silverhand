@@ -388,10 +388,12 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
         // as it scrolls beneath them. A bar of glass capsules alone (its
         // title one too), over a page's own backdrop, or a Tab root's large
         // title lets the page show through instead, under the page's own
-        // wash.
+        // wash. The wide layout's titlebar has its own row above the page,
+        // so nothing scrolls beneath it.
         let page = self.pageBar.state != nil
         let clear =
-          self.pageBar.state.map {
+          self.titlebar.state != nil
+          || self.pageBar.state.map {
             $0.titleIcon != nil || $0.backdrop || ($0.largeTitle && $0.back == nil)
           } ?? false
         host.setContentScrollView(page ? scroller : nil, for: .top)
