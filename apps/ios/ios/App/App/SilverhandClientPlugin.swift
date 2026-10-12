@@ -9,6 +9,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   public let jsName = "SilverhandClient"
   public let pluginMethods: [CAPPluginMethod] = [
     "getProfile", "saveProfile", "clearProfile", "authState", "authenticate", "logout", "request",
+    "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal",
     "navigationSync", "navigationReset",
     "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "sharePng", "saveAttachment",
@@ -304,6 +305,28 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         body: call.getString("bodyText"),
         headers: call.getObject("headers") as? [String: String] ?? [:],
         binary: call.getString("responseType") == "arrayBuffer")
+    }
+  }
+  @objc public func upload(_ call: CAPPluginCall) {
+    let fields = (call.getArray("fields") as? [[String: Any]] ?? []).compactMap {
+      field -> (name: String, value: String)? in
+      guard let name = field["name"] as? String, let value = field["value"] as? String else {
+        return nil
+      }
+      return (name, value)
+    }
+    let files = (call.getArray("files") as? [[String: Any]] ?? []).compactMap {
+      file -> ClientSession.UploadFile? in
+      guard let fieldName = file["fieldName"] as? String,
+        let filename = file["filename"] as? String,
+        let base64 = file["base64"] as? String, let data = Data(base64Encoded: base64)
+      else { return nil }
+      return ClientSession.UploadFile(
+        fieldName: fieldName, filename: filename,
+        contentType: file["contentType"] as? String ?? "application/octet-stream", data: data)
+    }
+    run(call) {
+      try await $0.upload(path: call.getString("path") ?? "", fields: fields, files: files)
     }
   }
   @objc public func openSocket(_ call: CAPPluginCall) {

@@ -12,7 +12,7 @@ import { NativeEventSocket } from "./event-socket";
 import { createIOSNavigation } from "./navigation";
 import { createIOSTitlebar } from "./titlebar";
 import { createIOSPageBar } from "./page-bar";
-import { createIOSFiles } from "./files";
+import { createIOSFiles, encodeBytes } from "./files";
 
 function parse(text?: string): unknown {
   try {
@@ -160,9 +160,17 @@ export function createIOSPlatform(
         }
         return response;
       },
-      backendUpload: async () => {
-        throw new Error("Attachments are not available in this iOS preview");
-      },
+      backendUpload: (input) =>
+        bridge.upload({
+          path: input.path,
+          fields: input.fields,
+          files: input.files.map((file) => ({
+            fieldName: file.fieldName,
+            filename: file.filename,
+            contentType: file.contentType,
+            base64: encodeBytes(file.bytes),
+          })),
+        }),
       recordEventWsDiagnostic: async () => {},
       onEpochUpdateRequired: (handler) => {
         epochHandlers.add(handler);

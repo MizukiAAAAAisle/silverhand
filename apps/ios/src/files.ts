@@ -41,7 +41,7 @@ export function createIOSFiles(bridge: NativeBridge): ClientPlatform["files"] {
   };
 }
 
-function encodeBytes(bytes: Uint8Array): string {
+export function encodeBytes(bytes: Uint8Array): string {
   let binary = "";
   for (let start = 0; start < bytes.length; start += 8192) {
     binary += String.fromCharCode(...bytes.subarray(start, start + 8192));

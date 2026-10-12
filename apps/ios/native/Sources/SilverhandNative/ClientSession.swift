@@ -244,15 +244,89 @@ public final class ClientSession {
   ) async throws -> [String: Any] {
     try checkStorage()
     guard let record, let token = record.token else { throw ClientError.unauthorized }
+    try checkAPIPath(path)
+    let outgoing = try request(
+      origin: record.serverURL, path: path, method: method, token: token, body: body,
+      headers: headers)
+    return try await send(outgoing, path: path, method: method, binary: binary)
+  }
+
+  public struct UploadFile {
+    public let fieldName: String
+    public let filename: String
+    public let contentType: String
+    public let data: Data
+
+    public init(fieldName: String, filename: String, contentType: String, data: Data) {
+      self.fieldName = fieldName
+      self.filename = filename
+      self.contentType = contentType
+      self.data = data
+    }
+  }
+
+  /// A multipart POST under the same rules as `proxy`: an API path on the
+  /// selected server, the stored bearer, and no result after the session changed.
+  public func upload(
+    path: String, fields: [(name: String, value: String)], files: [UploadFile]
+  ) async throws -> [String: Any] {
+    try checkStorage()
+    guard let record, let token = record.token else { throw ClientError.unauthorized }
+    try checkAPIPath(path)
+    let boundary = "silverhand-\(UUID().uuidString)"
+    var outgoing = try request(
+      origin: record.serverURL, path: path, method: "POST", token: token,
+      headers: ["Content-Type": "multipart/form-data; boundary=\(boundary)"])
+    outgoing.httpBody = Self.multipart(boundary: boundary, fields: fields, files: files)
+    return try await send(outgoing, path: path, method: "POST", binary: false)
+  }
+
+  /// Names and types become header text, so a quote or line break in them
+  /// would end the header early. They are escaped the way browsers encode
+  /// form data, which the server's parser reads back.
+  static func multipart(
+    boundary: String, fields: [(name: String, value: String)], files: [UploadFile]
+  ) -> Data {
+    func header(_ value: String) -> String {
+      value
+        .replacingOccurrences(of: "\"", with: "%22")
+        .replacingOccurrences(of: "\r", with: "%0D")
+        .replacingOccurrences(of: "\n", with: "%0A")
+    }
+    var body = Data()
+    for field in fields {
+      body.append(
+        Data(
+          "--\(boundary)\r\nContent-Disposition: form-data; name=\"\(header(field.name))\"\r\n\r\n"
+            .utf8))
+      body.append(Data(field.value.utf8))
+      body.append(Data("\r\n".utf8))
+    }
+    for file in files {
+      body.append(
+        Data(
+          ("--\(boundary)\r\nContent-Disposition: form-data; name=\"\(header(file.fieldName))\"; "
+            + "filename=\"\(header(file.filename))\"\r\n"
+            + "Content-Type: \(header(file.contentType))\r\n\r\n").utf8))
+      body.append(file.data)
+      body.append(Data("\r\n".utf8))
+    }
+    body.append(Data("--\(boundary)--\r\n".utf8))
+    return body
+  }
+
+  private func checkAPIPath(_ path: String) throws {
     guard let decoded = path.removingPercentEncoding, decoded.hasPrefix("/api/"),
       !decoded.contains("\\"),
       !decoded.split(separator: "/").contains(where: { $0 == "." || $0 == ".." })
     else { throw ClientError.invalidPath }
+  }
+
+  private func send(
+    _ outgoing: URLRequest, path: String, method: String, binary: Bool
+  ) async throws -> [String: Any] {
     let captured = generation
-    let response = try await fetch(
-      request(
-        origin: record.serverURL, path: path, method: method, token: token, body: body,
-        headers: headers))
+    let response = try await fetch(outgoing)
     try check(captured)
     if response.status == 401
       || (path == contract.mePassword && method == "POST" && (200..<300).contains(response.status))

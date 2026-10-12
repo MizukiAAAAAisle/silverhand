@@ -270,4 +270,66 @@ final class ClientSessionTests: XCTestCase {
     XCTAssertEqual(request?.value(forHTTPHeaderField: "Authorization"), "Bearer A-secret")
     XCTAssertNil(store.value?.token)
   }
+
+  func testUploadKeepsProxyBoundariesAndEncodesTheForm() async throws {
+    let store = MemoryStore(initial)
+    var requests: [URLRequest] = []
+    var status = 201
+    let client = try ClientSession(
+      store: store,
+      fetch: { request in
+        requests.append(request)
+        return self.response(status)
+      })
+    let file = ClientSession.UploadFile(
+      fieldName: "file", filename: "a\"b.png", contentType: "image/png", data: Data([1, 2]))
+    for path in ["/auth/login", "/api/../auth/login", "https://evil.example/api/x"] {
+      do {
+        _ = try await client.upload(path: path, fields: [], files: [file])
+        XCTFail(path)
+      } catch {}
+    }
+    XCTAssertTrue(requests.isEmpty)
+
+    _ = try await client.upload(
+      path: "/api/agents/a/direct-messages", fields: [("payload", "{}")], files: [file])
+    let sent = try XCTUnwrap(requests.last)
+    XCTAssertEqual(sent.httpMethod, "POST")
+    XCTAssertEqual(sent.url?.host, "a.example")
+    XCTAssertEqual(sent.value(forHTTPHeaderField: "Authorization"), "Bearer A-secret")
+    let type = try XCTUnwrap(sent.value(forHTTPHeaderField: "Content-Type"))
+    let boundary = try XCTUnwrap(type.components(separatedBy: "boundary=").last)
+    let body = try XCTUnwrap(sent.httpBody)
+    let text = String(decoding: body, as: UTF8.self)
+    XCTAssertTrue(text.hasPrefix("--\(boundary)\r\n"))
+    XCTAssertTrue(text.contains("name=\"payload\"\r\n\r\n{}\r\n"))
+    XCTAssertTrue(text.contains("filename=\"a%22b.png\"\r\nContent-Type: image/png\r\n\r\n"))
+    XCTAssertTrue(body.range(of: Data([1, 2, 13, 10])) != nil)
+    XCTAssertTrue(text.hasSuffix("--\(boundary)--\r\n"))
+
+    status = 401
+    _ = try await client.upload(path: "/api/x", fields: [], files: [file])
+    XCTAssertNil(store.value?.token)
+  }
+
+  func testLateUploadResultIsRejectedAfterSessionChange() async throws {
+    let store = MemoryStore(initial)
+    var continuation: CheckedContinuation<HTTPResult, Never>?
+    let client = try ClientSession(
+      store: store,
+      fetch: { request in
+        if request.url?.path == "/api/upload" {
+          return await withCheckedContinuation { continuation = $0 }
+        }
+        return self.info
+      })
+    let pending = Task { try await client.upload(path: "/api/upload", fields: [], files: []) }
+    while continuation == nil { await Task.yield() }
+    _ = try await client.saveProfile("https://b.example")
+    continuation?.resume(returning: response(401))
+    do {
+      _ = try await pending.value
+      XCTFail("must reject stale result")
+    } catch {}
+  }
 }

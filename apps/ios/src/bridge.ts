@@ -53,6 +53,11 @@ export interface NativeBridge {
   authenticate(input: { action: "login" | "signup"; body: string }): Promise<ClientAuthResult>;
   logout(): Promise<void>;
   request(input: BackendProxyRequest): Promise<BackendProxyResponse & { bodyBase64?: string }>;
+  upload(input: {
+    path: string;
+    fields: Array<{ name: string; value: string }>;
+    files: Array<{ fieldName: string; filename: string; contentType: string; base64: string }>;
+  }): Promise<BackendProxyResponse>;
   openSocket(input: { id: string; url: string }): Promise<void>;
   sendSocket(input: { id: string; data: string }): Promise<void>;
   closeSocket(input: { id: string }): Promise<void>;

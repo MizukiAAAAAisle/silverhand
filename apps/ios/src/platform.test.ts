@@ -39,6 +39,12 @@ function harness() {
     saveProfile: vi.fn(),
     clearProfile: vi.fn(),
     request: vi.fn(),
+    upload: vi.fn(async () => ({
+      status: 201,
+      headers: {},
+      statusText: "Created",
+      bodyText: "{}",
+    })),
     authenticate: vi.fn(),
     logout: vi.fn(),
     addListener: vi.fn(async () => ({ remove: vi.fn() })),
@@ -178,12 +184,27 @@ describe("iOS platform", () => {
     ).toEqual(new Uint8Array([0, 255, 128]));
   });
 
-  it("omits external attachment opening and rejects unsupported uploads", async () => {
-    const { platform } = harness();
+  it("omits external attachment opening and sends uploads through the native session", async () => {
+    const { native, platform } = harness();
     expect(platform.files.openAttachmentExternal).toBeUndefined();
-    await expect(
-      platform.client.backendUpload({ path: "/api/upload", fields: [], files: [] }),
-    ).rejects.toThrow("not available");
+    const response = await platform.client.backendUpload({
+      path: "/api/upload",
+      fields: [{ name: "payload", value: "{}" }],
+      files: [
+        {
+          fieldName: "file",
+          filename: "a.png",
+          contentType: "image/png",
+          bytes: new Uint8Array([0, 255, 128]),
+        },
+      ],
+    });
+    expect(response.status).toBe(201);
+    expect(native.upload).toHaveBeenCalledWith({
+      path: "/api/upload",
+      fields: [{ name: "payload", value: "{}" }],
+      files: [{ fieldName: "file", filename: "a.png", contentType: "image/png", base64: "AP+A" }],
+    });
   });
 
   it("keeps native admission and route resource tied to shared authority", () => {
