@@ -1,4 +1,5 @@
 import { AGENT_HOME_SOURCE } from "../model/workspace-source";
+import { useCompactLayout } from "@/navigation/layout";
 import { useQueryClient } from "@tanstack/react-query";
 import {
   AgentWorkspaceBrowser,
@@ -60,7 +61,7 @@ interface AgentWorkspacePaneProps {
 /**
  * #task:811 — the members-page view of the agent's **home** workspace files
  * (its L1 identity dir). A thin home preset over
- * `AgentWorkspaceContainer`: home source, wide two-column layout.
+ * `AgentWorkspaceContainer`: home source, two columns, or the drill-in on a phone.
  *
  * No physical coordinate is named here on purpose: the home dir lives under
  * the agent's computer slot (`resolveComputerSlotPaths(...).agents` in
@@ -74,5 +75,15 @@ interface AgentWorkspacePaneProps {
  * appear in the tree, no wire churn.
  */
 export function AgentWorkspacePane({ agentId }: AgentWorkspacePaneProps): JSX.Element {
-  return <AgentWorkspaceContainer agentId={agentId} source={AGENT_HOME_SOURCE} layout="full" />;
+  // A phone has no room for the tree beside the preview: it drills in.
+  const compact = useCompactLayout();
+
+  return (
+    <AgentWorkspaceContainer
+      key={compact ? "compact" : "full"}
+      agentId={agentId}
+      source={AGENT_HOME_SOURCE}
+      layout={compact ? "compact" : "full"}
+    />
+  );
 }
