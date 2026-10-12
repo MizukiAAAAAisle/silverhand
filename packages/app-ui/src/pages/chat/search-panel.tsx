@@ -1,6 +1,6 @@
 import { IdentitySearchResults } from "@/features/search/identity-search-results";
 import { SearchResultItem, type SearchItem } from "@/features/search/search-result-item";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import * as Select from "@radix-ui/react-select";
 import dayjs from "dayjs";
 import {
@@ -103,6 +103,14 @@ export function SearchPanel({
   onOpenConversation,
 }: SearchPanelProps): JSX.Element {
   const [query, setQuery] = useState(initialQuery ?? "");
+  const queryInput = useRef<HTMLInputElement>(null);
+
+  // Focusing scrolls the field into view. While a push slides the page in,
+  // that scrolls the clipping page stack sideways, and the page jumps.
+  useEffect(() => {
+    queryInput.current?.focus({ preventScroll: true });
+  }, []);
+
   const filterDisclosure = useFilterDisclosure();
   // Filters are App-owned (controlled) so they persist across pane switches
   // for the session (#task:1259). Query stays local (see SearchPanelProps).
@@ -192,7 +200,7 @@ export function SearchPanel({
           <div className="relative">
             <SearchIcon className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-text-muted" />
             <Input
-              autoFocus
+              ref={queryInput}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
