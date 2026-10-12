@@ -43,6 +43,12 @@ async function start(): Promise<void> {
     else style.removeProperty("--input-safe-area-bottom");
   });
   await installDeviceChrome(nativeBridge);
+  // A reloaded page (logout, a new server) starts with no bars; native still
+  // draws the ones the last page declared until told otherwise.
+  await Promise.all([
+    nativeBridge.titlebar({ state: null }),
+    nativeBridge.pageBar({ state: null }),
+  ]);
   configurePlatform(createIOSPlatform(nativeBridge, resetApplication));
   await nativeBridge.getProfile();
   mountApp(root, { loginFirst: true, showServerAddress: true });

@@ -17,7 +17,13 @@ vi.mock("@silverhand/app-ui", () => ({
 }));
 
 vi.mock("./bridge", () => ({
-  nativeBridge: { getProfile: h.profile, saveProfile: h.save, addListener: h.listen },
+  nativeBridge: {
+    getProfile: h.profile,
+    saveProfile: h.save,
+    addListener: h.listen,
+    titlebar: vi.fn(async () => {}),
+    pageBar: vi.fn(async () => {}),
+  },
 }));
 
 vi.mock("./platform", () => ({ createIOSPlatform: () => ({}) }));

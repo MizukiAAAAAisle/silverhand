@@ -15,7 +15,23 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
+  /// The current value of each state event (bar metrics, the fold). A page
+  /// loaded again (logout, a new server) listens anew while native still
+  /// holds the same value, so every new listener gets it first.
+  @MainActor private var states: [String: [String: Any]] = [:]
   private var observers: [NSObjectProtocol] = []
+
+  @MainActor func publishState(_ event: String, _ data: [String: Any]) {
+    states[event] = data
+    notifyListeners(event, data: data)
+  }
+
+  public override func addEventListener(_ eventName: String, listener: CAPPluginCall) {
+    super.addEventListener(eventName, listener: listener)
+    Task { @MainActor in
+      if let data = states[eventName] { notifyListeners(eventName, data: data) }
+    }
+  }
 
   public override func load() {
     observers.append(
@@ -385,7 +401,7 @@ class SilverhandViewController: CAPBridgeViewController {
     guard next != fold else { return }
     fold = next
     let data: [String: Any] = next.map { ["axis": $0.axis, "start": $0.start, "end": $0.end] } ?? [:]
-    plugin.notifyListeners("fold", data: data, retainUntilConsumed: true)
+    plugin.publishState("fold", data)
   }
 
   /// Where the page's bars end, for the page to clear them: `bottom` of the
@@ -395,7 +411,7 @@ class SilverhandViewController: CAPBridgeViewController {
     let next = ["bottom": bottom, "tabs": tabs]
     guard next != barMetrics else { return }
     barMetrics = next
-    plugin.notifyListeners("barMetrics", data: next, retainUntilConsumed: true)
+    plugin.publishState("barMetrics", next)
   }
 }
 
