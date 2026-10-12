@@ -191,7 +191,9 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       }
       setNeedsStatusBarAppearanceUpdate()
     }
-    stack.setNavigationBarHidden(next.bars == .none, animated: false)
+    // A web modal's backdrop cannot cover native chrome, so the bars leave
+    // while one is open.
+    stack.setNavigationBarHidden(next.bars == .none || blocked, animated: false)
     place(next.bars, in: host, stack: stack)
     guard fade else { return }
     let arriving: [UIView] = [stack.navigationBar, pageBar.accessory]
@@ -300,7 +302,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// the screen.
   private func place(_ bars: Bars, in page: UIViewController, stack: UINavigationController) {
     let accessory = pageBar.accessory
-    guard case .page = bars, accessory.height > 0 else {
+    guard case .page = bars, accessory.height > 0, !blocked else {
       accessory.removeFromSuperview()
       return
     }
