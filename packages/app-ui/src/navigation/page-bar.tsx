@@ -140,6 +140,9 @@ export function PageBarHost({ children }: { children: ReactNode }): JSX.Element 
     const listening = pageBar.subscribe((event) => hub.dispatch(event));
     return () => {
       void listening.then((remove) => remove());
+      // The shell leaves (a session lost to the sign-in gate) without a last
+      // flush, so the bar would keep the previous page.
+      void pageBar.sync(null).catch(() => {});
     };
   }, [pageBar, hub]);
 
