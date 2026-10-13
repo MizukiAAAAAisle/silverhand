@@ -66,7 +66,7 @@ export const DialogOverlay = forwardRef<
   <DialogPrimitive.Overlay
     ref={ref}
     className={cn(
-      "fixed inset-0 z-(--z-dialog) bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      "no-drag fixed inset-0 z-(--z-dialog) bg-overlay-backdrop data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
       className,
     )}
     {...props}
@@ -156,7 +156,7 @@ export const DialogContent = forwardRef<
           // removes that floor, and the items' own `truncate` / `min-w-0` do the
           // rest. Non-overflowing dialogs are unaffected: a stretched auto track
           // and a `1fr` track both resolve to the content box.
-          "fixed left-1/2 top-[15vh] z-(--z-dialog) grid w-full max-w-md grid-cols-[minmax(0,1fr)] -translate-x-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none",
+          "no-drag fixed left-1/2 top-[15vh] z-(--z-dialog) grid w-full max-w-md grid-cols-[minmax(0,1fr)] -translate-x-1/2 gap-4 bg-bg-floating p-6 shadow-modal focus:outline-none",
           className,
         )}
         {...props}

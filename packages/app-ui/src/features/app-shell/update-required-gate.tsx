@@ -1,5 +1,7 @@
 import { RefreshIcon, WarningIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
+import { AppUpdateInline } from "@/features/app-update/app-update-inline";
+import { useAppUpdateState } from "@/features/app-update/app-update-store";
 
 export interface UpdateRequiredGateProps {
   direction: "app" | "server";
@@ -12,9 +14,12 @@ export function UpdateRequiredGate({
   serverApiEpoch,
   onRetry,
 }: UpdateRequiredGateProps): JSX.Element {
+  const appUpdate = useAppUpdateState();
+  const inline = direction === "app" && appUpdate !== null;
   const title = direction === "app" ? "Update Silverhand to continue" : "Server update required";
-  const description =
-    direction === "app"
+  const description = inline
+    ? "This version of the app is older than what the server supports."
+    : direction === "app"
       ? "This version of the app is older than what the server supports. " +
         "Install the latest Silverhand release, then try again."
       : "The server this app is connected to runs an older API generation " +
@@ -39,10 +44,14 @@ export function UpdateRequiredGate({
         <p className="mb-4 text-(length:--text-meta) text-text-muted">
           Server API generation: {serverApiEpoch}
         </p>
-        <Button type="button" variant="primary" size="sm" onClick={onRetry}>
-          <RefreshIcon className="size-3.5" />
-          Check again
-        </Button>
+        {inline ? (
+          <AppUpdateInline state={appUpdate} onRecheck={onRetry} />
+        ) : (
+          <Button type="button" variant="primary" size="sm" onClick={onRetry}>
+            <RefreshIcon className="size-3.5" />
+            Check again
+          </Button>
+        )}
       </div>
     </main>
   );
