@@ -23,6 +23,7 @@ vi.mock("./bridge", () => ({
     addListener: h.listen,
     titlebar: vi.fn(async () => {}),
     pageBar: vi.fn(async () => {}),
+    composerRemove: vi.fn(async () => {}),
   },
 }));
 

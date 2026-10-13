@@ -28,6 +28,7 @@ import { authorGroupContinuations } from "@/features/messages/model/author-group
 import { groupMessages } from "@/features/messages/model/group-messages";
 import { useMessageActionSurface } from "@/features/messages/hooks/use-message-action-surface";
 import { MessageActionChrome } from "@/features/messages/components/message-action-chrome";
+import { NativeComposerRoom } from "@/features/messages/components/native-composer-room";
 import { MessageRowsSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
 import { EmptyConversation } from "./empty-conversation";
 import { type CachedMessage, isCommittedMessage } from "@/features/channels/pending-message";
@@ -60,7 +61,12 @@ const listComponents = {
       ) : null}
     </>
   ),
-  Footer: () => <div className="h-3" />,
+  Footer: () => (
+    <>
+      <div className="h-3" />
+      <NativeComposerRoom />
+    </>
+  ),
 };
 
 export function MessageList({

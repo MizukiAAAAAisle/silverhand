@@ -21,6 +21,7 @@ import type { SenderFilterValue } from "@/features/search/sender-filter-select";
 import { SystemMessage } from "@/features/messages/components/system-message";
 import { SystemActivityCluster } from "@/features/messages/components/system-activity-cluster";
 import { Composer } from "@/features/messages/components/composer";
+import { NativeComposerRoom } from "@/features/messages/components/native-composer-room";
 import { SelectionQuoteToolbar } from "@/features/messages/components/selection-quote-toolbar";
 import { ChannelJoinBar } from "@/features/messages/components/channel-join-bar";
 import { MessageRowsSkeleton } from "@/features/conversation-shell/components/conversation-view-skeleton";
@@ -1108,6 +1109,7 @@ export function ThreadPanel({
                   return renderMessage(item.message);
                 })
               )}
+              <NativeComposerRoom />
             </div>
 
             {/* Back-to-bottom — same primitive as the channel (#task:1050

@@ -12,7 +12,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "sharePng", "saveAttachment",
+    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "sharePng", "saveAttachment",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -245,6 +245,55 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         host.applyBars()
         host.observeContentScroll()
       }
+      call.resolve()
+    }
+  }
+  @objc public func composerSync(_ call: CAPPluginCall) {
+    guard let state = call.getObject("state"), let key = state["key"] as? String else {
+      call.reject("Missing composer state")
+      return
+    }
+    let next = ComposerState(
+      key: key,
+      placeholder: state["placeholder"] as? String ?? "",
+      enabled: state["enabled"] as? Bool ?? false,
+      canSend: state["canSend"] as? Bool ?? false,
+      sendLabel: state["sendLabel"] as? String ?? "",
+      addLabel: state["addLabel"] as? String ?? "",
+      accessoryHeight: CGFloat(state["accessoryHeight"] as? Double ?? 0),
+      add: (state["add"] as? JSArray ?? []).compactMap { value in
+        guard let item = value as? JSObject, let id = item["id"] as? String else { return nil }
+        return ComposerMenuItem(
+          id: id, label: item["label"] as? String ?? "", icon: item["icon"] as? String ?? "",
+          pick: item["pick"] as? String)
+      })
+    Task { @MainActor [self] in
+      if let host = navigationHost {
+        host.composer.onEvent = { [weak self] event in self?.notifyListeners("composer", data: event) }
+        host.composer.onMetrics = { [weak self] metrics in
+          self?.publishState("composerMetrics", metrics)
+        }
+        host.showComposer(next)
+      }
+      call.resolve()
+    }
+  }
+  @objc public func composerRemove(_ call: CAPPluginCall) {
+    let key = call.getString("key")
+    Task { @MainActor in
+      if let composer = navigationHost?.composer, key == nil || composer.state?.key == key {
+        composer.remove()
+      }
+      call.resolve()
+    }
+  }
+  @objc public func composerSetText(_ call: CAPPluginCall) {
+    let key = call.getString("key") ?? ""
+    let text = call.getString("text") ?? ""
+    let caret = call.getInt("caret") ?? (text as NSString).length
+    let focus = call.getBool("focus") ?? false
+    Task { @MainActor in
+      navigationHost?.composer.setText(key: key, text: text, caret: caret, focus: focus)
       call.resolve()
     }
   }

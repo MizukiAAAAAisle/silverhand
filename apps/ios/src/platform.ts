@@ -12,6 +12,7 @@ import { NativeEventSocket } from "./event-socket";
 import { createIOSNavigation } from "./navigation";
 import { createIOSTitlebar } from "./titlebar";
 import { createIOSPageBar } from "./page-bar";
+import { createIOSComposer } from "./composer";
 import { createIOSFiles, encodeBytes } from "./files";
 
 function parse(text?: string): unknown {
@@ -57,6 +58,7 @@ export function createIOSPlatform(
     navigation: createIOSNavigation(bridge),
     titlebar: createIOSTitlebar(bridge),
     pageBar: createIOSPageBar(bridge),
+    composer: createIOSComposer(bridge),
     client: {
       getConnectionPolicy: async () => ({ allow_insecure_remote: false }),
       getConnectionInfo: async () => {

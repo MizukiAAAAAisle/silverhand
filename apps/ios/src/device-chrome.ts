@@ -12,6 +12,15 @@ export async function installDeviceChrome(bridge: NativeBridge): Promise<void> {
     root.style.setProperty("--native-bar-tabs", `${tabs}px`);
   });
 
+  // The native composer floats over the page. Each is a distance up from the
+  // bottom of the window to its top: at rest, at the height its text gives
+  // it (the keyboard included), and as drawn. Zero while none shows.
+  await bridge.addListener("composerMetrics", ({ rest, reserve, overlay }) => {
+    root.style.setProperty("--native-composer-rest", `${rest}px`);
+    root.style.setProperty("--native-composer-reserve", `${reserve}px`);
+    root.style.setProperty("--native-composer-overlay", `${overlay}px`);
+  });
+
   // A half-open iPhone Duo divides the display at the fold; `start`/`end` are
   // the band's edges along the dividing axis.
   await bridge.addListener("fold", (fold) => {

@@ -23,10 +23,13 @@ enum NavigationItemStyle {
 // When the page on screen changes, its bars cross-fade as the page beneath
 // them slides.
 @MainActor
-final class SilverhandNavigationController: UITabBarController, UITabBarControllerDelegate {
+final class SilverhandNavigationController: UITabBarController, UITabBarControllerDelegate,
+  UIGestureRecognizerDelegate
+{
   let content = SilverhandViewController()
   let titlebar = Titlebar()
   let pageBar = PageBar()
+  let composer = ComposerView()
   var onIntent: (([String: Any]) -> Void)?
 
   // Shared navigation state, as last synced from the page.
@@ -132,6 +135,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       if !session.isEmpty { hideBar(!visible || blocked, animated: false) }
     }
     applyBars()
+    composer.publishMetrics()
   }
 
   enum Bars: Equatable {
@@ -209,6 +213,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// the swipe with the bars back as they were.
   func setBackProgress(_ progress: CGFloat?) {
     guard let stack = selectedViewController as? UINavigationController else { return }
+    composer.setBackProgress(progress)
     guard let progress else {
       endSwipe()
       return
@@ -272,6 +277,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       bottom = top + navigationBarHeight
     }
     content.publishBarMetrics(bottom: bottom, tabs: PageAccessory.tabsHeight)
+    composer.topLimit = bottom + (pageBar.accessory.window == nil ? 0 : pageBar.accessory.height)
   }
 
   /// Draws `bars` into the page's navigation item. A page's bar keeps what
@@ -375,6 +381,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     darkTheme = call.getBool("dark") ?? false
     applyChromeStyle()
     if blocked { presentedViewController?.dismiss(animated: false) }
+    composer.setBlocked(blocked)
     if let index = names.firstIndex(of: call.getString("tab") ?? ""), let host = page(index) {
       selectedIndex = index
       attachContent(to: host)
@@ -446,6 +453,10 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   func invalidate() {
     if !session.isEmpty { invalidatedSessions.insert(session) }
     reset(session: session)
+    // The page resets its bars whenever its layout changes, while the
+    // composer is a page's own and leaves with it; only a lost session takes
+    // it with the bars.
+    composer.remove()
   }
 
   // MARK: Tab items
@@ -522,6 +533,56 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     blocked = false
     hideBar(true, animated: false)
     presentedViewController?.dismiss(animated: false)
+  }
+
+  // MARK: Composer
+
+  /// While the composer edits, a tap on the page only ends editing, as the
+  /// tap that lowers a keyboard does elsewhere in iOS.
+  private lazy var pageTap: UITapGestureRecognizer = {
+    let tap = UITapGestureRecognizer(target: self, action: #selector(pageTapped))
+    tap.delegate = self
+    return tap
+  }()
+
+  @objc private func pageTapped() { composer.endEditing() }
+
+  func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+    recognizer !== pageTap || composer.endsEditing(at: recognizer.location(in: view))
+  }
+
+  func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+  ) -> Bool { true }
+
+  /// Follows each touch on the page from its start to its end.
+  private lazy var pageTouch: UILongPressGestureRecognizer = {
+    let touch = UILongPressGestureRecognizer(target: self, action: #selector(pageTouched(_:)))
+    touch.minimumPressDuration = 0
+    touch.cancelsTouchesInView = false
+    touch.delaysTouchesEnded = false
+    touch.delegate = self
+    return touch
+  }()
+
+  @objc private func pageTouched(_ touch: UILongPressGestureRecognizer) {
+    switch touch.state {
+    case .began: composer.holdFocus(true, at: touch.location(in: view))
+    case .ended, .cancelled, .failed: composer.holdFocus(false, at: .zero)
+    default: break
+    }
+  }
+
+  func showComposer(_ state: ComposerState) {
+    if pageTap.view == nil, let web = content.webView {
+      web.addGestureRecognizer(pageTap)
+      web.addGestureRecognizer(pageTouch)
+    }
+    composer.presenter = self
+    composer.install(in: view)
+    composer.setBlocked(blocked)
+    composer.apply(state)
   }
 
   func tabBarController(

@@ -218,7 +218,10 @@ export function useComposerDraft({
   }
 
   function submit(): void {
-    const content = draft.trim();
+    // Refs, not state: a native composer sets the text it sends in the same
+    // turn as the send.
+    const content = draftRef.current.trim();
+    const pending = pendingRef.current;
     // The send carries each attachment's compose-time label, the reference
     // its chip showed.
     const ready = pending

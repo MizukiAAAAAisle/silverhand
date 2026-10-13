@@ -1,6 +1,8 @@
 import type { ServerInfo } from "@silverhand/shared";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type {
+  ComposerEvent,
+  ComposerState,
   TitlebarEvent,
   TitlebarState,
   PageBarEvent,
@@ -36,6 +38,16 @@ export interface NativeBridge {
    * PNG. A null state removes it. */
   pageBar(input: { state: PageBarState | null }): Promise<void>;
   pageBarBackProgress(input: { progress: number | null }): Promise<void>;
+  /** The compact composer; menu icons are base64 PNG. */
+  composerSync(input: { state: ComposerState }): Promise<void>;
+  /** Removes the composer if it shows draft `key`; without a key, whatever it shows. */
+  composerRemove(input: { key?: string }): Promise<void>;
+  composerSetText(input: {
+    key: string;
+    text: string;
+    caret: number;
+    focus: boolean;
+  }): Promise<void>;
   addListener(
     event: "navigation",
     handler: (intent: NativeNavigationIntent) => void,
@@ -82,6 +94,14 @@ export interface NativeBridge {
   addListener(
     event: "pageBar",
     handler: (event: PageBarEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    event: "composer",
+    handler: (event: ComposerEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    event: "composerMetrics",
+    handler: (metrics: { rest: number; reserve: number; overlay: number }) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "fold",

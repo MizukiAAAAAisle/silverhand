@@ -1324,6 +1324,7 @@ function ActiveChannelView({
                 // succeed again, which is not the same fact as `closed` and must not
                 // borrow its copy.
                 readOnly={conversation.read_only === true}
+                covered={!chatSurfaceActive}
               />
             ) : gate.showJoin ? (
               // Resolved non-member browsing a public channel: Join replaces the

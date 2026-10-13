@@ -20,6 +20,9 @@ function harness() {
     titlebarEndSearch: vi.fn(async () => {}),
     pageBar: vi.fn(async () => {}),
     pageBarBackProgress: vi.fn(async () => {}),
+    composerSync: vi.fn(async () => {}),
+    composerRemove: vi.fn(async () => {}),
+    composerSetText: vi.fn(async () => {}),
     getProfile: vi.fn(async () => ({ server_url: "https://server.example", updated_at: 1 })),
     authState: vi.fn(async () => ({
       serverUrl: "https://server.example",

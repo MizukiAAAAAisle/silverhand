@@ -778,3 +778,40 @@
   width: 0;
   height: 0;
 }
+
+/* The native composer (iOS) floats over the page. The message scroller ends
+   in room for it at the height its text gives it; the controls that float
+   above it (activity, attachments, the picker) sit on its drawn top. Both
+   are measured from the bottom of the window, where a page showing it ends. */
+[data-native-composer-room] {
+  flex-shrink: 0;
+  height: var(--native-composer-reserve, 0px);
+}
+[data-native-composer] {
+  position: relative;
+  height: 0;
+}
+[data-native-composer-accessory] {
+  /* A selection would take the keyboard from the native composer. */
+  -webkit-user-select: none;
+  user-select: none;
+  position: absolute;
+  inset-inline: 12px;
+  bottom: calc(var(--native-composer-overlay, 0px) + 8px);
+  z-index: var(--z-sticky);
+}
+[data-native-composer-accessory] [data-composer-picker] {
+  position: static;
+  width: 100%;
+  margin-bottom: 8px;
+}
+[data-native-composer-accessory] [data-composer-activity] {
+  margin-bottom: 8px;
+  overflow: hidden;
+  border-width: 0;
+  border-radius: var(--control-radius);
+  box-shadow: var(--shadow-popover);
+}
+[data-layout="compact"] [data-scroll-bottom] {
+  bottom: max(16px, calc(var(--native-composer-overlay, 0px) + 12px));
+}

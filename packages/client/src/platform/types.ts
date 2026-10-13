@@ -122,6 +122,7 @@ export interface ClientPlatform {
   navigation?: NavigationCapability;
   titlebar?: TitlebarCapability;
   pageBar?: PageBarCapability;
+  composer?: ComposerCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
   /** The running build's release version; omitted where the host has none. */
@@ -244,6 +245,46 @@ export interface PageBarCapability {
    * bar fades with it. Null ends the swipe, after any bar synced before it. */
   backProgress(progress: number | null): Promise<void>;
   subscribe(handler: (event: PageBarEvent) => void): Promise<() => void>;
+}
+/** An item of the composer's add menu. With `pick`, native runs that system
+ * picker and its files come back as a `files` event; without it the tap comes
+ * back as `add`. `icon` is SVG markup on a 24px grid. */
+export interface ComposerMenuItem {
+  id: string;
+  label: string;
+  icon: string;
+  pick?: "photos" | "files";
+}
+/** The compact layout's composer, drawn natively over the page. The shared
+ * UI keeps the draft, the send and every string; native edits the text and
+ * reports it. `key` names the draft: native starts a new one empty until
+ * `setText`. iOS decodes each field by name (`SilverhandClientPlugin.swift`). */
+export interface ComposerState {
+  key: string;
+  placeholder: string;
+  enabled: boolean;
+  canSend: boolean;
+  sendLabel: string;
+  addLabel: string;
+  add: ComposerMenuItem[];
+  /** The height of the controls the shared UI floats above the composer (the
+   * attachments, the `@` and `#` picker); a tap on them keeps the keyboard. */
+  accessoryHeight: number;
+}
+export type ComposerEvent =
+  | { kind: "change"; key: string; text: string; caret: number; composing: boolean }
+  /** Carries the text sent, which a `change` may not have delivered yet. */
+  | { kind: "send"; key: string; text: string; caret: number }
+  | { kind: "add"; key: string; id: string }
+  | { kind: "files"; key: string; files: { name: string; type: string; base64: string }[] };
+export interface ComposerCapability {
+  /** Shows the composer for draft `state.key`. */
+  sync(state: ComposerState): Promise<void>;
+  /** Removes the composer, if it still shows draft `key`. */
+  remove(key: string): Promise<void>;
+  /** Replaces the text of draft `key`; `caret` counts UTF-16 units. */
+  setText(input: { key: string; text: string; caret: number; focus: boolean }): Promise<void>;
+  subscribe(handler: (event: ComposerEvent) => void): Promise<() => void>;
 }
 export interface NavigationCapability {
   badges(input: {

@@ -9,13 +9,15 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { AttachFileIcon, HashIcon, MentionIcon } from "@/icons";
+import { AttachFileIcon, HashIcon, ImageIcon, MentionIcon } from "@/icons";
+import { iconMarkup } from "@/components/layout/native-page-bar";
 import { Button } from "@/components/ui/button";
 import type { ComposerDirectory } from "@/features/conversations/pane-mode";
 import { pendingAttachmentsBlockSend } from "@/features/messages/composer-draft-cache";
 import { onQuoteToComposer, spliceQuoteIntoDraft } from "@/features/messages/quote-to-composer";
 import { useComposerDirectory } from "../hooks/use-composer-directory";
 import { useComposerDraft } from "../hooks/use-composer-draft";
+import { useNativeComposer, useNativeComposerPlatform } from "../hooks/use-native-composer";
 import {
   detectTrigger,
   formatPickInsertion,
@@ -47,6 +49,8 @@ interface ComposerProps {
   readOnly?: boolean;
   /** Limits the activity bubble to these agents; null shows all. */
   activityAgentIds?: readonly string[] | null;
+  /** Another view covers the composer (a view tab in front of the chat). */
+  covered?: boolean;
 }
 
 const MAX_TEXTAREA_HEIGHT = 192; // Tailwind max-h-48.
@@ -71,6 +75,7 @@ export function Composer({
   archived = false,
   readOnly = false,
   activityAgentIds,
+  covered = false,
 }: ComposerProps): JSX.Element {
   // Every send and attach path gates on one flag; only the placeholder tells
   // the reasons apart.
@@ -119,9 +124,71 @@ export function Composer({
     pendingAttachmentsBlockSend(pending) ||
     (!draft.trim() && pending.filter((p) => p.state === "done").length === 0);
 
+  const native = useNativeComposerPlatform();
+  const [accessoryHeight, setAccessoryHeight] = useState(0);
+  const accessoryRef = useRef<HTMLDivElement>(null);
+  const placeholder = archived
+    ? "This conversation is archived"
+    : readOnly
+      ? "This conversation is read-only"
+      : disabled
+        ? "This conversation is closed"
+        : "Message…";
+  const nativeComposer = useNativeComposer({
+    shown: native && !covered,
+    state: {
+      key: draftKey,
+      placeholder,
+      enabled: !disabled,
+      canSend: !sendDisabled,
+      sendLabel: "Send",
+      addLabel: "Add",
+      add: [
+        { id: "photos", label: "Photos", icon: iconMarkup(ImageIcon), pick: "photos" },
+        { id: "files", label: "Files", icon: iconMarkup(AttachFileIcon), pick: "files" },
+        ...(offersMentions
+          ? [{ id: "mention", label: "Mention a member", icon: iconMarkup(MentionIcon) }]
+          : []),
+        ...(offersChannels
+          ? [{ id: "channel", label: "Reference a channel", icon: iconMarkup(HashIcon) }]
+          : []),
+      ],
+      accessoryHeight,
+    },
+    draft,
+    caret,
+    onChange: (text, nextCaret, nextComposing) => {
+      setComposing(nextComposing);
+      composer.updateDraft(text, nextCaret);
+    },
+    onSend: (text, nextCaret) => {
+      setComposing(false);
+      if (text !== composer.current().text) {
+        composer.updateDraft(text, nextCaret);
+      }
+      composer.submit();
+    },
+    onAdd: (id) => {
+      if (id === "mention" || id === "channel") {
+        insertTrigger(id === "mention" ? "@" : "#");
+      }
+    },
+    onFiles: (files) => composer.addFiles(files),
+  });
+
   useEffect(() => {
     resizeTextarea(ref.current);
   }, [draft]);
+
+  useEffect(() => {
+    const node = accessoryRef.current;
+    if (!node) {
+      return;
+    }
+    const observer = new ResizeObserver(() => setAccessoryHeight(Math.ceil(node.offsetHeight)));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [native, covered]);
 
   useEffect(() => {
     if (active >= items.length) {
@@ -161,6 +228,10 @@ export function Composer({
    *  after React writes the value (a selection set before that is lost). */
   function applyEdit(nextDraft: string, nextCaret: number): void {
     composer.updateDraft(nextDraft, nextCaret);
+    if (native) {
+      nativeComposer.focusText(nextDraft, nextCaret);
+      return;
+    }
     requestAnimationFrame(() => {
       const node = ref.current;
       if (!node) {
@@ -302,6 +373,80 @@ export function Composer({
     composer.submit();
   }
 
+  const tray = (
+    <AnimatePresence initial={false} key={draftKey}>
+      {pending.length > 0 ? (
+        <PendingAttachmentTray key="attachments">
+          <AnimatePresence initial={false} mode="popLayout" propagate>
+            {pending.map((p) => (
+              <PendingAttachmentMotion key={p.key}>
+                <AttachmentChip
+                  item={p}
+                  onRemove={() => composer.removePending(p.key)}
+                  onInsertLabel={
+                    p.label && p.state !== "error" ? () => insertLabel(p.label!) : undefined
+                  }
+                  onPreview={
+                    p.previewUrl
+                      ? () => setPreviewing({ url: p.previewUrl!, alt: p.filename })
+                      : undefined
+                  }
+                />
+              </PendingAttachmentMotion>
+            ))}
+          </AnimatePresence>
+        </PendingAttachmentTray>
+      ) : null}
+    </AnimatePresence>
+  );
+  const picker =
+    menuOpen && !dismissed ? (
+      <PickerMenu
+        items={items}
+        hiddenCount={hiddenCount}
+        channelStatus={channelStatus}
+        active={active}
+        onPick={insertPick}
+        onHover={setActive}
+        peopleSections={peopleSections}
+        showChannelWorkspace={showChannelWorkspace}
+        agentAvatarUrls={sources.agentAvatarUrls}
+        humanAvatarUrls={sources.humanAvatarUrls}
+      />
+    ) : null;
+  const lightbox = (
+    <Lightbox
+      open={previewing !== null}
+      onOpenChange={(open) => {
+        if (!open) {
+          setPreviewing(null);
+        }
+      }}
+      src={previewing?.url ?? ""}
+      alt={previewing?.alt ?? ""}
+    />
+  );
+
+  if (native) {
+    // The native composer floats over the page; this holds the room the page
+    // gives it and the controls that float above it.
+    return (
+      <div data-native-composer aria-hidden={covered || undefined}>
+        {covered ? null : (
+          <div ref={accessoryRef} data-native-composer-accessory>
+            <ComposerActivityHeader
+              conversationId={conversationId}
+              restrictToAgentIds={activityAgentIds}
+            />
+            {tray}
+            {picker}
+          </div>
+        )}
+        {lightbox}
+      </div>
+    );
+  }
+
   return (
     <form
       data-composer
@@ -314,45 +459,9 @@ export function Composer({
         (dragOver ? "[outline:2px_solid_var(--border-focus)] -outline-offset-2" : "")
       }
     >
-      <AnimatePresence initial={false} key={draftKey}>
-        {pending.length > 0 ? (
-          <PendingAttachmentTray key="attachments">
-            <AnimatePresence initial={false} mode="popLayout" propagate>
-              {pending.map((p) => (
-                <PendingAttachmentMotion key={p.key}>
-                  <AttachmentChip
-                    item={p}
-                    onRemove={() => composer.removePending(p.key)}
-                    onInsertLabel={
-                      p.label && p.state !== "error" ? () => insertLabel(p.label!) : undefined
-                    }
-                    onPreview={
-                      p.previewUrl
-                        ? () => setPreviewing({ url: p.previewUrl!, alt: p.filename })
-                        : undefined
-                    }
-                  />
-                </PendingAttachmentMotion>
-              ))}
-            </AnimatePresence>
-          </PendingAttachmentTray>
-        ) : null}
-      </AnimatePresence>
+      {tray}
       <div className="relative">
-        {menuOpen && !dismissed ? (
-          <PickerMenu
-            items={items}
-            hiddenCount={hiddenCount}
-            channelStatus={channelStatus}
-            active={active}
-            onPick={insertPick}
-            onHover={setActive}
-            peopleSections={peopleSections}
-            showChannelWorkspace={showChannelWorkspace}
-            agentAvatarUrls={sources.agentAvatarUrls}
-            humanAvatarUrls={sources.humanAvatarUrls}
-          />
-        ) : null}
+        {picker}
         <div
           data-composer-shell
           className="flex flex-col overflow-hidden rounded-(--control-radius) border border-border-subtle bg-bg-floating focus-within:border-border-focus"
@@ -380,15 +489,7 @@ export function Composer({
               onCompositionStart={() => setComposing(true)}
               onCompositionEnd={() => setComposing(false)}
               disabled={disabled}
-              placeholder={
-                archived
-                  ? "This conversation is archived"
-                  : readOnly
-                    ? "This conversation is read-only"
-                    : disabled
-                      ? "This conversation is closed"
-                      : "Message…"
-              }
+              placeholder={placeholder}
               className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
             />
           </div>
@@ -461,16 +562,7 @@ export function Composer({
           </div>
         </div>
       </div>
-      <Lightbox
-        open={previewing !== null}
-        onOpenChange={(open) => {
-          if (!open) {
-            setPreviewing(null);
-          }
-        }}
-        src={previewing?.url ?? ""}
-        alt={previewing?.alt ?? ""}
-      />
+      {lightbox}
     </form>
   );
 }
