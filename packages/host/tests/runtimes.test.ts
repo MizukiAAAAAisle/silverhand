@@ -97,8 +97,9 @@ describe('platformBinaryCandidates', () => {
   // The array order IS the resolution priority (resolveBinary probes
   // candidates in order before PATH). Pin the exact macOS codex order so a
   // reorder — which would silently change which bundle wins — fails loudly.
-  it('resolves the macOS codex bundle order: ChatGPT.app before Codex.app', () => {
+  it('prefers the current ChatGPT launcher before legacy app bundles', () => {
     expect(platformBinaryCandidates('codex', 'darwin')).toEqual([
+      '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex',
       '/Applications/ChatGPT.app/Contents/Resources/codex',
       '/Applications/Codex.app/Contents/Resources/codex',
     ]);

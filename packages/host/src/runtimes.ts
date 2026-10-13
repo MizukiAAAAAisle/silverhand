@@ -37,12 +37,11 @@ const COMMAND_TIMEOUT_MS = 5_000;
  * app bundle on macOS, which skips the wrapper entirely and typically
  * cuts cold start in half.
  *
- * Bundle order (macOS): the codex binary now ships inside `ChatGPT.app`
- * (`/Applications/ChatGPT.app/Contents/Resources/codex`); the standalone
- * `Codex.app` is the legacy location kept as a fallback for machines that
- * still have it. Both are probed before the PATH wrapper (the last
- * resort). Candidates are probed in order, so the array order below IS
- * the resolution priority.
+ * Bundle order (macOS): prefer ChatGPT.app's `codex-cli/bin/codex` launcher,
+ * a small shell script that execs the bundled native CodexCLI.app binary
+ * without the npm/Node wrapper. Older ChatGPT.app and standalone Codex.app
+ * binaries remain fallbacks before PATH. Candidates are probed in order,
+ * so the array order below IS the resolution priority.
  *
  * We deliberately do NOT version-match the bundle against the npm CLI:
  * the user has already accepted the bundle by installing the app, and
@@ -56,6 +55,7 @@ const PLATFORM_CANDIDATES: Partial<
 > = {
   codex: {
     darwin: [
+      '/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex',
       '/Applications/ChatGPT.app/Contents/Resources/codex',
       '/Applications/Codex.app/Contents/Resources/codex',
     ],
