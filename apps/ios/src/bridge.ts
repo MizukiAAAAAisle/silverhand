@@ -64,6 +64,7 @@ export interface NativeBridge {
   saveAttachment(input: { filename: string; base64: string }): Promise<{ completed: boolean }>;
   sharePng(input: { base64: string }): Promise<{ completed: boolean }>;
   openExternal(input: { url: string }): Promise<void>;
+  appVersion(): Promise<{ version: string }>;
   addListener(
     event: "socket",
     handler: (event: NativeSocketEvent) => void,

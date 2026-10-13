@@ -21,6 +21,8 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
     return result.filePaths[0] ?? null;
   });
 
+  ipc.handle("app:getVersion", () => app.getVersion());
+
   ipc.handle("shell:openExternal", async (_event, url: string) => {
     if (typeof url !== "string") return;
     // Refuse anything that isn't an http(s) link — preload is a security

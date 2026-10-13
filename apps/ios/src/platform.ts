@@ -181,5 +181,6 @@ export function createIOSPlatform(
       openEventSocket: (url) => new NativeEventSocket(bridge, url),
     },
     files: createIOSFiles(bridge),
+    getAppVersion: async () => (await bridge.appVersion()).version,
   };
 }

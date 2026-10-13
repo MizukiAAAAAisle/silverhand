@@ -109,6 +109,7 @@ const api: DesktopBridge = {
     ipcRenderer.invoke("partialApply:retry"),
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
     ipcRenderer.invoke("dialog:pickDirectory", options),
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke("app:getVersion"),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("shell:openExternal", url),
   setPinchZoom: setPreviewPinchZoom,
   /** Materialize attachment bytes to ONE stable per-id scratch file and

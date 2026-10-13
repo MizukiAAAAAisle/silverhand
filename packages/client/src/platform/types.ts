@@ -124,6 +124,8 @@ export interface ClientPlatform {
   pageBar?: PageBarCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
+  /** The running build's release version; omitted where the host has none. */
+  getAppVersion?(): Promise<string>;
 }
 
 /** Optional native presentation. Navigation history, the page stack and its

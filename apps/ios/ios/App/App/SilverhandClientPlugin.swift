@@ -10,7 +10,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   public let pluginMethods: [CAPPluginMethod] = [
     "getProfile", "saveProfile", "clearProfile", "authState", "authenticate", "logout", "request",
     "upload",
-    "openSocket", "sendSocket", "closeSocket", "openExternal",
+    "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
     "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "sharePng", "saveAttachment",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
@@ -346,6 +346,10 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
       $0.closeSocket(id: call.getString("id") ?? "")
       return [:]
     }
+  }
+  @objc public func appVersion(_ call: CAPPluginCall) {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    call.resolve(["version": version ?? ""])
   }
   @objc public func openExternal(_ call: CAPPluginCall) {
     Task { @MainActor in

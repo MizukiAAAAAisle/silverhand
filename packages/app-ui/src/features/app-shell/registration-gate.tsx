@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { nameFormatMessage } from "@/features/identity/use-name-availability";
 import { cn } from "@/lib/cn";
 import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
+import { ExternalLink, PRIVACY_POLICY_URL } from "@/features/legal/legal-links";
 import { useLoginUser, useSignupUser } from "../session/hooks";
 
 export interface RegistrationGateProps {
@@ -281,6 +282,15 @@ export function RegistrationGate({
             </p>
           ) : null}
         </footer>
+
+        <p className="mt-6 text-xs text-text-muted">
+          <ExternalLink
+            href={PRIVACY_POLICY_URL}
+            className="underline underline-offset-3 hover:text-text-secondary"
+          >
+            Privacy Policy
+          </ExternalLink>
+        </p>
 
         {showServerAddress && (
           <div className="mt-10 border-t border-border-subtle pt-4">

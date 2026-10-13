@@ -51,6 +51,7 @@ function harness() {
     saveAttachment: vi.fn(async () => ({ completed: true })),
     sharePng: vi.fn(async () => ({ completed: true })),
     openExternal: vi.fn(),
+    appVersion: vi.fn(async () => ({ version: "1.0" })),
     openSocket: vi.fn(),
     sendSocket: vi.fn(),
     closeSocket: vi.fn(),

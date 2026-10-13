@@ -58,6 +58,7 @@ export interface DesktopBridge {
 
   retryPartialApply(): Promise<LocalHostPartialApplyRetryResult>;
   pickDirectory(options?: { defaultPath?: string }): Promise<string | null>;
+  getAppVersion(): Promise<string>;
   openExternal(url: string): Promise<void>;
   openAttachmentExternal(input: {
     attachmentId: string;

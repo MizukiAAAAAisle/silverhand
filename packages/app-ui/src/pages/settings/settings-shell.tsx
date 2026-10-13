@@ -11,6 +11,7 @@ import {
   CheckIcon,
   CodeFontIcon,
   FontIcon,
+  InfoIcon,
   LeaveIcon,
   ServerIcon,
   SettingsIcon,
@@ -58,6 +59,7 @@ import {
   type SettingsSection,
 } from "../../features/settings/model/settings-section";
 import { ConnectionPane } from "./components/connection-pane";
+import { AboutPane } from "./components/about-pane";
 import { PaneHeader, PaneShell } from "@/components/layout/pane-shell";
 import { Sidebar } from "@/components/layout/sidebar";
 
@@ -152,6 +154,8 @@ export function SettingsShell(): JSX.Element {
             />
           ) : section === "account" ? (
             <AccountPane />
+          ) : section === "about" ? (
+            <AboutPane />
           ) : (
             <ConnectionPane />
           )}
@@ -185,6 +189,7 @@ const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }
   account: { label: "Account", icon: <UserIcon className="size-3.5" /> },
   appearance: { label: "Appearance", icon: <AppearanceIcon className="size-3.5" /> },
   connection: { label: "Connection", icon: <ServerIcon className="size-3.5" /> },
+  about: { label: "About", icon: <InfoIcon className="size-3.5" /> },
 };
 
 function SettingsRailNav({
