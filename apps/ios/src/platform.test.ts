@@ -94,6 +94,7 @@ describe("iOS platform", () => {
       blocked: false,
       modalVersion: 0,
       visible: true,
+      dark: false,
     });
     const failed = expect(sync).rejects.toThrow("host unavailable");
     const reset = navigation.reset("s");

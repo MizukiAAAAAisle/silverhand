@@ -138,6 +138,8 @@ export interface NativeNavigationState {
   key: string;
   tab: "chat" | "activity" | "tasks" | "me";
   visible: boolean;
+  /** The theme is dark, so native chrome and the status bar take the dark appearance. */
+  dark: boolean;
 }
 export interface NativeNavigationIntent {
   modalVersion: number;

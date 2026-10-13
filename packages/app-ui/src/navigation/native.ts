@@ -12,7 +12,7 @@ import { MAIN_TABS, type MainTab } from "./history";
  * it. The only intent native sends is a tab selection, which runs here like
  * any other navigation.
  */
-export function useNativeNavigation(store: NavigationStore, allowed: () => boolean) {
+export function useNativeNavigation(store: NavigationStore, allowed: () => boolean, dark: boolean) {
   const native = getPlatform().navigation;
   const compact = useCompactLayout();
   const run = useCallback(
@@ -39,6 +39,7 @@ export function useNativeNavigation(store: NavigationStore, allowed: () => boole
           blocked: modalScope.blocked,
           modalVersion: modalScope.version,
           visible: compact && showsTabBar(location.pathname, location.search),
+          dark,
         })
         .catch(() => null);
       if (alive && result)
@@ -69,6 +70,6 @@ export function useNativeNavigation(store: NavigationStore, allowed: () => boole
       void native.reset(store.session);
       document.documentElement.style.removeProperty("--native-tab-bar-height");
     };
-  }, [store, native, run, compact]);
+  }, [store, native, run, compact, dark]);
   return run;
 }

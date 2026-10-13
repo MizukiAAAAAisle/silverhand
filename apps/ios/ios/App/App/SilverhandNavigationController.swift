@@ -102,11 +102,17 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   @available(iOS 27.1, *)
   override var childForPreferredVerticalBarBehavior: UIViewController? { nil }
 
-  /// Whether the wide layout's window frame is dark.
-  private var darkFrame = false
+  /// The theme is dark (from the navigation state).
+  private var darkTheme = false
+  /// The applied appearance: the shell's (the theme's) and the navigation
+  /// bars' (also dark over the wide layout's dark window frame). Unset until
+  /// first applied, so a light theme pins light under a dark system.
+  private var appliedStyle: (shell: Bool, bars: Bool)?
 
   override var childForStatusBarStyle: UIViewController? { nil }
-  override var preferredStatusBarStyle: UIStatusBarStyle { darkFrame ? .lightContent : .default }
+  override var preferredStatusBarStyle: UIStatusBarStyle {
+    appliedStyle?.bars == true ? .lightContent : .darkContent
+  }
 
   override var keyCommands: [UIKeyCommand]? {
     guard let state = titlebar.state, !blocked else { return nil }
@@ -180,17 +186,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     if !fade { endSwipe() }
     swiping = []
     draw(next.bars, on: host)
-    // Only the bars: a dark trait on the web view would change how it draws
-    // the page.
-    var dark = false
-    if case .titlebar(let state) = next.bars { dark = state.dark }
-    if dark != darkFrame {
-      darkFrame = dark
-      for case let other as UINavigationController in viewControllers ?? [] {
-        other.navigationBar.overrideUserInterfaceStyle = dark ? .dark : .unspecified
-      }
-      setNeedsStatusBarAppearanceUpdate()
-    }
+    applyChromeStyle()
     // A web modal's backdrop cannot cover native chrome, so the bars leave
     // while one is open.
     stack.setNavigationBarHidden(next.bars == .none || blocked, animated: false)
@@ -330,6 +326,22 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     content.didMove(toParent: host)
   }
 
+  /// The theme sets the whole shell's appearance, not the system's: the glass
+  /// tab bar resolves its style above `tabBar`. The page paints itself from
+  /// the theme and declares no color scheme, so the web view draws the same.
+  /// The wide layout's dark window frame darkens the navigation bars alone.
+  private func applyChromeStyle() {
+    var dark = darkTheme
+    if case .titlebar(let state) = bars { dark = dark || state.dark }
+    if let applied = appliedStyle, applied == (darkTheme, dark) { return }
+    appliedStyle = (darkTheme, dark)
+    overrideUserInterfaceStyle = darkTheme ? .dark : .light
+    for case let other as UINavigationController in viewControllers ?? [] {
+      other.navigationBar.overrideUserInterfaceStyle = dark ? .dark : .unspecified
+    }
+    setNeedsStatusBarAppearanceUpdate()
+  }
+
   private func hideBar(_ hidden: Bool, animated: Bool) {
     if #available(iOS 18.0, *) {
       setTabBarHidden(hidden, animated: animated)
@@ -354,6 +366,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     modalVersion = call.getInt("modalVersion") ?? 0
     blocked = call.getBool("blocked") ?? false
     requestedVisible = call.getBool("visible") ?? false
+    darkTheme = call.getBool("dark") ?? false
+    applyChromeStyle()
     if blocked { presentedViewController?.dismiss(animated: false) }
     if let index = names.firstIndex(of: call.getString("tab") ?? ""), let host = page(index) {
       selectedIndex = index

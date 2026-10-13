@@ -161,7 +161,7 @@ export function App({
   // chrome.css don't cover (e.g. any action/close button greys).
   return (
     <EmbeddedProfileSetupGate key={viewer.data.id} viewerId={viewer.data.id}>
-      <NavigationProvider launch={navigationLaunch}>
+      <NavigationProvider launch={navigationLaunch} dark={appearance.theme === "slack-dark"}>
         <PageBarHost>
           <RegisteredAppShell
             toasterTheme={appearance.theme === "slack-dark" ? "dark" : "light"}

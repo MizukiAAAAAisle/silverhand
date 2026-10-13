@@ -37,15 +37,18 @@ export const NavigationContext = createContext<Driver | null>(null);
 export function NavigationProvider({
   children,
   launch,
+  dark = false,
 }: {
   children: ReactNode;
   launch: NavigationLaunch;
+  /** The theme is dark; native chrome follows it. */
+  dark?: boolean;
 }) {
   const [store] = useState(() => new NavigationStore(launch.initialUrl));
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const [guards] = useState(() => new Set<() => boolean>());
   const allowed = useCallback(() => [...guards].every((guard) => guard()), [guards]);
-  const run = useNativeNavigation(store, allowed);
+  const run = useNativeNavigation(store, allowed, dark);
   const registerLeaveGuard = useCallback(
     (guard: () => boolean) => {
       guards.add(guard);

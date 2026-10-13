@@ -32,7 +32,7 @@ function setup() {
   });
   const store = new NavigationStore("/chat");
   let allowed = true;
-  const run = useNativeNavigation(store, () => allowed);
+  const run = useNativeNavigation(store, () => allowed, false);
   const cleanup = h.effects[0]!()!;
   return {
     store,
@@ -74,6 +74,7 @@ it("syncs the entry on screen on every change, without the page Back returns to"
       blocked: false,
       modalVersion: modalScope.version,
       visible: false,
+      dark: false,
     }),
   );
   store.back();
