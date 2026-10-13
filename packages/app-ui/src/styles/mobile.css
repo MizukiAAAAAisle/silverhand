@@ -745,9 +745,11 @@
   inset: 0 0 auto;
   z-index: 5;
   height: var(--native-bar-bottom, env(safe-area-inset-top, 0px));
+  /* The page colour, which compact panes take (`[data-panel]` above): a theme's
+     desktop pane paper here tints the top of a white page. */
   background: linear-gradient(
-    var(--pane-bg) 0%,
-    color-mix(in srgb, var(--pane-bg) 85%, transparent) 50%,
+    var(--bg-base) 0%,
+    color-mix(in srgb, var(--bg-base) 85%, transparent) 50%,
     transparent
   );
   pointer-events: none;
