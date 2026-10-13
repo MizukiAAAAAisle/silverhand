@@ -192,7 +192,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     stack.setNavigationBarHidden(next.bars == .none || blocked, animated: false)
     place(next.bars, in: host, stack: stack)
     guard fade else { return }
-    let arriving: [UIView] = [stack.navigationBar, pageBar.accessory]
+    pageBar.accessory.setSwipeHidden(false)
+    let arriving: [UIView] = [stack.navigationBar]
     for view in arriving { view.layer.opacity = 0 }
     UIView.animate(withDuration: 0.25, delay: 0, options: [.allowUserInteraction]) {
       for view in arriving { view.layer.opacity = 1 }
@@ -214,7 +215,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     if swiping.isEmpty {
       swiping = images(of: stack)
-      for view in [stack.navigationBar, pageBar.accessory] { view.layer.opacity = 0 }
+      stack.navigationBar.layer.opacity = 0
+      pageBar.accessory.setSwipeHidden(true)
     }
     for image in swiping { image.alpha = 1 - min(1, max(0, progress)) }
   }
@@ -225,7 +227,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     for image in swiping { image.removeFromSuperview() }
     swiping = []
-    for view in [stack.navigationBar, pageBar.accessory] { view.layer.opacity = 1 }
+    stack.navigationBar.layer.opacity = 1
+    pageBar.accessory.setSwipeHidden(false)
   }
 
   /// Images of the bars on screen, laid over them in the controller's view.
@@ -302,7 +305,10 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       accessory.removeFromSuperview()
       return
     }
-    if accessory.superview !== page.view { page.view.addSubview(accessory) }
+    if accessory.superview !== page.view {
+      page.view.addSubview(accessory)
+      accessory.rebuildGlass()
+    }
     let top = verticalBarEdge != nil ? view.safeAreaInsets.top + 4 : stack.navigationBar.frame.maxY
     accessory.frame = CGRect(x: 0, y: top, width: page.view.bounds.width, height: accessory.height)
   }
