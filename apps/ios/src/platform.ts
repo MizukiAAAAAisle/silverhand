@@ -183,6 +183,7 @@ export function createIOSPlatform(
       openEventSocket: (url) => new NativeEventSocket(bridge, url),
     },
     files: createIOSFiles(bridge),
+    storeUrl: "https://apps.apple.com/app/id6817665320",
     getAppVersion: async () => (await bridge.appVersion()).version,
   };
 }

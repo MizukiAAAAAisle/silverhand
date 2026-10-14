@@ -125,6 +125,8 @@ export interface ClientPlatform {
   composer?: ComposerCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
+  /** The store page this build is installed from, offered when the server requires a newer app. */
+  storeUrl?: string;
   /** The running build's release version; omitted where the host has none. */
   getAppVersion?(): Promise<string>;
 }

@@ -1,7 +1,8 @@
-import { RefreshIcon, WarningIcon } from "@/icons";
+import { OpenExternalIcon, RefreshIcon, WarningIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { AppUpdateInline } from "@/features/app-update/app-update-inline";
 import { useAppUpdateState } from "@/features/app-update/app-update-store";
+import { getPlatform } from "@/platform";
 
 export interface UpdateRequiredGateProps {
   direction: "app" | "server";
@@ -16,6 +17,7 @@ export function UpdateRequiredGate({
 }: UpdateRequiredGateProps): JSX.Element {
   const appUpdate = useAppUpdateState();
   const inline = direction === "app" && appUpdate !== null;
+  const storeUrl = direction === "app" && !inline ? getPlatform().storeUrl : undefined;
   const title = direction === "app" ? "Update Silverhand to continue" : "Server update required";
   const description = inline
     ? "This version of the app is older than what the server supports."
@@ -47,10 +49,28 @@ export function UpdateRequiredGate({
         {inline ? (
           <AppUpdateInline state={appUpdate} onRecheck={onRetry} />
         ) : (
-          <Button type="button" variant="primary" size="sm" onClick={onRetry}>
-            <RefreshIcon className="size-3.5" />
-            Check again
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {storeUrl ? (
+              <Button
+                type="button"
+                variant="primary"
+                size="sm"
+                onClick={() => void getPlatform().files.openExternal(storeUrl)}
+              >
+                <OpenExternalIcon className="size-3.5" />
+                Update in App Store
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant={storeUrl ? "neutral" : "primary"}
+              size="sm"
+              onClick={onRetry}
+            >
+              <RefreshIcon className="size-3.5" />
+              Check again
+            </Button>
+          </div>
         )}
       </div>
     </main>
