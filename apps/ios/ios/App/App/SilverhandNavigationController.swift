@@ -270,7 +270,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     let top = view.safeAreaInsets.top
     let bottom: CGFloat
     if verticalBarEdge != nil {
-      bottom = top + 4 + PageAccessory.titleHeight
+      bottom = verticalBarTop + PageAccessory.titleHeight
     } else if !stack.isNavigationBarHidden {
       bottom = stack.navigationBar.frame.maxY
       navigationBarHeight = stack.navigationBar.frame.height
@@ -316,7 +316,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       page.view.addSubview(accessory)
       accessory.rebuildGlass()
     }
-    let top = verticalBarEdge != nil ? view.safeAreaInsets.top + 4 : stack.navigationBar.frame.maxY
+    let top = verticalBarEdge != nil ? verticalBarTop : stack.navigationBar.frame.maxY
     accessory.frame = CGRect(x: 0, y: top, width: page.view.bounds.width, height: accessory.height)
   }
 
@@ -402,6 +402,17 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// iPhone Duo stands the tab bar on a side edge. The page's side safe-area
   /// inset already clears it there, so no bottom inset applies.
   var verticalBarEdge: NSDirectionalRectEdge? { traitCollection.tabBarEdge }
+
+  /// Where the page's own title starts beside the vertical bar. The top safe
+  /// area there is zero, so the corner-adapted one keeps the title off the
+  /// display's rounded corner.
+  private var verticalBarTop: CGFloat {
+    var top = view.safeAreaInsets.top
+    if #available(iOS 26.0, *) {
+      top = max(top, view.edgeInsets(for: .safeArea(cornerAdaptation: .vertical)).top)
+    }
+    return top + 4
+  }
 
   // WebKit backs each overflow scroller with its own UIScrollView. Handing the
   // page's main one to UIKit lets the glass tab bar minimize on scroll. WebKit
