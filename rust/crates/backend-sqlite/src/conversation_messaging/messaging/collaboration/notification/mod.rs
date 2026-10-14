@@ -1,7 +1,11 @@
-use crate::conversation_messaging::messaging::{HostEnvironment, MessagingStore};
+use crate::conversation_messaging::messaging::{
+    HostEnvironment, MessagingStore,
+    author::{AuthorEvidence, resolve_authors},
+};
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
-        MessageId, NotificationId, SendClock, ThreadRootId, collaboration::notification::*,
+        FromKind, MessageId, NotificationId, SendClock, ThreadRootId,
+        collaboration::notification::*,
     },
     foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
@@ -36,6 +40,8 @@ pub enum NotificationStoreError {
     MalformedTimestamp,
     #[error("stored notification payload is not a JSON object")]
     MalformedPayload,
+    #[error("stored anchor message author kind is outside the closed set")]
+    MalformedAuthorKind,
     #[error("clock failed")]
     Clock(
         #[source]
@@ -106,21 +112,96 @@ fn decode(row: SqliteRow) -> Result<Notification, NotificationStoreError> {
     })
 }
 
+/// The list read also carries the anchor message's author columns, so the sender is
+/// resolved by the same author authority Activity uses (live row over snapshot).
+macro_rules! list_select {
+    () => {
+        "SELECT n.id,n.kind,n.user_id,n.agent_id,n.workspace_id,n.conversation_id,n.message_id,m.thread_root_id,n.source_workspace_id,n.source_conversation_id,n.source_message_id,n.payload,n.read_at,n.created_at,m.from_kind,m.from_user_id,m.from_agent_id,m.author_id,m.author_name,m.author_display_name FROM notifications n LEFT JOIN messages m ON m.id=n.message_id WHERE n.user_id=?"
+    };
+}
+
+/// Only mention kinds name a sender; a missing anchor message reads as system, so
+/// it resolves to no sender rather than a fabricated author.
+fn sender_evidence(row: &SqliteRow) -> Result<AuthorEvidence, NotificationStoreError> {
+    let kind: String = row.try_get("kind")?;
+    let from_kind = match (
+        kind.as_str(),
+        row.try_get::<Option<String>, _>("from_kind")?.as_deref(),
+    ) {
+        ("mention_self" | "mention_external", Some("user")) => FromKind::User,
+        ("mention_self" | "mention_external", Some("agent")) => FromKind::Agent,
+        (_, None | Some("system" | "user" | "agent")) => FromKind::System,
+        (_, Some(_)) => return Err(NotificationStoreError::MalformedAuthorKind),
+    };
+    if from_kind == FromKind::System {
+        return Ok(AuthorEvidence {
+            from_kind,
+            from_user_id: None,
+            from_agent_id: None,
+            author_id: None,
+            author_name: None,
+            author_display_name: None,
+        });
+    }
+    Ok(AuthorEvidence {
+        from_kind,
+        from_user_id: row.try_get("from_user_id")?,
+        from_agent_id: row.try_get("from_agent_id")?,
+        author_id: row.try_get("author_id")?,
+        author_name: row.try_get("author_name")?,
+        author_display_name: row.try_get("author_display_name")?,
+    })
+}
+
 impl<E: Clone + Send + Sync + 'static> NotificationReadPort for SqliteNotificationStore<E> {
     type Error = PersistenceFailure;
     async fn list(
         &self,
         viewer: &UserId,
         query: NotificationListQuery,
-    ) -> Result<Vec<Notification>, Self::Error> {
+    ) -> Result<Vec<ListedNotification>, Self::Error> {
+        let mut conn = self
+            .pool
+            .acquire()
+            .await
+            .map_err(NotificationStoreError::from)?;
         let rows = if query.unread_only {
-            sqlx::query("SELECT n.id,n.kind,n.user_id,n.agent_id,n.workspace_id,n.conversation_id,n.message_id,m.thread_root_id,n.source_workspace_id,n.source_conversation_id,n.source_message_id,n.payload,n.read_at,n.created_at FROM notifications n LEFT JOIN messages m ON m.id=n.message_id WHERE n.user_id=? AND n.read_at IS NULL ORDER BY n.created_at DESC,n.id DESC LIMIT ?").bind(viewer.as_str()).bind(i64::from(query.limit)).fetch_all(&self.pool).await
+            sqlx::query(concat!(
+                list_select!(),
+                " AND n.read_at IS NULL ORDER BY n.created_at DESC,n.id DESC LIMIT ?"
+            ))
+            .bind(viewer.as_str())
+            .bind(i64::from(query.limit))
+            .fetch_all(&mut *conn)
+            .await
         } else {
-            sqlx::query("SELECT n.id,n.kind,n.user_id,n.agent_id,n.workspace_id,n.conversation_id,n.message_id,m.thread_root_id,n.source_workspace_id,n.source_conversation_id,n.source_message_id,n.payload,n.read_at,n.created_at FROM notifications n LEFT JOIN messages m ON m.id=n.message_id WHERE n.user_id=? ORDER BY n.created_at DESC,n.id DESC LIMIT ?").bind(viewer.as_str()).bind(i64::from(query.limit)).fetch_all(&self.pool).await
-        }.map_err(NotificationStoreError::from)?;
-        rows.into_iter()
-            .map(|r| decode(r).map_err(Into::into))
-            .collect()
+            sqlx::query(concat!(
+                list_select!(),
+                " ORDER BY n.created_at DESC,n.id DESC LIMIT ?"
+            ))
+            .bind(viewer.as_str())
+            .bind(i64::from(query.limit))
+            .fetch_all(&mut *conn)
+            .await
+        }
+        .map_err(NotificationStoreError::from)?;
+        let evidence = rows
+            .iter()
+            .map(sender_evidence)
+            .collect::<Result<Vec<_>, _>>()?;
+        let notifications = rows
+            .into_iter()
+            .map(decode)
+            .collect::<Result<Vec<_>, _>>()?;
+        let senders = resolve_authors(&mut conn, &evidence).await?;
+        Ok(notifications
+            .into_iter()
+            .zip(senders)
+            .map(|(notification, sender)| ListedNotification {
+                notification,
+                sender,
+            })
+            .collect())
     }
     async fn unread_summary(&self, viewer: &UserId) -> Result<NotificationSummary, Self::Error> {
         let mut tx = self

@@ -44,7 +44,7 @@ async fn unread_ids(port: &impl NotificationReadPort, viewer: &UserId) -> Vec<St
     .ok()
     .expect("unread list succeeds")
     .into_iter()
-    .map(|notification| notification.id.as_str().to_owned())
+    .map(|listed| listed.notification.id.as_str().to_owned())
     .collect()
 }
 
@@ -67,7 +67,9 @@ async fn viewer_read_and_atomic_clear_return_the_marked_count() {
         .await
         .unwrap();
     assert_eq!(
-        list.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+        list.iter()
+            .map(|n| n.notification.id.as_str())
+            .collect::<Vec<_>>(),
         ["n4", "n3", "n2", "n1"]
     );
     let summary = n.unread_summary(&viewer).await.unwrap();
@@ -233,5 +235,76 @@ async fn malformed_selected_identity_or_scope_rolls_back_the_entire_clear() {
             .unwrap()
             .marked(),
         4
+    );
+}
+
+#[tokio::test]
+async fn list_resolves_the_anchor_sender_through_the_shared_author_authority() {
+    use silverhand_backend_core::conversation_messaging::messaging::{
+        ActiveAuthor, MessageAuthor, PrincipalKind,
+    };
+    let d = tempfile::tempdir().unwrap();
+    let path = d.path().join("sender.sqlite");
+    let mut db = current_schema::create_current_schema(&path).await;
+    for sql in [
+        "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('u','u','U',1,1),('live','live','Live Renamed',1,1)",
+        "INSERT INTO workspaces(id,name,name_key,created_at,owner_user_id,updated_at) VALUES('w1','W1','w1',1,'u',1)",
+        "INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,created_at,updated_at) VALUES('c1','w1','workspace','open','C1','c1','open',1,1)",
+        "INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at,author_id,author_name,author_display_name) VALUES \
+         ('m-live','c1','user','live','hi',1,1,'live','live','Live Old'), \
+         ('m-gone','c1','user',NULL,'hi',2,2,'gone','gone','Gone'), \
+         ('m-lost','c1','user',NULL,'hi',3,3,NULL,NULL,NULL), \
+         ('m-sys','c1','system',NULL,'hi',4,4,NULL,NULL,NULL)",
+        "INSERT INTO notifications(id,kind,user_id,workspace_id,conversation_id,message_id,payload,created_at) VALUES \
+         ('n-live','mention_self','u','w1','c1','m-live','{}',7), \
+         ('n-ext','mention_external','u','w1','c1','m-live','{}',6), \
+         ('n-gone','mention_self','u','w1','c1','m-gone','{}',5), \
+         ('n-lost','mention_self','u','w1','c1','m-lost','{}',4), \
+         ('n-sys','mention_self','u','w1','c1','m-sys','{}',3), \
+         ('n-anchorless','mention_self','u','w1','c1',NULL,'{}',2), \
+         ('n-failed','agent_start_failed','u','w1',NULL,NULL,'{}',1)",
+    ] {
+        sqlx::query(sql).execute(&mut db).await.unwrap();
+    }
+    db.close().await.unwrap();
+    let store = MessagingStore::open(&path).await.unwrap();
+    let list = store
+        .notifications()
+        .list(
+            &UserId::parse("u").unwrap(),
+            NotificationListQuery {
+                unread_only: false,
+                limit: 100,
+            },
+        )
+        .await
+        .unwrap();
+    let senders = list
+        .iter()
+        .map(|listed| (listed.notification.id.as_str(), listed.sender.clone()))
+        .collect::<Vec<_>>();
+    let live_name = |sender: &Option<MessageAuthor>| match sender {
+        Some(MessageAuthor::Active(ActiveAuthor::Human(human))) => {
+            Some(human.display_name().to_owned())
+        }
+        _ => None,
+    };
+    assert_eq!(senders[0].0, "n-live");
+    assert_eq!(live_name(&senders[0].1).as_deref(), Some("Live Renamed"));
+    assert_eq!(senders[1].0, "n-ext");
+    assert_eq!(live_name(&senders[1].1).as_deref(), Some("Live Renamed"));
+    assert_eq!(senders[2].0, "n-gone");
+    assert!(matches!(senders[2].1, Some(MessageAuthor::Deleted(_))));
+    assert_eq!(
+        senders[3..],
+        [
+            (
+                "n-lost",
+                Some(MessageAuthor::unresolved(PrincipalKind::Human))
+            ),
+            ("n-sys", None),
+            ("n-anchorless", None),
+            ("n-failed", None),
+        ]
     );
 }

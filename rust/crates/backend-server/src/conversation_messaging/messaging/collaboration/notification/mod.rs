@@ -18,7 +18,10 @@ use silverhand_backend_core::{
 };
 use std::{collections::HashMap, sync::Arc};
 
-use crate::foundation::wire_admission::ValidatedJson;
+use crate::{
+    conversation_messaging::messaging::author_wire::author_dto,
+    foundation::wire_admission::ValidatedJson,
+};
 
 pub const LIST_PATH: &str = "/api/notifications";
 pub const UNREAD_PATH: &str = "/api/notifications/unread";
@@ -272,8 +275,9 @@ fn is_ecmascript_trim_whitespace(value: char) -> bool {
                 | '\r'
     )
 }
-fn notification_wire(n: &Notification) -> serde_json::Value {
-    json!({"id":n.id.as_str(),"kind":n.kind.as_str(),"user_id":n.user.as_ref().map(|v|v.as_str()),"agent_id":n.agent.as_ref().map(|v|v.as_str()),"workspace_id":n.workspace.as_ref().map(|v|v.as_str()),"conversation_id":n.conversation.as_ref().map(|v|v.as_str()),"message_id":n.message.as_ref().map(|v|v.as_str()),"thread_root_id":n.thread_root.as_ref().map(|v|v.as_str()),"source_workspace_id":n.source_workspace.as_ref().map(|v|v.as_str()),"source_conversation_id":n.source_conversation.as_ref().map(|v|v.as_str()),"source_message_id":n.source_message.as_ref().map(|v|v.as_str()),"payload":n.payload_json.as_deref().and_then(|v|serde_json::from_str::<serde_json::Value>(v).ok()),"read_at":n.read_at.map(NotificationTimestamp::get),"created_at":n.created_at.get()})
+fn notification_wire(listed: &ListedNotification) -> serde_json::Value {
+    let n = &listed.notification;
+    json!({"id":n.id.as_str(),"kind":n.kind.as_str(),"user_id":n.user.as_ref().map(|v|v.as_str()),"agent_id":n.agent.as_ref().map(|v|v.as_str()),"workspace_id":n.workspace.as_ref().map(|v|v.as_str()),"conversation_id":n.conversation.as_ref().map(|v|v.as_str()),"message_id":n.message.as_ref().map(|v|v.as_str()),"thread_root_id":n.thread_root.as_ref().map(|v|v.as_str()),"source_workspace_id":n.source_workspace.as_ref().map(|v|v.as_str()),"source_conversation_id":n.source_conversation.as_ref().map(|v|v.as_str()),"source_message_id":n.source_message.as_ref().map(|v|v.as_str()),"payload":n.payload_json.as_deref().and_then(|v|serde_json::from_str::<serde_json::Value>(v).ok()),"read_at":n.read_at.map(NotificationTimestamp::get),"created_at":n.created_at.get(),"sender":listed.sender.as_ref().map(author_dto)})
 }
 fn internal() -> Response {
     (

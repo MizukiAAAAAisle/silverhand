@@ -22,7 +22,7 @@ impl NotificationReadPort for Ports {
         &self,
         _: &UserId,
         q: NotificationListQuery,
-    ) -> Result<Vec<Notification>, Self::Error> {
+    ) -> Result<Vec<ListedNotification>, Self::Error> {
         self.calls
             .lock()
             .unwrap()
@@ -340,26 +340,29 @@ impl NotificationReadPort for FixturePorts {
         &self,
         _: &UserId,
         query: NotificationListQuery,
-    ) -> Result<Vec<Notification>, Self::Error> {
+    ) -> Result<Vec<ListedNotification>, Self::Error> {
         self.calls
             .lock()
             .unwrap()
             .push(format!("list:{}:{}", query.unread_only, query.limit));
-        Ok(vec![Notification {
-            id: NotificationId::parse("notification-1").unwrap(),
-            kind: NotificationKind::AgentStartFailed,
-            user: Some(UserId::parse("user-1").unwrap()),
-            agent: None,
-            workspace: None,
-            conversation: None,
-            message: None,
-            thread_root: None,
-            source_workspace: None,
-            source_conversation: None,
-            source_message: None,
-            payload_json: Some(r#"{"code":"missing-runtime"}"#.into()),
-            read_at: None,
-            created_at: NotificationTimestamp::new(100).unwrap(),
+        Ok(vec![ListedNotification {
+            sender: None,
+            notification: Notification {
+                id: NotificationId::parse("notification-1").unwrap(),
+                kind: NotificationKind::AgentStartFailed,
+                user: Some(UserId::parse("user-1").unwrap()),
+                agent: None,
+                workspace: None,
+                conversation: None,
+                message: None,
+                thread_root: None,
+                source_workspace: None,
+                source_conversation: None,
+                source_message: None,
+                payload_json: Some(r#"{"code":"missing-runtime"}"#.into()),
+                read_at: None,
+                created_at: NotificationTimestamp::new(100).unwrap(),
+            },
         }])
     }
 
@@ -470,4 +473,63 @@ async fn production_router_consumes_the_ts_signed_notification_wire_closed_set()
         std::collections::BTreeSet::from(["clear", "list", "unread"])
     );
     assert_eq!(fixture.as_array().unwrap().len(), 13);
+}
+
+#[derive(Clone)]
+struct SenderPorts;
+impl NotificationReadPort for SenderPorts {
+    type Error = Infallible;
+    async fn list(
+        &self,
+        _: &UserId,
+        _: NotificationListQuery,
+    ) -> Result<Vec<ListedNotification>, Self::Error> {
+        use silverhand_backend_core::conversation_messaging::messaging::{
+            MessageAuthor, MessageId,
+        };
+        Ok(vec![ListedNotification {
+            sender: Some(MessageAuthor::active_human(
+                UserId::parse("author-1").unwrap(),
+                "bo".into(),
+                "Bo".into(),
+                None,
+            )),
+            notification: Notification {
+                id: NotificationId::parse("notification-1").unwrap(),
+                kind: NotificationKind::MentionSelf,
+                user: Some(UserId::parse("u").unwrap()),
+                agent: None,
+                workspace: Some(WorkspaceId::parse("w").unwrap()),
+                conversation: Some(ConversationId::parse("c").unwrap()),
+                message: Some(MessageId::parse("m").unwrap()),
+                thread_root: None,
+                source_workspace: None,
+                source_conversation: None,
+                source_message: None,
+                payload_json: None,
+                read_at: None,
+                created_at: NotificationTimestamp::new(1).unwrap(),
+            },
+        }])
+    }
+    async fn unread_summary(&self, _: &UserId) -> Result<NotificationSummary, Self::Error> {
+        unreachable!()
+    }
+}
+
+#[tokio::test]
+async fn list_projects_the_resolved_sender_with_the_shared_author_wire() {
+    let (status, body) = call(
+        router(SenderPorts, Ports::default(), Effects::default()),
+        Method::GET,
+        "/api/notifications",
+        Value::Null,
+        true,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["notifications"][0]["sender"],
+        json!({"status":"active","kind":"user","id":"author-1","name":"bo","display_name":"Bo","avatar_url":null,"runtime":null})
+    );
 }
