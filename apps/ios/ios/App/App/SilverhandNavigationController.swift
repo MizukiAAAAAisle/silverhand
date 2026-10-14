@@ -30,6 +30,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   let titlebar = Titlebar()
   let pageBar = PageBar()
   let composer = ComposerView()
+  let banner = BannerView()
   var onIntent: (([String: Any]) -> Void)?
 
   // Shared navigation state, as last synced from the page.
@@ -380,7 +381,10 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     requestedVisible = call.getBool("visible") ?? false
     darkTheme = call.getBool("dark") ?? false
     applyChromeStyle()
-    if blocked { presentedViewController?.dismiss(animated: false) }
+    if blocked {
+      presentedViewController?.dismiss(animated: false)
+      banner.dismiss()
+    }
     composer.setBlocked(blocked)
     if let index = names.firstIndex(of: call.getString("tab") ?? ""), let host = page(index) {
       selectedIndex = index
@@ -457,6 +461,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     // composer is a page's own and leaves with it; only a lost session takes
     // it with the bars.
     composer.remove()
+    banner.dismiss()
   }
 
   // MARK: Tab items
@@ -572,6 +577,10 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     case .ended, .cancelled, .failed: composer.holdFocus(false, at: .zero)
     default: break
     }
+  }
+
+  func showBanner(_ notice: BannerNotice) {
+    banner.show(notice, in: view)
   }
 
   func showComposer(_ state: ComposerState) {

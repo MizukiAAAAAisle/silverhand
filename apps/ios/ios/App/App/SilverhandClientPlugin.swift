@@ -12,7 +12,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "sharePng", "saveAttachment",
+    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "bannerShow", "sharePng", "saveAttachment",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -290,6 +290,26 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
           self?.publishState("composerMetrics", metrics)
         }
         host.showComposer(next)
+      }
+      call.resolve()
+    }
+  }
+  @objc public func bannerShow(_ call: CAPPluginCall) {
+    guard let id = call.getString("id"), let title = call.getString("title") else {
+      call.reject("A banner needs an id and a title")
+      return
+    }
+    let icon = call.getObject("icon").map { icon -> ComposerPickerRow.Icon in
+      (icon["image"] as? String).map { .image($0) }
+        ?? .glyph(icon["glyph"] as? String ?? "", ground: icon["ground"] as? Bool ?? false)
+    }
+    let notice = BannerNotice(
+      id: id, title: title, subtitle: call.getString("subtitle"), body: call.getString("body"),
+      icon: icon)
+    Task { @MainActor [self] in
+      if let host = navigationHost {
+        host.banner.onEvent = { [weak self] event in self?.notifyListeners("banner", data: event) }
+        host.showBanner(notice)
       }
       call.resolve()
     }

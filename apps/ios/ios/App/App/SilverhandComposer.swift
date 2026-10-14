@@ -422,13 +422,30 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private func styleSend(enabled: Bool) {
     var configuration = UIButton.Configuration.filled()
     configuration.cornerStyle = .capsule
+    // Colours resolved here and drawn as is: the glass treats a template
+    // glyph as vibrant and greys it, so a live arrow read as disabled.
+    let background = (enabled ? UIColor.label : .tertiarySystemFill).resolvedColor(
+      with: traitCollection)
+    let foreground = (enabled ? UIColor.systemBackground : .tertiaryLabel).resolvedColor(
+      with: traitCollection)
     configuration.image = UIImage(
-      systemName: "arrow.up", withConfiguration: UIImage.SymbolConfiguration(weight: .semibold))
-    configuration.baseBackgroundColor = enabled ? .label : .tertiarySystemFill
-    configuration.baseForegroundColor = enabled ? .systemBackground : .tertiaryLabel
+      systemName: "arrow.up", withConfiguration: UIImage.SymbolConfiguration(weight: .semibold)
+    )?.withTintColor(foreground, renderingMode: .alwaysOriginal)
+    configuration.baseBackgroundColor = background
     sendButton.configuration = configuration
     sendButton.isEnabled = enabled
+    sendEnabled = enabled
   }
+
+  private var sendEnabled = false
+
+  override func traitCollectionDidChange(_ previous: UITraitCollection?) {
+    super.traitCollectionDidChange(previous)
+    if previous?.userInterfaceStyle != traitCollection.userInterfaceStyle {
+      styleSend(enabled: sendEnabled)
+    }
+  }
+
 
   // MARK: Grabber
 

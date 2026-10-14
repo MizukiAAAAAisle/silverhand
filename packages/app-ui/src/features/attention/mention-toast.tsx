@@ -1,7 +1,13 @@
 import { toast } from "sonner";
+import type { BannerNotice } from "@silverhand/client";
 import { parseLocator, parseReference, type MessageAuthorDto } from "@silverhand/shared";
-import { CloseIcon } from "@/icons";
+import { BotIcon, CloseIcon, UserIcon } from "@/icons";
 import { AVATAR_PX } from "@/components/avatar-scale";
+import { agentAvatarImage } from "@/components/agent-avatar";
+import { iconMarkup } from "@/components/layout/native-page-bar";
+import { readLayoutClass } from "@/navigation/layout";
+import { getPlatform } from "@/platform";
+import { loadAvatarBlobUrl } from "@/features/identity/avatar-blob-cache";
 import { AuthorAvatarView, AuthorName } from "@/features/messages/components/author-avatar-view";
 import { presentAuthor } from "@/features/messages/model/author-presentation";
 import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
@@ -17,8 +23,20 @@ export interface MentionToastContent {
 
 const MENTION_TOAST_DURATION_MS = 8_000;
 
-/** Shows who mentioned the viewer, where, and what they said; the whole card opens it. */
-export function showMentionToast(content: MentionToastContent, onOpen: () => void): void {
+/** Shows who mentioned the viewer, where, and what they said; the whole card
+ *  opens it. The compact layout hands it to the platform's banner, whose taps
+ *  come back by `id`, when there is one. */
+export function showMentionToast(
+  content: MentionToastContent,
+  id: string,
+  onOpen: () => void,
+): void {
+  const banner = getPlatform().banner;
+  if (banner && readLayoutClass() === "compact") {
+    void mentionNotice(content, id).then((notice) => banner.show(notice));
+    return;
+  }
+
   toast.custom(
     (id) => (
       <MentionToast
@@ -100,6 +118,30 @@ function MentionToast({
       </button>
     </div>
   );
+}
+
+async function mentionNotice(content: MentionToastContent, id: string): Promise<BannerNotice> {
+  const { sender } = content;
+  const presentation = sender ? presentAuthor(sender) : null;
+  return {
+    id,
+    title: presentation?.label ?? content.fallbackName,
+    subtitle: content.conversationTitle ? `in #${content.conversationTitle}` : undefined,
+    body: content.excerpt ? readableExcerpt(content.excerpt) : undefined,
+    icon: sender ? await senderIcon(sender) : undefined,
+  };
+}
+
+async function senderIcon(sender: MessageAuthorDto): Promise<BannerNotice["icon"]> {
+  const picture =
+    sender.status === "active" && sender.avatar_url
+      ? await loadAvatarBlobUrl(sender.avatar_url)
+      : null;
+  if (sender.kind === "agent") {
+    const image = sender.status === "active" ? agentAvatarImage(sender.runtime, picture) : null;
+    return image ? { image } : { glyph: iconMarkup(BotIcon), ground: true };
+  }
+  return picture ? { image: picture } : { glyph: iconMarkup(UserIcon), ground: true };
 }
 
 const AUTOLINK = /<(silverhand:\/\/[^\s<>]+)>/g;

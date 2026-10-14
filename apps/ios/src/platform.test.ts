@@ -23,6 +23,7 @@ function harness() {
     composerSync: vi.fn(async () => {}),
     composerRemove: vi.fn(async () => {}),
     composerSetText: vi.fn(async () => {}),
+    bannerShow: vi.fn(async () => {}),
     getProfile: vi.fn(async () => ({ server_url: "https://server.example", updated_at: 1 })),
     authState: vi.fn(async () => ({
       serverUrl: "https://server.example",

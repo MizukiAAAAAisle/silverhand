@@ -214,6 +214,29 @@ export function useNotificationToasts(
     return getPlatform().notifications?.onNotificationClicked(handleClickById);
   }, [handleClickById]);
 
+  // The native banner reports a tap by the notification's id.
+  useEffect(() => {
+    const banner = getPlatform().banner;
+    if (!banner) {
+      return;
+    }
+    let stop: (() => void) | null = null;
+    let live = true;
+    void banner
+      .subscribe((event) => handleClickById(event.id))
+      .then((unsubscribe) => {
+        if (live) {
+          stop = unsubscribe;
+        } else {
+          unsubscribe();
+        }
+      });
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, [handleClickById]);
+
   useEffect(() => {
     if (!data) return;
     const notifications = data.notifications;
@@ -255,6 +278,7 @@ export function useNotificationToasts(
             conversationTitle: payloadString(n, "conversation_title"),
             excerpt: payloadString(n, "mention_excerpt"),
           },
+          n.id,
           () => handleClickById(n.id),
         );
       } else {

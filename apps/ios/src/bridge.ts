@@ -1,6 +1,8 @@
 import type { ServerInfo } from "@silverhand/shared";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type {
+  BannerEvent,
+  BannerNotice,
   ComposerEvent,
   ComposerState,
   TitlebarEvent,
@@ -42,6 +44,8 @@ export interface NativeBridge {
   composerSync(input: { state: ComposerState }): Promise<void>;
   /** Removes the composer if it shows draft `key`; without a key, whatever it shows. */
   composerRemove(input: { key?: string }): Promise<void>;
+  /** A notice over the bars; the icon is base64 PNG. */
+  bannerShow(input: BannerNotice): Promise<void>;
   composerSetText(input: {
     key: string;
     text: string;
@@ -98,6 +102,10 @@ export interface NativeBridge {
   addListener(
     event: "composer",
     handler: (event: ComposerEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    event: "banner",
+    handler: (event: BannerEvent) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "composerMetrics",

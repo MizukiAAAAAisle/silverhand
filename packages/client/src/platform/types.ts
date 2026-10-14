@@ -123,6 +123,7 @@ export interface ClientPlatform {
   titlebar?: TitlebarCapability;
   pageBar?: PageBarCapability;
   composer?: ComposerCapability;
+  banner?: BannerCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
   /** The store page this build is installed from, offered when the server requires a newer app. */
@@ -312,6 +313,21 @@ export interface ComposerCapability {
   /** Replaces the text of draft `key`; `caret` counts UTF-16 units. */
   setText(input: { key: string; text: string; caret: number; focus: boolean }): Promise<void>;
   subscribe(handler: (event: ComposerEvent) => void): Promise<() => void>;
+}
+/** A notice native draws over its bars; a newer one replaces the one showing. */
+export interface BannerNotice {
+  id: string;
+  title: string;
+  /** Set after the title, quieter. */
+  subtitle?: string;
+  body?: string;
+  /** `image` is an image URL; `glyph` is SVG markup on a 24px grid. */
+  icon?: ComposerPickerIcon;
+}
+export type BannerEvent = { kind: "open"; id: string };
+export interface BannerCapability {
+  show(notice: BannerNotice): Promise<void>;
+  subscribe(handler: (event: BannerEvent) => void): Promise<() => void>;
 }
 export interface NavigationCapability {
   badges(input: {
