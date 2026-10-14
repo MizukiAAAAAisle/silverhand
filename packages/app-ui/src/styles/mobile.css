@@ -801,13 +801,6 @@
   bottom: calc(var(--native-composer-overlay, 0px) + var(--native-composer-picker, 0px) + 8px);
   z-index: var(--z-sticky);
 }
-[data-native-composer-accessory] [data-composer-activity] {
-  margin-bottom: 8px;
-  overflow: hidden;
-  border-width: 0;
-  border-radius: var(--control-radius);
-  box-shadow: var(--shadow-popover);
-}
 [data-layout="compact"] [data-scroll-bottom] {
   bottom: max(
     16px,

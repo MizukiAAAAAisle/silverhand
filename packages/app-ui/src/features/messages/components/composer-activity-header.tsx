@@ -9,7 +9,10 @@ import {
   WaitingIcon,
 } from "@/icons";
 import type { AgentDto, AgentRunState } from "@silverhand/shared";
-import { AgentAvatar } from "@/components/agent-avatar";
+import type { ComposerActivity } from "@silverhand/client";
+import { BotIcon } from "@/icons";
+import { AgentAvatar, agentAvatarImage } from "@/components/agent-avatar";
+import { iconMarkup } from "@/components/layout/native-page-bar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentRunStates } from "@/features/channels/hooks";
 import { useAgents } from "@/features/agents/hooks/hooks";
@@ -143,6 +146,71 @@ function currentToolSummary(state: AgentRunState): ToolSummary | null {
 
 function displayNameOf(agent: AgentDto | undefined): string {
   return agent ? `@${agent.display_name?.trim() || agent.name}` : "@agent";
+}
+
+// ── Native line ──────────────────────────────────────────────────────────
+
+const NATIVE_FACES = 3;
+
+/**
+ * The compact composer's activity, for native to draw: the faces of the
+ * agents running, the first one's name and state, and when it started. A tap
+ * opens `openAgentActivity(activity.id)`.
+ */
+export function useNativeComposerActivity(
+  conversationId: string,
+  restrictToAgentIds: readonly string[] | null | undefined,
+  enabled: boolean,
+): ComposerActivity | undefined {
+  const { data: runStates = [] } = useAgentRunStates(enabled ? conversationId : null);
+  const { data: directoryAgents = [] } = useAgents();
+  const active = useMemo(
+    () => selectActiveRunStates(runStates, restrictToAgentIds),
+    [runStates, restrictToAgentIds],
+  );
+  const shownAgents = useMemo(() => {
+    const ids = active.slice(0, NATIVE_FACES).map((state) => state.agentId);
+    return ids.flatMap((id) => directoryAgents.find((agent) => agent.id === id) ?? []);
+  }, [directoryAgents, active]);
+  const avatarUrls = useAgentAvatarObjectUrls(shownAgents);
+
+  const subject = active[0];
+  if (!enabled || !subject) {
+    return undefined;
+  }
+
+  const agent = shownAgents.find((candidate) => candidate.id === subject.agentId);
+  const name = displayNameOf(agent);
+  const others = active.length - 1;
+  const title = others > 0 ? `${name} +${others}` : name;
+  const tool = currentToolSummary(subject);
+  const detail = tool
+    ? tool.name
+    : subject.compacting
+      ? "Compacting…"
+      : STATUS_LABEL[subject.status] || subject.status;
+  const faces = active.slice(0, NATIVE_FACES).map((state) => {
+    const face = shownAgents.find((candidate) => candidate.id === state.agentId);
+    const image = face ? agentAvatarImage(face.runtime, avatarUrls.get(face.id) ?? null) : null;
+    return image ? { image } : { glyph: iconMarkup(BotIcon), ground: true };
+  });
+  return {
+    id: subject.agentId,
+    faces,
+    title,
+    detail,
+    since: subject.startedAt,
+    label: `${title}, ${detail}`,
+  };
+}
+
+/** Opens an agent's activity, as the line's avatar and name do. */
+export function useOpenAgentActivity(): (agentId: string) => void {
+  const { openAgentPanel } = useNav();
+  return (agentId) => {
+    focusAgentSideSection(agentId, "activity");
+    openAgentPanel(agentId);
+  };
 }
 
 // ── Component ────────────────────────────────────────────────────────────

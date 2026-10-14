@@ -277,6 +277,21 @@ export interface ComposerState {
   /** The `@` / `#` candidates native lists above the composer; a tap comes
    * back as `pick`. Absent while no trigger is open. */
   picker?: ComposerPicker;
+  /** The agents at work here, on a line above the composer; a tap comes back
+   * as `activity`. Absent while none runs. */
+  activity?: ComposerActivity;
+}
+/** One line for the agents running: up to three faces, the first agent's
+ * name and state, and how long it has run, which native counts from `since`
+ * (epoch ms). */
+export interface ComposerActivity {
+  /** The agent a tap opens. */
+  id: string;
+  faces: ComposerPickerIcon[];
+  title: string;
+  detail: string;
+  since: number;
+  label: string;
 }
 /** A candidate's face: a picture drawn as it is, or a glyph (SVG markup on a
  * 24px grid) native tints, on a square ground when `ground`. */
@@ -304,6 +319,7 @@ export type ComposerEvent =
   | { kind: "send"; key: string; text: string; caret: number }
   | { kind: "add"; key: string; id: string }
   | { kind: "pick"; key: string; id: string }
+  | { kind: "activity"; key: string; id: string }
   | { kind: "files"; key: string; files: { name: string; type: string; base64: string }[] };
 export interface ComposerCapability {
   /** Shows the composer for draft `state.key`. */

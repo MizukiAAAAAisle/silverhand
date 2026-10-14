@@ -16,6 +16,7 @@ struct ComposerState: Equatable {
   let accessoryHeight: CGFloat
   let add: [ComposerMenuItem]
   let picker: ComposerPicker?
+  let activity: ComposerActivity?
 }
 
 /// The compact composer, floating over the page above the keyboard. The page
@@ -33,7 +34,8 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   var onEvent: (([String: Any]) -> Void)?
   /// Distances up from the bottom of the host view to the composer's top: at
   /// rest (`rest`), at the height its text gives it (`reserve`), and as drawn
-  /// (`overlay`); and the height of the picker over it (`picker`).
+  /// (`overlay`); and the room the picker or the activity line takes over it
+  /// (`picker`).
   var onMetrics: ((_ metrics: [String: CGFloat]) -> Void)?
   /// Presents the system pickers.
   weak var presenter: UIViewController?
@@ -51,6 +53,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
 
   private let backdrop: UIVisualEffectView
   private let picker = ComposerPickerView()
+  private let activity = ComposerActivityView()
   private var pickerHeight: NSLayoutConstraint?
   private let textView = ComposerTextView()
   private let placeholder = UILabel()
@@ -114,6 +117,12 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     let pan = UIPanGestureRecognizer(target: self, action: #selector(drag(_:)))
     pan.delegate = self
     addGestureRecognizer(pan)
+    activity.alpha = 0
+    activity.addAction(
+      UIAction { [weak self] _ in
+        guard let key = self?.state?.key, let id = self?.activity.activity?.id else { return }
+        self?.onEvent?(["kind": "activity", "key": key, "id": id])
+      }, for: .touchUpInside)
     picker.alpha = 0
     picker.onPick = { [weak self] id in
       guard let key = self?.state?.key else { return }
@@ -157,6 +166,14 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
       picker.bottomAnchor.constraint(equalTo: topAnchor, constant: -Self.padding),
       listHeight,
     ])
+
+    host.addSubview(activity)
+    activity.translatesAutoresizingMaskIntoConstraints = false
+    NSLayoutConstraint.activate([
+      activity.leadingAnchor.constraint(equalTo: leadingAnchor),
+      activity.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+      activity.bottomAnchor.constraint(equalTo: topAnchor, constant: -Self.padding),
+    ])
   }
 
   func apply(_ next: ComposerState) {
@@ -179,6 +196,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     sendButton.accessibilityLabel = next.sendLabel
     styleSend(enabled: next.enabled && next.canSend)
     showPicker(next.picker)
+    showActivity(next.picker == nil ? next.activity : nil)
     refresh(animated: false)
   }
 
@@ -199,6 +217,21 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     }
     publishMetrics()
   }
+
+  /// The activity line gives way to the picker, which takes the same room.
+  private func showActivity(_ next: ComposerActivity?) {
+    if let next { activity.apply(next) }
+    let shown = next != nil
+    UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState]) {
+      self.activity.alpha = shown ? 1 : 0
+    } completion: { _ in
+      if !shown, self.activityShown == false { self.activity.apply(nil) }
+    }
+    activityShown = shown
+    publishMetrics()
+  }
+
+  private var activityShown = false
 
   /// Replaces the text the page holds for draft `key`.
   func setText(key: String, text: String, caret: Int, focus: Bool) {
@@ -241,6 +274,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     let share = min(1, max(0, progress ?? 0))
     transform = CGAffineTransform(translationX: (superview?.bounds.width ?? 0) * share, y: 0)
     picker.transform = transform
+    activity.transform = transform
   }
 
   /// A web modal covers the page; native chrome cannot sit under its
@@ -249,6 +283,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     if blocked, textView.isFirstResponder { textView.resignFirstResponder() }
     isHidden = blocked
     picker.isHidden = blocked
+    activity.isHidden = blocked
   }
 
   /// Takes the composer off screen and forgets its draft.
@@ -264,6 +299,11 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     picker.apply(nil)
     pickerHeight?.constant = 0
     picker.removeFromSuperview()
+    activity.transform = .identity
+    activity.alpha = 0
+    activity.apply(nil)
+    activityShown = false
+    activity.removeFromSuperview()
     removeFromSuperview()
     published = nil
     onMetrics?(["rest": 0, "reserve": 0, "overlay": 0, "picker": 0])
@@ -359,15 +399,19 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     guard let host = superview, state != nil else { return }
     let bottom = host.bounds.maxY - frame.maxY
     let rest = host.safeAreaInsets.bottom + Self.padding + collapsedHeight
-    let next = [rest, bottom + heights().reserve, bottom + frame.height, listSpace]
+    // The activity line stays while agents run, so the page clears it as it
+    // clears the composer; the picker is passing and covers the page instead.
+    let lasting = activityShown && state?.picker == nil ? listSpace : 0
+    let next = [rest, bottom + heights().reserve + lasting, bottom + frame.height, listSpace]
     guard published != next else { return }
     published = next
     onMetrics?(["rest": next[0], "reserve": next[1], "overlay": next[2], "picker": next[3]])
   }
 
-  /// The room the picker takes over the composer.
+  /// The room the picker or the activity line takes over the composer.
   private var listSpace: CGFloat {
-    state?.picker == nil ? 0 : (pickerHeight?.constant ?? 0) + Self.padding
+    if state?.picker != nil { return (pickerHeight?.constant ?? 0) + Self.padding }
+    return activityShown ? ComposerActivityView.height + Self.padding : 0
   }
 
   // MARK: Editing

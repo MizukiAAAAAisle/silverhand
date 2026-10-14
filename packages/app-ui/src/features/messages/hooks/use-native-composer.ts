@@ -18,6 +18,7 @@ interface NativeComposerOptions {
   onChange: (text: string, caret: number, composing: boolean) => void;
   onSend: (text: string, caret: number) => void;
   onPick: (id: string) => void;
+  onActivity: (id: string) => void;
   onAdd: (id: string) => void;
   onFiles: (files: File[]) => void;
 }
@@ -68,6 +69,8 @@ export function useNativeComposer({
         latest.current.onSend(event.text, event.caret);
       } else if (event.kind === "pick") {
         latest.current.onPick(event.id);
+      } else if (event.kind === "activity") {
+        latest.current.onActivity(event.id);
       } else if (event.kind === "add") {
         latest.current.onAdd(event.id);
       } else {

@@ -282,6 +282,18 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
               dimmed: row["dimmed"] as? Bool ?? false)
           },
           footer: picker["footer"] as? String)
+      },
+      activity: (state["activity"] as? JSObject).flatMap { activity in
+        guard let id = activity["id"] as? String else { return nil }
+        return ComposerActivity(
+          id: id,
+          faces: (activity["faces"] as? JSArray ?? []).compactMap { value in
+            guard let icon = value as? JSObject else { return nil }
+            return (icon["image"] as? String).map { .image($0) }
+              ?? .glyph(icon["glyph"] as? String ?? "", ground: icon["ground"] as? Bool ?? false)
+          },
+          title: activity["title"] as? String ?? "", detail: activity["detail"] as? String ?? "",
+          label: activity["label"] as? String ?? "", since: activity["since"] as? Double ?? 0)
       })
     Task { @MainActor [self] in
       if let host = navigationHost {

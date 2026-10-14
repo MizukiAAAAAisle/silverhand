@@ -25,7 +25,11 @@ import {
   type PickerItem,
 } from "../model/composer-picker";
 import { MAX_ATTACHMENTS, shouldInterceptOversizedPaste } from "../model/oversize-paste";
-import { ComposerActivityHeader } from "./composer-activity-header";
+import {
+  ComposerActivityHeader,
+  useNativeComposerActivity,
+  useOpenAgentActivity,
+} from "./composer-activity-header";
 import { nativePickerOf, PickerMenu, rowKey } from "./composer-picker-menu";
 import { Lightbox } from "./lightbox";
 import {
@@ -126,6 +130,8 @@ export function Composer({
     (!draft.trim() && pending.filter((p) => p.state === "done").length === 0);
 
   const native = useNativeComposerPlatform();
+  const nativeActivity = useNativeComposerActivity(conversationId, activityAgentIds, native);
+  const openAgentActivity = useOpenAgentActivity();
   const [accessoryHeight, setAccessoryHeight] = useState(0);
   const accessoryRef = useRef<HTMLDivElement>(null);
   const placeholder = archived
@@ -166,6 +172,7 @@ export function Composer({
             humanAvatarUrls: sources.humanAvatarUrls,
           })
         : undefined,
+      activity: nativeActivity,
     },
     draft,
     caret,
@@ -186,6 +193,7 @@ export function Composer({
         insertPick(item);
       }
     },
+    onActivity: openAgentActivity,
     onAdd: (id) => {
       if (id === "mention" || id === "channel") {
         insertTrigger(id === "mention" ? "@" : "#");
@@ -452,10 +460,6 @@ export function Composer({
       <div data-native-composer aria-hidden={covered || undefined}>
         {covered ? null : (
           <div ref={accessoryRef} data-native-composer-accessory>
-            <ComposerActivityHeader
-              conversationId={conversationId}
-              restrictToAgentIds={activityAgentIds}
-            />
             {tray}
           </div>
         )}

@@ -1,5 +1,5 @@
 import type { ClientPlatform } from "@silverhand/client";
-import type { ComposerPicker } from "@silverhand/client";
+import type { ComposerPicker, ComposerPickerIcon } from "@silverhand/client";
 import { rasterizeImage, rasterizeMarkup } from "./glyph";
 import type { NativeBridge } from "./bridge";
 
@@ -19,15 +19,15 @@ function png(source: string, picture = false): Promise<string> {
   return cached;
 }
 
+async function iconPng(icon: ComposerPickerIcon): Promise<ComposerPickerIcon> {
+  return "image" in icon
+    ? { image: await png(icon.image, true) }
+    : { ...icon, glyph: await png(icon.glyph) };
+}
+
 async function withPngs(picker: ComposerPicker): Promise<ComposerPicker> {
   const rows = await Promise.all(
-    picker.rows.map(async (row) => ({
-      ...row,
-      icon:
-        "image" in row.icon
-          ? { image: await png(row.icon.image, true) }
-          : { ...row.icon, glyph: await png(row.icon.glyph) },
-    })),
+    picker.rows.map(async (row) => ({ ...row, icon: await iconPng(row.icon) })),
   );
   return { ...picker, rows };
 }
@@ -46,11 +46,13 @@ export function createIOSComposer(bridge: NativeBridge): NonNullable<ClientPlatf
   return {
     sync: (state) =>
       run(async () => {
-        const [add, picker] = await Promise.all([
+        const [add, picker, faces] = await Promise.all([
           Promise.all(state.add.map(async (item) => ({ ...item, icon: await png(item.icon) }))),
           state.picker ? withPngs(state.picker) : undefined,
+          state.activity ? Promise.all(state.activity.faces.map(iconPng)) : undefined,
         ]);
-        await bridge.composerSync({ state: { ...state, add, picker } });
+        const activity = state.activity && faces ? { ...state.activity, faces } : undefined;
+        await bridge.composerSync({ state: { ...state, add, picker, activity } });
       }),
     remove: (key) => run(() => bridge.composerRemove({ key })),
     setText: (input) => run(() => bridge.composerSetText(input)),
