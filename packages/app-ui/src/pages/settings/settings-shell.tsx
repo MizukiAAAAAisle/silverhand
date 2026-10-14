@@ -1,3 +1,6 @@
+import { NotificationSettingsPane } from '@/features/notification-sounds/settings-pane';
+import { getPlatform } from "@/platform";
+import { HookSettingsPane } from "@/features/event-hooks/settings-pane";
 import { useCompactLayout } from "@/navigation/layout";
 import { useLocation } from "react-router-dom";
 import { useNav } from "@/router";
@@ -8,6 +11,7 @@ import { RangeInput } from "@/components/ui/range-input";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
   AppearanceIcon,
+  BellIcon,
   CheckIcon,
   CodeFontIcon,
   FontIcon,
@@ -124,9 +128,12 @@ export function SettingsShell(): JSX.Element {
   const nav = useNav();
   const sectionParam = new URLSearchParams(location.search).get("settingsSection");
   const [rememberedSection, setRememberedSection] = useState<SettingsSection>(readSettingsSection);
-  const section = SETTINGS_SECTIONS.includes(sectionParam as SettingsSection)
+  const hooks = getPlatform().eventHooks;
+  const sounds = getPlatform().notificationSounds;
+  const requestedSection = SETTINGS_SECTIONS.includes(sectionParam as SettingsSection)
     ? (sectionParam as SettingsSection)
     : rememberedSection;
+  const section = (requestedSection === "hooks" && !hooks) || (requestedSection === "notifications" && !sounds) ? "account" : requestedSection;
   const setSection = (next: SettingsSection) => {
     setRememberedSection(next);
     nav.go(`/settings?settingsSection=${next}`);
@@ -150,6 +157,10 @@ export function SettingsShell(): JSX.Element {
               resetMarkdownText={resetMarkdownText}
               resetMarkdownFontSize={resetMarkdownFontSize}
             />
+          ) : section === "notifications" && sounds ? (
+            <NotificationSettingsPane api={sounds} />
+          ) : section === "hooks" && hooks ? (
+            <HookSettingsPane api={hooks} />
           ) : section === "account" ? (
             <AccountPane />
           ) : (
@@ -182,6 +193,8 @@ export function SettingsShell(): JSX.Element {
 }
 
 const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }> = {
+  notifications: { label: "Notifications", icon: <BellIcon className="size-3.5" /> },
+  hooks: { label: "Developer hooks", icon: <SettingsIcon className="size-3.5" /> },
   account: { label: "Account", icon: <UserIcon className="size-3.5" /> },
   appearance: { label: "Appearance", icon: <AppearanceIcon className="size-3.5" /> },
   connection: { label: "Connection", icon: <ServerIcon className="size-3.5" /> },
@@ -198,21 +211,23 @@ function SettingsRailNav({
   bare?: boolean;
   onSelect: (next: SettingsSection) => void;
 }): JSX.Element {
-  const rows = SETTINGS_SECTIONS.map((id) => {
-    const { label, icon } = SECTION_CHROME[id];
-    const selected = id === section;
+  const rows = SETTINGS_SECTIONS.filter((id) => (id !== "hooks" || !!getPlatform().eventHooks) && (id !== "notifications" || !!getPlatform().notificationSounds)).map(
+    (id) => {
+      const { label, icon } = SECTION_CHROME[id];
+      const selected = id === section;
 
-    return (
-      <SidebarRow
-        key={id}
-        icon={icon}
-        title={label}
-        selected={selected}
-        aria-current={selected ? "page" : undefined}
-        onClick={() => onSelect(id)}
-      />
-    );
-  });
+      return (
+        <SidebarRow
+          key={id}
+          icon={icon}
+          title={label}
+          selected={selected}
+          aria-current={selected ? "page" : undefined}
+          onClick={() => onSelect(id)}
+        />
+      );
+    },
+  );
 
   return (
     <nav className="scrollbar-hide flex-1 overflow-y-auto py-1.5">

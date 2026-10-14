@@ -42,3 +42,34 @@ describe("Desktop platform composition", () => {
     expect(restart).toHaveBeenCalledOnce();
   });
 });
+
+
+it("plays custom notification audio without waiting for playback and reports invalid previews", async () => {
+  const players: any[] = [];
+  class Player {
+    duration = 1;
+    onended: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onloadedmetadata: (() => void) | null = null;
+    pause = vi.fn();
+    removeAttribute = vi.fn();
+    play = vi.fn(async () => {});
+    constructor(public source: string) { players.push(this); }
+  }
+  vi.stubGlobal("Audio", Player);
+  const bridge = {
+    showSystemNotification: vi.fn(async () => "data:audio/ogg;base64,AAAA"),
+    notificationSounds: { preview: vi.fn(async () => "data:audio/ogg;base64,BBBB") },
+  } as unknown as DesktopBridge;
+  try {
+    const platform = createDesktopPlatform(bridge, vi.fn());
+    await platform.notifications!.showSystemNotification({ title: "Mention", body: "Hello" });
+    expect(players).toHaveLength(1);
+    expect(players[0].play).toHaveBeenCalledOnce();
+    const preview = platform.notificationSounds!.preview({id:"test.ogg", name:"test.ogg"});
+    await Promise.resolve();
+    expect(players[0].pause).toHaveBeenCalledOnce();
+    players[1].onerror();
+    await expect(preview).rejects.toThrow("could not be played");
+  } finally { vi.unstubAllGlobals(); }
+});

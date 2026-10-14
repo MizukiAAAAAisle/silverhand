@@ -4,7 +4,11 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { materializeAndOpenAttachment } from "./attachment-open.js";
 import { handleAttachmentSave } from "./attachment-save.js";
 
-export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
+export function registerSurfaceIpcHandlers(
+  ipc: GuardedIpcRegistrar,
+  soundEnabled: () => boolean = () => true,
+  customSound: () => string | null = () => null,
+): void {
   // Live OS notifications keyed by the renderer-supplied notification id (the
   // backend notification row id). Retained so `notification:dismiss` can
   // `.close()` the exact alert when the backend reports it was read.
@@ -119,7 +123,8 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
     // different channel still produces an OS notification instead of only
     // changing the unread dot.
     if (force !== true && BrowserWindow.getFocusedWindow() !== null) return;
-    const n = new Notification({ title, body });
+    const audio = soundEnabled() ? customSound() : null;
+    const n = new Notification({ title, body, silent: !soundEnabled() || !!audio });
     // Click handler — only wired when the renderer attached a
     // `notificationId`. Bring a window forward (the user clicked, that's
     // the intent) and forward the id back so the renderer can navigate
@@ -155,6 +160,7 @@ export function registerSurfaceIpcHandlers(ipc: GuardedIpcRegistrar): void {
       });
     }
     n.show();
+    return audio ?? undefined;
   });
 
   ipc.handle("notification:dismiss", (_event, notificationIds: unknown) => {

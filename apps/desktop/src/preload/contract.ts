@@ -28,6 +28,11 @@ import type { DesktopBuildConfig } from "../build-flags.js";
 export interface DesktopBackendInfo extends ConnectionInfo, LocalHostInfo {}
 
 export interface DesktopBridge {
+  notificationSounds: {
+    chooseFile(): Promise<import('@silverhand/client').NotificationSoundFile | null>;
+    preview(sound: import('@silverhand/client').NotificationSoundFile | null): Promise<string | null>;
+  };
+  eventHooks: import("@silverhand/client").EventHooksCapability;
   getDesktopBuildConfig(): Promise<DesktopBuildConfig>;
   getBackendInfo(): Promise<DesktopBackendInfo | null>;
   getAuthState(): Promise<ClientAuthState>;
@@ -75,7 +80,7 @@ export interface DesktopBridge {
     body: string;
     force?: boolean;
     notificationId?: string;
-  }): Promise<void>;
+  }): Promise<string | undefined>;
   onNotificationClicked(handler: (notificationId: string) => void): () => void;
   dismissSystemNotifications(notificationIds: string[]): Promise<void>;
   setBadgeCount(count: number): Promise<void>;

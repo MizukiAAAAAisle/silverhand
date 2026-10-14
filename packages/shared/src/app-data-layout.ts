@@ -225,6 +225,8 @@ export interface DesktopAppPaths {
     root: string;
     electronUserData: string;
     serverProfile: string;
+    hooks: string;
+    preferences: string;
     session: string;
     /** #task:1608 — the desktop-owned "which computer is this app bound
      *  to" authority (daemon-config schema; v2 location). */
@@ -304,6 +306,8 @@ export function resolveDesktopAppPaths(appRoot: string): DesktopAppPaths {
       root: desktopRoot,
       electronUserData: join(desktopRoot, 'electron-user-data'),
       serverProfile: join(desktopRoot, 'server-profile.bin'),
+      hooks: join(desktopRoot, 'hooks.json'),
+      preferences: join(desktopRoot, 'preferences.json'),
       session: join(desktopRoot, 'session.bin'),
       computerBinding: join(desktopRoot, COMPUTER_BINDING_FILENAME),
     },

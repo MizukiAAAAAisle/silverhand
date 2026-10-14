@@ -1,5 +1,5 @@
 import { SessionGeneration } from "@silverhand/client";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { apiPaths, type UserDto } from "@silverhand/shared";
 import {
   extractViewerUserFromProxyResponse,
@@ -184,6 +184,7 @@ function mainSessionHarness() {
   };
   let bindingPresent = true;
   const context = vm.createContext({
+    hookService: { revoke: vi.fn() },
     switchingServer: false,
     clientSessionGeneration: new SessionGeneration(),
     localHostClaim: { status: "claimed", hostId: "host-a" },

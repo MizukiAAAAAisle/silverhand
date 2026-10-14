@@ -6,3 +6,8 @@ export type * from "./platform/types.js";
 export { classifyMeFetchOutcome } from "./session/validation.js";
 export type { SessionValidationResult, MeFetchOutcome } from "./session/validation.js";
 export { SessionGeneration } from "./session/generation.js";
+export * from "./platform/event-hooks.js";
+
+export type { NotificationSoundFile, NotificationSoundEdit, NotificationSoundsCapability } from './platform/notification-sounds.js';
+
+export type { HookToggle } from "./platform/event-hooks.js";

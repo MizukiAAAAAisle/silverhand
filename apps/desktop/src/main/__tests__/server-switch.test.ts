@@ -42,6 +42,7 @@ function harness() {
     .join("\n");
   const events: string[] = [];
   const context = vm.createContext({
+    hookService: { revoke: vi.fn() },
     URL,
     Headers,
     apiPaths,

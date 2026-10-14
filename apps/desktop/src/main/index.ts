@@ -1,3 +1,6 @@
+import { DesktopHookSettings } from "./hooks/settings.js";
+import { HookService } from "./hooks/service.js";
+import { registerHookIpc } from "./hooks/ipc.js";
 import type {
   LocalHostProxyConfig as DesktopHostProxyConfig,
   LocalHostProxyConfigResult as DesktopHostProxyConfigResult,
@@ -211,6 +214,8 @@ let logger: FileLogger | null = null;
 let loggers: CategorizedLoggers | null = null;
 let mainWindow: BrowserWindow | null = null;
 const clientSessionGeneration = new SessionGeneration();
+const hookSettings = new DesktopHookSettings(desktopAppPaths().desktop);
+const hookService = new HookService();
 let switchingServer = false;
 let userSessionToken: string | null = null;
 let userSessionUser: UserDto | null = null;
@@ -611,6 +616,7 @@ function reseatCachedUserSessionFromProxy(
 // Human-session expiry does not revoke the independent daemon binding.
 // Only an explicit user logout opts into removing the local binding file.
 async function clearUserSession(preserveHostBinding = true): Promise<void> {
+  hookService.revoke();
   clientSessionGeneration.invalidate();
   userSessionToken = null;
   userSessionUser = null;
@@ -2046,6 +2052,12 @@ function createWindow(): void {
     },
   });
   mainWindow = win;
+  hookService.revoke();
+  win.webContents.on("did-start-navigation", (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) hookService.revoke();
+  });
+  win.webContents.on("render-process-gone", () => hookService.revoke());
+  win.webContents.on("destroyed", () => hookService.revoke());
 
   // Mouse-wheel page zoom does not use the application menu.
   win.webContents.on("zoom-changed", (event) => event.preventDefault());
@@ -2555,8 +2567,17 @@ guardedIpc.handle("partialApply:retry", (): Promise<PartialApplyRetryResult> =>
   handlePartialApplyRetry(),
 );
 
-registerSurfaceIpcHandlers(guardedIpc);
 registerAppUpdateIpcHandlers(guardedIpc, () => appUpdate);
+registerSurfaceIpcHandlers(guardedIpc, () => hookSettings.notificationSoundEnabled, () => hookSettings.notificationSoundDataUrl);
+registerHookIpc(guardedIpc, hookSettings, hookService, () =>
+  userSessionUser && userSessionToken
+    ? {
+        identity: JSON.stringify([requireBackendUrl(), userSessionUser.id]),
+        scope: `viewer:${userSessionUser.id}`,
+        current: clientSessionGeneration.capture(),
+      }
+    : null,
+);
 registerSelectionExportIpcHandlers(guardedIpc);
 
 // Exactly one desktop instance may own the local daemon and embedded data at a
@@ -2570,6 +2591,8 @@ app
   .then(async () => {
     if (!app.hasSingleInstanceLock()) return;
     await bootstrap();
+    const [hooks] = await Promise.all([hookSettings.loadHooks(), hookSettings.loadPreferences()]);
+    hookService.updateRules(hooks.entries.flatMap(({ rule }) => (rule ? [rule] : [])));
     if (HEADLESS) {
       // One-line machine-readable handshake on stdout. Test scripts pipe
       // and JSON.parse this. Human-readable extras go to stderr below.
@@ -2693,6 +2716,7 @@ if (HEADLESS) {
 let isShuttingDown = false;
 
 async function shutdown(): Promise<void> {
+  await hookService.shutdown();
   embeddedBackendOwner.beginShutdown();
   // Notify the renderer so it can show a progress overlay while we
   // clean up — prevents the window from looking frozen.

@@ -1,3 +1,4 @@
+import { useEventHooks } from "@/features/event-hooks/use-event-hooks";
 import { deriveNavRailDots } from "@/components/layout/nav-rail";
 import { useBackendInfoSnapshot } from "@/features/computers/hooks/hooks";
 import { useTaskBoardRealtime } from "@/features/tasks/hooks/use-board";
@@ -16,6 +17,7 @@ import { useNav } from "@/router";
 export function useApplicationSignals() {
   const nav = useNav();
   useAppShellGlobalSync();
+  useEventHooks();
 
   useComposerDraftCleanup();
 

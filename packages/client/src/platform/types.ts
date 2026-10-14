@@ -1,3 +1,4 @@
+import type { EventHooksCapability } from "./event-hooks.js";
 import type {
   ConnectionPolicy,
   ConnectionInfo,
@@ -114,6 +115,8 @@ export interface AppUpdateCapability {
 
 /** Installed once by an application entry point, before mounting the UI. */
 export interface ClientPlatform {
+  eventHooks?: EventHooksCapability;
+  notificationSounds?: import('./notification-sounds.js').NotificationSoundsCapability;
   client: ClientAdapter;
   files: FileCapability;
   localHost?: LocalHostCapability;

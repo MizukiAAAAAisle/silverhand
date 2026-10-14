@@ -73,6 +73,24 @@ function setPreviewPinchZoom(enabled: boolean): void {
 }
 
 const api: DesktopBridge = {
+  notificationSounds: {
+    chooseFile: () => ipcRenderer.invoke('sound:choose'),
+    preview: (sound) => ipcRenderer.invoke('sound:preview', sound),
+  },
+  eventHooks: {
+    loadHooks: () => ipcRenderer.invoke("hooks:load"),
+    setHookEnabled: (input) => ipcRenderer.invoke("hooks:toggle", input),
+    openSource: (source) => ipcRenderer.invoke("hooks:source:open", source),
+    openDirectory: () => ipcRenderer.invoke("hooks:directory:open"),
+    loadPreferences: () => ipcRenderer.invoke("hooks:preferences:load"),
+    savePreferences: (input) => ipcRenderer.invoke("hooks:preferences:save", input),
+    openConfig: (kind) => ipcRenderer.invoke("hooks:open", kind),
+    beginFeed: () => ipcRenderer.invoke("hooks:begin"),
+    endFeed: (lease) => ipcRenderer.invoke("hooks:end", lease),
+    deliver: (input) => ipcRenderer.invoke("hooks:deliver", input),
+    runs: () => ipcRenderer.invoke("hooks:runs"),
+    cancel: (id) => ipcRenderer.invoke("hooks:cancel", id),
+  },
   getDesktopBuildConfig: async (): Promise<DesktopBuildConfig> => desktopBuildConfig(),
   getBackendInfo: (): Promise<DesktopBackendInfo | null> => ipcRenderer.invoke("backend:info"),
   getAuthState: (): Promise<ClientAuthState> => ipcRenderer.invoke("auth:getState"),
@@ -199,7 +217,7 @@ const api: DesktopBridge = {
      *  can route the click to the right navigation target. Fire-and-
      *  forget if omitted (the notification is just informational). */
     notificationId?: string;
-  }): Promise<void> => ipcRenderer.invoke("notification:show", opts),
+  }): Promise<string | undefined> => ipcRenderer.invoke("notification:show", opts),
   /** Subscribe to native-notification click events. Main fires this
    *  when the user clicks an OS-level Silverhand notification, after
    *  focusing the window. The id matches what the renderer originally

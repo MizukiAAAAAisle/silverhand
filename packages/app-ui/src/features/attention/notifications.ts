@@ -136,8 +136,10 @@ export function useNotificationToasts(
 ) {
   const qc = useQueryClient();
   const { data } = useQuery<{ notifications: NotificationDto[] }>({
-    queryKey: [...listKey, { unread: true, toasts: true }],
-    queryFn: () => api<{ notifications: NotificationDto[] }>("/api/notifications?unread=1"),
+    queryKey: [...listKey, { toasts: true }],
+    // Arrival alerts must survive a concurrent visible-read update. Read state
+    // drives badges, not whether a new notification deserves an alert.
+    queryFn: () => api<{ notifications: NotificationDto[] }>("/api/notifications"),
     staleTime: 2_000,
   });
 
@@ -179,7 +181,7 @@ export function useNotificationToasts(
   // fact to the OS-dismiss projection; main never re-derives read state.
   useEffect(() => {
     const sub = subscribeViewerScope();
-    const toastKey = [...listKey, { unread: true, toasts: true }] as const;
+    const toastKey = [...listKey, { toasts: true }] as const;
     const unsub = onWsFrame((frame) => {
       if (frame.type === "event" && isCurrentViewerScope(frame.scope)) {
         if (frame.kind === "notification") {

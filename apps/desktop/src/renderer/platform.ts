@@ -1,3 +1,4 @@
+import { playNotificationAudio } from './notification-audio';
 import type { ClientPlatform } from "@silverhand/client";
 import type { DesktopBridge } from "../preload/contract";
 
@@ -7,6 +8,16 @@ export function createDesktopPlatform(
   restartUi: () => void,
 ): ClientPlatform {
   return {
+    eventHooks: bridge.eventHooks,
+    notificationSounds: {
+      load: () => bridge.eventHooks.loadPreferences(),
+      save: (input) => bridge.eventHooks.savePreferences(input),
+      chooseFile: () => bridge.notificationSounds.chooseFile(),
+      preview: async (sound) => {
+        const data = await bridge.notificationSounds.preview(sound);
+        if (data) await playNotificationAudio(data);
+      },
+    },
     client: {
       getAuthState: () => bridge.getAuthState(),
       signup: (input) => bridge.signup(input),
@@ -72,7 +83,10 @@ export function createDesktopPlatform(
       onShowDialog: (handler) => bridge.onAppUpdateShowDialog(handler),
     },
     notifications: {
-      showSystemNotification: (input) => bridge.showSystemNotification(input),
+      showSystemNotification: async (input) => {
+        const data = await bridge.showSystemNotification(input);
+        if (data) void playNotificationAudio(data).catch((error) => console.warn('Notification sound:', error));
+      },
       onNotificationClicked: (handler) => bridge.onNotificationClicked(handler),
       dismissSystemNotifications: (ids) => bridge.dismissSystemNotifications(ids),
       setBadgeCount: (count) => bridge.setBadgeCount(count),
