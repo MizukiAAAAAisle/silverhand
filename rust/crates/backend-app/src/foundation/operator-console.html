@@ -6,363 +6,427 @@
     <title>Silverhand Console</title>
     <style>
       :root {
-        color-scheme: light;
-        font:
-          13px/1.5 -apple-system,
-          BlinkMacSystemFont,
-          'Segoe UI',
-          sans-serif;
-        color: #222b38;
-        background: #f7f8fa;
-        --line: #e5e8ed;
-        --muted: #707988;
-        --accent: #5369db;
+        color-scheme: light dark;
+        --font: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', 'Segoe UI', sans-serif;
+        --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+        --app: #eef0f3;
+        --surface: #ffffff;
+        --sunken: #f6f7f9;
+        --hover: #eff1f4;
+        --line: rgba(17, 23, 37, 0.08);
+        --line-strong: rgba(17, 23, 37, 0.14);
+        --text: #111725;
+        --text-2: #3a4152;
+        --muted: #616a7f;
+        --faint: #8a91a1;
+        --accent: #2f5ad0;
+        --accent-hover: #2549b4;
+        --accent-soft: rgba(47, 90, 208, 0.09);
+        --series-human: #2f5ad0;
+        --series-agent: #b9c7ef;
+        --error: #c0362c;
+        --error-soft: rgba(192, 54, 44, 0.08);
+        --ok: #0a7256;
+        --radius: 10px;
+        --control-radius: 8px;
+        --shadow: 0 1px 2px rgba(17, 23, 37, 0.04);
+        --tooltip: #1b2030;
+        font: 13px/1.5 var(--font);
+        color: var(--text);
+        background: var(--app);
+        -webkit-font-smoothing: antialiased;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --app: #111316;
+          --surface: #1a1d21;
+          --sunken: #16181c;
+          --hover: #24272c;
+          --line: rgba(255, 255, 255, 0.08);
+          --line-strong: rgba(255, 255, 255, 0.14);
+          --text: #e2e3e3;
+          --text-2: #c2c4c8;
+          --muted: #949497;
+          --faint: #6f7276;
+          --accent: #4a9eff;
+          --accent-hover: #6aafff;
+          --accent-soft: rgba(74, 158, 255, 0.12);
+          --series-human: #4a9eff;
+          --series-agent: #2c4466;
+          --error: #f07167;
+          --error-soft: rgba(240, 113, 103, 0.1);
+          --ok: #3fb68b;
+          --shadow: none;
+          --tooltip: #2c3036;
+        }
       }
       * {
         box-sizing: border-box;
       }
       body {
         margin: 0;
+        min-height: 100vh;
       }
       button,
       input {
         font: inherit;
-      }
-      button,
-      a,
-      input {
-        outline-offset: 4px;
+        color: inherit;
       }
       button {
         cursor: pointer;
       }
       button:disabled {
-        cursor: wait;
-        opacity: 0.55;
+        cursor: default;
+        opacity: 0.5;
       }
-      a {
-        color: inherit;
-        text-decoration: none;
-      }
-      .skip {
-        position: absolute;
-        left: -9999px;
-        z-index: 10;
-        background: #fff;
-        padding: 8px;
-      }
-      .skip:focus {
-        left: 12px;
+      :focus-visible {
+        outline: 2px solid color-mix(in srgb, var(--text) 40%, transparent);
+        outline-offset: 2px;
       }
       [hidden] {
         display: none !important;
       }
-      .sidebar {
-        width: 208px;
-        position: fixed;
-        inset: 0 auto 0 0;
-        background: #fff;
-        border-right: 1px solid var(--line);
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+      .skip {
+        position: absolute;
+        left: -9999px;
+        z-index: 20;
+        background: var(--surface);
+        padding: 8px 12px;
+        border-radius: var(--control-radius);
+      }
+      .skip:focus {
+        left: 12px;
+        top: 12px;
+      }
+      .num {
+        font-variant-numeric: tabular-nums;
+      }
+      .mono {
+        font-family: var(--mono);
+        font-size: 12px;
+      }
+      .muted {
+        color: var(--muted);
+      }
+
+      /* Controls */
+      .button {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 30px;
+        padding: 0 12px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--control-radius);
+        background: var(--surface);
+        color: var(--text-2);
+        font-weight: 500;
+        white-space: nowrap;
+      }
+      .button:hover:not(:disabled) {
+        background: var(--hover);
+      }
+      .button.primary {
+        background: var(--accent);
+        border-color: var(--accent);
+        color: #fff;
+      }
+      .button.primary:hover:not(:disabled) {
+        background: var(--accent-hover);
+      }
+      .button.ghost {
+        border-color: transparent;
+        background: transparent;
+        color: var(--muted);
+      }
+      .button.ghost:hover:not(:disabled) {
+        color: var(--text);
+      }
+      .button svg {
+        width: 14px;
+        height: 14px;
+      }
+      input {
+        width: 100%;
+        height: 34px;
+        padding: 0 11px;
+        border: 1px solid var(--line-strong);
+        border-radius: var(--control-radius);
+        background: var(--surface);
+        outline: none;
+      }
+      input:focus {
+        border-color: color-mix(in srgb, var(--text) 40%, transparent);
+      }
+      input::placeholder {
+        color: var(--faint);
+      }
+      .segmented {
+        display: inline-flex;
+        padding: 2px;
+        gap: 2px;
+        border-radius: var(--control-radius);
+        background: color-mix(in srgb, var(--text) 6%, transparent);
+      }
+      .segmented button {
+        border: 0;
+        height: 26px;
+        padding: 0 12px;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--muted);
+        font-size: 12px;
+        font-weight: 500;
+      }
+      .segmented button[aria-pressed='true'] {
+        background: var(--surface);
+        color: var(--text);
+        box-shadow: 0 1px 2px rgba(17, 23, 37, 0.1);
+      }
+
+      /* Frame */
+      .topbar {
+        position: sticky;
+        top: 0;
+        z-index: 5;
         display: flex;
-        flex-direction: column;
-        padding: 24px 14px;
+        align-items: center;
+        gap: 16px;
+        height: 56px;
+        padding: 0 28px;
+        background: color-mix(in srgb, var(--app) 86%, transparent);
+        backdrop-filter: saturate(1.4) blur(12px);
+        border-bottom: 1px solid var(--line);
       }
       .brand {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 0 10px 28px;
-        font-size: 17px;
-        font-weight: 650;
-        letter-spacing: -0.5px;
+        gap: 9px;
+        font-weight: 600;
+        font-size: 14px;
+        letter-spacing: -0.1px;
       }
       .mark {
-        display: grid;
-        place-items: center;
-        width: 28px;
-        height: 28px;
-        background: #242d3b;
-        color: #fff;
-        border-radius: 7px;
-        font: 600 17px monospace;
+        width: 22px;
+        height: 22px;
+        color: var(--text);
       }
-      .eyebrow {
-        font-size: 10px;
-        letter-spacing: 1.2px;
-        text-transform: uppercase;
+      .brand span {
         color: var(--muted);
-        font-weight: 600;
-      }
-      .sidebar .eyebrow {
-        padding: 12px;
-      }
-      .nav-link {
-        display: flex;
-        gap: 11px;
-        align-items: center;
-        padding: 10px 12px;
-        margin: 3px 0;
-        border-radius: 6px;
-        color: #606b7b;
         font-weight: 500;
       }
-      .nav-link:hover {
-        background: #f5f6f9;
+      .topbar-end {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 8px;
       }
-      .nav-link[aria-current] {
-        background: #edf0ff;
-        color: #475dcc;
-      }
-      .nav-icon {
-        width: 16px;
-        text-align: center;
-        font-size: 16px;
-      }
-      .sidebar-footer {
-        margin-top: auto;
-        border-top: 1px solid var(--line);
-        padding: 18px 10px 0;
+      .stamp {
         color: var(--muted);
-        font-size: 11px;
-      }
-      .sidebar-footer strong {
-        display: block;
-        color: #414d5d;
         font-size: 12px;
-        margin-bottom: 5px;
+        margin-right: 6px;
       }
-      .dot {
+      .status-dot {
         display: inline-block;
         width: 6px;
         height: 6px;
         border-radius: 50%;
-        background: #9099a7;
-        margin-right: 7px;
-      }
-      .connected .dot {
-        background: #299478;
-      }
-      .shell {
-        margin-left: 208px;
-      }
-      .topbar {
-        min-height: 60px;
-        background: #fff;
-        border-bottom: 1px solid var(--line);
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 12px 32px;
-        gap: 12px;
-      }
-      .breadcrumb {
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .breadcrumb span {
-        margin: 0 12px;
-        color: #b8bec7;
-      }
-      .breadcrumb strong {
-        color: #394352;
-        font-weight: 500;
-      }
-      .badge {
-        display: inline-flex;
-        align-items: center;
-        border: 1px solid var(--line);
-        border-radius: 5px;
-        padding: 3px 8px;
-        font-size: 11px;
-        color: #677181;
-        background: #fff;
-      }
-      .top-actions,
-      .actions {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-      }
-      .button {
-        border: 1px solid #dce0e6;
-        background: #fff;
-        border-radius: 6px;
-        padding: 7px 12px;
-        color: #3e4958;
-        font-weight: 500;
-        white-space: nowrap;
-      }
-      .button:hover {
-        background: #f4f6fa;
-      }
-      .primary {
-        background: var(--accent);
-        color: #fff;
-        border-color: var(--accent);
-      }
-      .primary:hover {
-        background: #455bc8;
-      }
-      .quiet {
-        border: 0;
-        background: transparent;
-        color: var(--muted);
-        padding: 6px;
+        background: var(--ok);
+        margin-right: 6px;
+        vertical-align: 1px;
       }
       main {
-        max-width: 1480px;
-        margin: auto;
-        padding: 30px 32px 40px;
+        max-width: 1320px;
+        margin: 0 auto;
+        padding: 28px 28px 48px;
       }
-      header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 16px;
-        margin-bottom: 24px;
-      }
-      h1 {
-        font-size: 25px;
-        letter-spacing: -0.7px;
-        line-height: 1.3;
-        margin: 0 0 6px;
-        font-weight: 650;
-      }
-      p {
-        margin: 0;
-        color: var(--muted);
-      }
-      h2 {
-        font-size: 14px;
-        margin: 0;
-        font-weight: 600;
-      }
-      #page-title:focus,
-      #main:focus {
+      main:focus {
         outline: none;
       }
-      [data-view='activity'] > .section-heading {
-        margin-top: 0;
+      .notice {
+        margin-bottom: 20px;
+        padding: 10px 14px;
+        border-radius: var(--control-radius);
+        background: var(--error-soft);
+        color: var(--error);
+        font-size: 12px;
       }
-      .section-heading {
+
+      /* Sign-in */
+      .gate {
+        min-height: calc(100vh - 56px - 76px);
+        display: grid;
+        place-items: center;
+      }
+      .gate-card {
+        width: min(380px, 100%);
+        padding: 32px;
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        box-shadow: var(--shadow);
+      }
+      .gate-card .mark {
+        width: 32px;
+        height: 32px;
+        margin-bottom: 18px;
+      }
+      .gate-card h1 {
+        font-size: 18px;
+        font-weight: 600;
+        letter-spacing: -0.2px;
+      }
+      .gate-card p {
+        color: var(--muted);
+        margin: 6px 0 22px;
+      }
+      .gate-card label {
+        display: block;
+        font-size: 12px;
+        font-weight: 500;
+        color: var(--text-2);
+        margin-bottom: 6px;
+      }
+      .gate-card .button {
+        width: 100%;
+        justify-content: center;
+        height: 34px;
+        margin-top: 14px;
+      }
+      #auth-error {
+        color: var(--error);
+        font-size: 12px;
+        margin-top: 8px;
+      }
+      #auth-error:empty {
+        display: none;
+      }
+
+      /* Sections */
+      .section + .section {
+        margin-top: 36px;
+      }
+      .section-head {
         display: flex;
         align-items: center;
         justify-content: space-between;
-        margin: 24px 0 12px;
         gap: 12px;
+        margin-bottom: 12px;
       }
-      .small {
-        font-size: 11px;
-        color: var(--muted);
+      .section-head h2 {
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: -0.1px;
       }
       .panel {
-        background: #fff;
+        background: var(--surface);
         border: 1px solid var(--line);
-        border-radius: 8px;
+        border-radius: var(--radius);
+        box-shadow: var(--shadow);
         min-width: 0;
       }
-      .metrics {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        gap: 14px;
-      }
-      .metric {
-        padding: 18px 20px;
-      }
-      .metric-label {
-        color: #687383;
-        font-size: 12px;
-      }
-      .value {
-        font-size: 28px;
-        letter-spacing: -0.8px;
-        font-weight: 600;
-        line-height: 1.3;
-        margin: 9px 0 7px;
-        font-variant-numeric: tabular-nums;
-      }
-      .metric-note {
-        font-size: 11px;
-        color: #8a929e;
-      }
-      .resources {
-        display: flex;
-        gap: 25px;
-        padding: 13px 20px;
-        border-top: 1px solid var(--line);
-        margin-top: 14px;
-        background: #fff;
-        border: 1px solid var(--line);
-        border-radius: 7px;
-        flex-wrap: wrap;
-      }
-      .resources span {
-        color: var(--muted);
-        font-size: 12px;
-      }
-      .resources strong {
-        color: #394352;
-        font-weight: 600;
-        margin-left: 8px;
-        font-variant-numeric: tabular-nums;
-      }
-      .activity {
-        display: grid;
-        grid-template-columns: repeat(4, minmax(0, 1fr));
-        padding: 18px 0;
-      }
-      .activity > div {
-        padding: 0 20px;
-        border-right: 1px solid var(--line);
-      }
-      .activity > div:last-child {
-        border: 0;
-      }
-      .activity strong {
-        display: block;
-        font-size: 22px;
-        font-weight: 600;
-        margin-top: 7px;
-        font-variant-numeric: tabular-nums;
-      }
-      .segmented {
-        display: flex;
-        border: 1px solid var(--line);
-        padding: 3px;
-        border-radius: 6px;
-        background: #eef0f4;
-        gap: 3px;
-      }
-      .segmented button {
-        border: 0;
-        border-radius: 4px;
-        padding: 4px 11px;
-        color: var(--muted);
-        background: transparent;
-        font-size: 11px;
-      }
-      .segmented button[aria-pressed='true'] {
-        background: #fff;
-        color: #303a49;
-        box-shadow: 0 1px 3px #1a25301a;
-      }
       .panel-head {
-        padding: 18px 20px;
         display: flex;
         align-items: center;
         justify-content: space-between;
-        gap: 15px;
+        gap: 12px;
+        min-height: 52px;
+        padding: 12px 18px;
         border-bottom: 1px solid var(--line);
       }
-      .panel-head p {
-        font-size: 11px;
-        margin-top: 3px;
+      .panel-head h3 {
+        font-size: 13px;
+        font-weight: 600;
+      }
+      .panel-head .sub {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .grid {
+        display: grid;
+        gap: 16px;
+      }
+      .grid + .grid,
+      .stats + .grid {
+        margin-top: 16px;
+      }
+      .grid.chart-row {
+        grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+      }
+      .grid.chart-row > .panel:first-child {
+        display: flex;
+        flex-direction: column;
+      }
+      .grid.chart-row .chart-body {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+      }
+      .grid.chart-row .plot {
+        flex: 1;
+        min-height: 180px;
+      }
+      .grid.users-row {
+        grid-template-columns: minmax(0, 1fr) minmax(0, 2fr);
+        align-items: start;
+      }
+
+      /* Stats */
+      .stats {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+      .stat {
+        padding: 18px 20px;
+      }
+      .stat + .stat {
+        border-left: 1px solid var(--line);
+      }
+      .stat-label {
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .stat-value {
+        margin-top: 4px;
+        font-size: 26px;
+        font-weight: 600;
+        letter-spacing: -0.6px;
+        line-height: 1.25;
+        font-variant-numeric: tabular-nums;
+      }
+      .facts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 28px;
+        padding: 11px 20px;
+        border-top: 1px solid var(--line);
+        background: var(--sunken);
+        border-radius: 0 0 var(--radius) var(--radius);
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .facts strong {
+        margin-left: 6px;
+        color: var(--text);
+        font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Charts */
+      .chart-body {
+        padding: 16px 18px 14px;
       }
       .legend {
         display: flex;
-        gap: 16px;
-        font-size: 11px;
+        gap: 14px;
         color: var(--muted);
+        font-size: 12px;
       }
       .swatch {
         display: inline-block;
@@ -370,768 +434,638 @@
         height: 8px;
         border-radius: 2px;
         margin-right: 6px;
-        background: #6378df;
+        background: var(--series-human);
       }
       .swatch.agent {
-        background: #c9d1f7;
+        background: var(--series-agent);
       }
-      .chart-wrap {
-        padding: 20px;
-      }
-      .chart-stat {
+      .chart-total {
         display: flex;
         align-items: baseline;
-        gap: 10px;
-        margin-bottom: 18px;
+        gap: 8px;
+        margin-bottom: 14px;
       }
-      .chart-stat strong {
-        font-size: 24px;
+      .chart-total strong {
+        font-size: 22px;
         font-weight: 600;
-        letter-spacing: -0.5px;
+        letter-spacing: -0.4px;
+        font-variant-numeric: tabular-nums;
       }
       .plot {
         display: flex;
-        height: 160px;
-        gap: 12px;
+        gap: 10px;
+        height: 180px;
       }
       .axis {
-        width: 40px;
+        width: 36px;
         flex-shrink: 0;
         display: flex;
         flex-direction: column;
         justify-content: space-between;
-        font-size: 10px;
-        color: #929aa5;
+        margin: -6px 0;
+        color: var(--faint);
+        font-size: 11px;
         text-align: right;
+        font-variant-numeric: tabular-nums;
       }
-      .chart {
+      .bars {
+        position: relative;
         flex: 1;
         display: flex;
         align-items: end;
-        gap: 5px;
-        border-bottom: 1px solid var(--line);
-        background: repeating-linear-gradient(
-          to top,
-          transparent 0,
-          transparent calc(50% - 1px),
-          #f0f2f6 calc(50% - 1px),
-          #f0f2f6 50%
-        );
+        gap: 4px;
+        border-bottom: 1px solid var(--line-strong);
+        background: linear-gradient(var(--line), var(--line)) 0 0 / 100% 1px no-repeat,
+          linear-gradient(var(--line), var(--line)) 0 50% / 100% 1px no-repeat;
       }
       .bar {
-        height: 100%;
+        position: relative;
         flex: 1;
         min-width: 0;
+        height: 100%;
         display: flex;
         flex-direction: column;
         justify-content: end;
         border-radius: 3px 3px 0 0;
-        position: relative;
-        outline-offset: 1px;
       }
-      .bar:focus-visible,
-      .bar:hover {
-        background: #f0f2fb;
+      .bar:hover,
+      .bar:focus-visible {
+        background: var(--hover);
+        outline: none;
       }
       .bar i {
         display: block;
-        background: #6378df;
+        background: var(--series-human);
+      }
+      .bar i:first-child {
+        border-radius: 2px 2px 0 0;
       }
       .bar i.agent {
-        background: #c9d1f7;
+        background: var(--series-agent);
       }
-      .bar span {
+      .tip {
         position: absolute;
-        bottom: calc(100% + 6px);
+        bottom: calc(100% + 8px);
         left: 50%;
         transform: translateX(-50%);
-        background: #263243;
-        color: #fff;
-        padding: 7px 10px;
-        border-radius: 5px;
-        font-size: 11px;
-        white-space: nowrap;
-        z-index: 2;
+        z-index: 3;
         display: none;
+        padding: 7px 10px;
+        border-radius: 6px;
+        background: var(--tooltip);
+        color: #f2f5f9;
+        font-size: 11px;
+        line-height: 1.5;
+        white-space: nowrap;
         pointer-events: none;
       }
-      .bar:nth-child(-n + 5) span {
+      .tip b {
+        display: block;
+        font-weight: 600;
+      }
+      .bar:nth-child(-n + 4) .tip {
         left: 0;
         transform: none;
       }
-      .bar:nth-last-child(-n + 5) span {
+      .bar:nth-last-child(-n + 4) .tip {
         left: auto;
         right: 0;
         transform: none;
       }
-      .bar:hover span,
-      .bar:focus-visible span {
+      .bar:hover .tip,
+      .bar:focus-visible .tip {
         display: block;
       }
       .dates {
         display: flex;
         justify-content: space-between;
-        margin: 9px 0 0 52px;
-        font-size: 10px;
-        color: #929aa5;
-      }
-      table {
-        width: 100%;
-        border-collapse: collapse;
-        font-size: 12px;
-      }
-      th {
-        text-align: left;
-        font-weight: 500;
-        color: var(--muted);
-        background: #fafbfc;
+        margin: 8px 0 0 46px;
+        color: var(--faint);
         font-size: 11px;
       }
-      th,
-      td {
-        padding: 11px 20px;
-        border-bottom: 1px solid #edf0f3;
+      .chart-empty {
+        margin-top: 10px;
+        color: var(--muted);
+        font-size: 12px;
       }
-      tbody tr:last-child td {
-        border-bottom: 0;
+
+      /* Runtimes */
+      .runtime-list {
+        list-style: none;
+        margin: 0;
+        padding: 8px 18px 14px;
       }
-      .number {
+      .runtime-list li {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 4px 12px;
+        padding: 8px 0;
+      }
+      .runtime-list .track {
+        grid-column: 1 / -1;
+        height: 4px;
+        border-radius: 4px;
+        background: color-mix(in srgb, var(--text) 7%, transparent);
+        overflow: hidden;
+      }
+      .runtime-list .track i {
+        display: block;
+        height: 100%;
+        background: color-mix(in srgb, var(--text) 45%, transparent);
+        border-radius: 4px;
+      }
+      .runtime-count {
+        color: var(--muted);
+        font-variant-numeric: tabular-nums;
+      }
+      .runtime-count strong {
+        color: var(--text);
+        font-weight: 600;
+        margin-right: 8px;
+      }
+
+      /* People */
+      .person {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        min-width: 0;
+        border: 0;
+        padding: 0;
+        background: none;
+        text-align: left;
+      }
+      .person-name {
+        font-weight: 500;
+        color: var(--text);
+        overflow-wrap: anywhere;
+      }
+      .person:hover .person-name {
+        color: var(--accent);
+      }
+      .person-handle {
+        color: var(--muted);
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+      .avatar {
+        display: grid;
+        place-items: center;
+        flex-shrink: 0;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: color-mix(in srgb, var(--text) 7%, transparent);
+        color: var(--text-2);
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .top-list {
+        list-style: none;
+        margin: 0;
+        padding: 6px 8px 8px;
+      }
+      .top-list li {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 7px 10px;
+        border-radius: 8px;
+      }
+      .top-list li:hover {
+        background: var(--hover);
+      }
+      .rank {
+        width: 16px;
+        color: var(--faint);
+        font-size: 12px;
         text-align: right;
         font-variant-numeric: tabular-nums;
       }
-      .runtime-name {
-        font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-        font-size: 11px;
-      }
-      .share {
-        display: flex;
-        align-items: center;
-        gap: 9px;
-        justify-content: end;
-      }
-      .track {
-        width: 70px;
-        height: 4px;
-        border-radius: 4px;
-        background: #eef0f7;
-        overflow: hidden;
-      }
-      .track i {
-        display: block;
-        height: 100%;
-        background: #7d8ee0;
-      }
-      .contract-row {
-        display: flex;
-        justify-content: space-between;
-        gap: 14px;
-        padding: 13px 20px;
-        border-bottom: 1px solid #edf0f3;
-        color: #687383;
-        font-size: 12px;
-      }
-      .contract-row:last-child {
-        border: 0;
-      }
-      .contract-row strong {
-        font:
-          500 12px ui-monospace,
-          SFMono-Regular,
-          Menlo,
-          monospace;
-        color: #394352;
-        background: #f2f4f7;
-        border-radius: 4px;
-        padding: 2px 7px;
-      }
-      .footnote {
-        padding: 13px 20px;
-        border-top: 1px solid var(--line);
-        font-size: 11px;
-        color: var(--muted);
-      }
-      footer {
-        display: flex;
-        justify-content: space-between;
-        gap: 12px;
-        margin-top: 22px;
-        font-size: 10px;
-        color: #8a929e;
-      }
-      .notice {
-        border: 1px solid #ebccae;
-        background: #fff8ef;
-        color: #8c592b;
-        border-radius: 6px;
-        padding: 11px 14px;
-        margin-bottom: 20px;
-        font-size: 12px;
-      }
-      .empty {
-        padding: 70px 24px;
-        text-align: center;
-      }
-      .empty h2 {
-        font-size: 19px;
-        margin: 12px 0 8px;
-      }
-      .empty p {
-        max-width: 370px;
-        margin: 0 auto 20px;
-      }
-      .empty-icon {
-        display: inline-grid;
-        place-items: center;
-        width: 44px;
-        height: 44px;
-        border: 1px solid var(--line);
-        border-radius: 12px;
-        background: #f6f7fb;
-        font-size: 20px;
-        color: #6477d2;
-      }
-      dialog {
-        border: 1px solid var(--line);
-        border-radius: 10px;
-        padding: 24px;
-        width: min(420px, calc(100% - 32px));
-        box-shadow: 0 20px 90px #17243c26;
-        color: inherit;
-      }
-      dialog::backdrop {
-        background: #1b26364d;
-      }
-      dialog h2 {
-        font-size: 18px;
-      }
-      dialog p {
-        font-size: 12px;
-        margin: 8px 0 20px;
-      }
-      label {
-        display: block;
-        font-size: 12px;
-        margin-bottom: 7px;
-      }
-      input {
-        width: 100%;
-        border: 1px solid #cfd5df;
-        border-radius: 6px;
-        padding: 9px 11px;
-      }
-      dialog .actions {
-        justify-content: flex-end;
-        margin-top: 20px;
-      }
-      #auth-error {
-        color: #b44141;
-        font-size: 12px;
-        margin-top: 8px;
-      }
-      dialog .dialog-head {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-      }
-      @media (min-width: 1500px) {
-        main {
-          padding-top: 36px;
-        }
-        .plot {
-          height: 190px;
-        }
-      }
-      @media (max-width: 1050px) {
-        .sidebar {
-          width: 174px;
-        }
-        .shell {
-          margin-left: 174px;
-        }
-        main {
-          padding: 24px;
-        }
-        .topbar {
-          padding: 12px 24px;
-        }
-        .metric {
-          padding: 16px;
-        }
-        .resources {
-          gap: 16px;
-        }
-        .track {
-          width: 45px;
-        }
-      }
-      @media (max-width: 760px) {
-        .sidebar {
-          position: static;
-          width: auto;
-          padding: 12px 16px;
-          border-right: 0;
-          border-bottom: 1px solid var(--line);
-        }
-        .brand {
-          padding: 0 0 12px;
-        }
-        .sidebar .eyebrow,
-        .sidebar-footer {
-          display: none;
-        }
-        nav {
-          display: flex;
-          gap: 5px;
-          overflow: auto;
-        }
-        .nav-link {
-          padding: 6px 9px;
-          font-size: 12px;
-          white-space: nowrap;
-        }
-        .nav-icon {
-          display: none;
-        }
-        .shell {
-          margin: 0;
-        }
-        .topbar {
-          padding: 10px 16px;
-          min-height: 52px;
-        }
-        .topbar .badge {
-          display: none;
-        }
-        main {
-          padding: 20px 16px;
-        }
-        header {
-          align-items: start;
-        }
-        header p {
-          font-size: 12px;
-        }
-        .metrics {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 10px;
-        }
-        .activity {
-          grid-template-columns: repeat(2, minmax(0, 1fr));
-          gap: 18px;
-        }
-        .activity > div:nth-child(2) {
-          border: 0;
-        }
-        .resources {
-          gap: 12px 20px;
-        }
-        .chart {
-          gap: 3px;
-        }
-        .panel-head {
-          align-items: start;
-          flex-wrap: wrap;
-        }
-        .chart-wrap {
-          padding: 16px;
-        }
-        .plot {
-          height: 140px;
-        }
-        .top-actions {
-          gap: 4px;
-        }
-        footer {
-          flex-wrap: wrap;
-        }
-        .section-heading {
-          flex-wrap: wrap;
-        }
-      }
-      @media (prefers-reduced-motion: no-preference) {
-        button,
-        a {
-          transition: background 0.15s;
-        }
-      }
-
-      .user-section {
-        margin-top: 20px;
-      }
-      .user-toolbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        flex-wrap: wrap;
-      }
-      .user-search {
-        display: flex;
-        gap: 8px;
+      .top-list .person {
         flex: 1;
-        max-width: 420px;
       }
-      .user-search input {
-        min-width: 0;
-      }
-      .user-search label {
-        position: absolute;
-        left: -9999px;
-      }
-      .top-users {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        gap: 0 28px;
-        padding: 6px 20px;
-      }
-      .top-user {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        padding: 10px 0;
-        border-bottom: 1px solid var(--line);
-        min-width: 0;
-      }
-      .rank {
-        width: 22px;
-        color: var(--muted);
-        font-size: 11px;
-        font-variant-numeric: tabular-nums;
-      }
-      .user-name {
-        border: 0;
-        padding: 0;
-        background: transparent;
-        color: var(--accent);
-        text-align: left;
-        font-weight: 500;
-        overflow-wrap: anywhere;
-      }
-      .user-identity {
-        flex: 1;
-        min-width: 0;
-        overflow-wrap: anywhere;
-      }
-      .user-handle {
-        color: var(--muted);
-        font-size: 11px;
-        font-weight: 400;
-      }
-      .user-count {
-        font-variant-numeric: tabular-nums;
+      .top-count {
         font-weight: 600;
+        font-variant-numeric: tabular-nums;
+      }
+      .list-empty {
+        padding: 18px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .search {
+        position: relative;
+        width: min(280px, 100%);
+      }
+      .search svg {
+        position: absolute;
+        left: 10px;
+        top: 50%;
+        width: 14px;
+        height: 14px;
+        transform: translateY(-50%);
+        color: var(--faint);
+        pointer-events: none;
+      }
+      .search input {
+        height: 30px;
+        padding-left: 30px;
+      }
+      .visually-hidden {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+        clip: rect(0 0 0 0);
+        white-space: nowrap;
       }
       .table-scroll {
         overflow-x: auto;
       }
-      .users-table {
-        min-width: 670px;
+      table {
+        width: 100%;
+        min-width: 600px;
+        border-collapse: collapse;
       }
-      .users-table td {
-        vertical-align: top;
-      }
-      .pagination {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        gap: 12px;
-        padding: 14px 20px;
-        border-top: 1px solid var(--line);
-      }
-      #users-state {
-        padding: 16px 0;
-      }
-      .detail-meta {
-        display: flex;
-        gap: 14px 30px;
-        flex-wrap: wrap;
-        padding: 16px 20px;
-        border-top: 1px solid var(--line);
-        font-size: 12px;
+      th {
+        height: 34px;
+        padding: 0 18px;
+        text-align: left;
         color: var(--muted);
-      }
-      .detail-meta strong {
-        color: #394352;
+        font-size: 12px;
         font-weight: 500;
+        border-bottom: 1px solid var(--line);
+        background: var(--sunken);
       }
-      .detail-metrics {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
+      td {
+        padding: 9px 18px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: middle;
       }
-      .detail-metrics > div:last-child {
+      tbody tr:last-child td {
+        border-bottom: 0;
+      }
+      tbody tr:hover td {
+        background: var(--sunken);
+      }
+      .right {
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+      .cell-person {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      [aria-busy='true'] > .table-scroll,
+      [aria-busy='true'] > .top-list {
+        opacity: 0.5;
+        transition: opacity 0.15s 0.2s;
+      }
+      .table-foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        min-height: 48px;
+        padding: 8px 18px;
+        border-top: 1px solid var(--line);
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .pager {
+        display: flex;
+        gap: 6px;
+      }
+      .users-state {
+        padding: 18px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      .users-state.error {
+        color: var(--error);
+      }
+      .users-state .button {
+        margin-left: 10px;
+      }
+
+      /* User sheet */
+      dialog.sheet {
+        position: fixed;
+        inset: 0 0 0 auto;
+        width: min(460px, 100vw);
+        max-width: none;
+        height: 100vh;
+        max-height: none;
+        margin: 0;
+        padding: 0;
         border: 0;
+        border-left: 1px solid var(--line);
+        background: var(--surface);
+        color: inherit;
+        box-shadow: -12px 0 40px rgba(17, 23, 37, 0.12);
       }
-      #user-detail {
-        margin-bottom: 20px;
+      dialog.sheet::backdrop {
+        background: rgba(17, 23, 37, 0.24);
       }
-      #user-detail-title:focus {
+      .sheet-head {
+        display: flex;
+        align-items: flex-start;
+        gap: 12px;
+        padding: 22px 22px 18px;
+        border-bottom: 1px solid var(--line);
+      }
+      .sheet-head .avatar {
+        width: 40px;
+        height: 40px;
+        font-size: 15px;
+      }
+      .sheet-head h2 {
+        font-size: 16px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      .sheet-head h2:focus {
         outline: none;
       }
-      @media (max-width: 760px) {
-        .top-users {
-          grid-template-columns: 1fr;
+      .sheet-head .person-handle {
+        margin-top: 1px;
+      }
+      .sheet-head .button {
+        margin-left: auto;
+        width: 30px;
+        padding: 0;
+        justify-content: center;
+      }
+      .sheet-body {
+        padding: 18px 22px 24px;
+      }
+      .sheet .stats {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        border: 1px solid var(--line);
+        border-radius: var(--radius);
+      }
+      .sheet .stat {
+        padding: 14px 16px;
+      }
+      .sheet .stat-value {
+        font-size: 20px;
+      }
+      .meta {
+        display: grid;
+        grid-template-columns: auto 1fr;
+        gap: 8px 18px;
+        margin: 18px 0 24px;
+        font-size: 12px;
+      }
+      .meta dt {
+        color: var(--muted);
+      }
+      .meta dd {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      .sheet h3 {
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 14px;
+      }
+      .sheet .plot {
+        height: 140px;
+      }
+      .sheet-state {
+        padding: 24px 22px;
+        color: var(--muted);
+      }
+      .sheet-state.error {
+        color: var(--error);
+      }
+
+      footer {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 8px 24px;
+        margin-top: 36px;
+        padding-top: 16px;
+        border-top: 1px solid var(--line);
+        color: var(--faint);
+        font-size: 12px;
+      }
+      .contract {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 20px;
+      }
+      .contract strong {
+        margin-left: 6px;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-weight: 500;
+      }
+
+      @media (max-width: 1080px) {
+        .grid.chart-row,
+        .grid.users-row {
+          grid-template-columns: minmax(0, 1fr);
         }
-        .user-search {
-          max-width: none;
-          width: 100%;
+      }
+      @media (max-width: 720px) {
+        .topbar {
+          padding: 0 16px;
         }
-        .detail-metrics {
+        .stamp,
+        .brand span {
+          display: none;
+        }
+        main {
+          padding: 20px 16px 40px;
+        }
+        .stats {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .stat:nth-child(3) {
+          border-left: 0;
+        }
+        .stat:nth-child(n + 3) {
+          border-top: 1px solid var(--line);
+        }
+        .sheet .stats {
           grid-template-columns: repeat(3, minmax(0, 1fr));
-          gap: 0;
         }
-        .detail-metrics > div {
-          padding: 0 12px;
+        .sheet .stat:nth-child(3) {
+          border-left: 1px solid var(--line);
         }
-        .detail-metrics > div:nth-child(2) {
-          border-right: 1px solid var(--line);
+        .sheet .stat:nth-child(n + 3) {
+          border-top: 0;
+        }
+        .bars {
+          gap: 2px;
+        }
+        .panel-head {
+          flex-wrap: wrap;
+        }
+        .search {
+          width: 100%;
         }
       }
     </style>
   </head>
   <body>
     <a href="#main" class="skip">Skip to content</a>
-    <aside class="sidebar">
-      <div class="brand">
-        <span class="mark" aria-hidden="true">s</span>silverhand<span class="small">/</span>
+    <header class="topbar">
+      <div class="brand"><svg class="mark" viewBox="0 0 1254 1254" aria-hidden="true"><g transform="translate(0,1254) scale(0.1,-0.1)" fill="currentColor"><path d="M6190 10596 c-30 -7 -74 -22 -97 -34 -50 -26 -742 -440 -1423 -852 -267 -161 -552 -334 -635 -384 -162 -97 -233 -160 -277 -241 -23 -44 -494 -1293 -906 -2405 -83 -223 -225 -603 -317 -845 -436 -1152 -475 -1261 -475 -1317 0 -60 41 -159 81 -194 19 -17 634 -403 1029 -646 86 -53 133 -65 186 -48 20 7 227 127 461 267 262 157 430 252 439 249 9 -3 112 -63 230 -133 l214 -128 0 -560 c0 -522 2 -563 19 -600 10 -22 27 -47 37 -56 16 -14 425 -263 1090 -665 186 -113 235 -131 310 -114 28 6 134 64 282 154 130 78 419 252 642 386 223 134 416 253 429 264 13 12 32 39 42 61 17 37 19 73 19 448 0 224 2 407 5 407 5 0 102 -59 435 -264 312 -193 317 -196 378 -196 46 0 67 10 283 141 129 78 383 231 564 341 201 121 342 212 362 234 21 24 36 54 43 88 7 35 10 721 8 2236 l-3 2185 -31 55 c-36 65 10 35 -620 393 -476 272 -500 283 -591 266 -54 -10 -79 -22 -213 -101 -413 -243 -596 -348 -602 -348 -5 0 -8 258 -8 573 0 535 -2 575 -19 612 -10 22 -31 52 -47 66 -41 38 -975 624 -1074 674 -42 21 -142 46 -179 44 -9 0 -41 -6 -71 -13z m247 -358 c351 -217 733 -460 733 -466 -1 -4 -74 -52 -163 -107 -223 -137 -1073 -668 -1472 -920 -181 -114 -337 -210 -346 -212 -12 -3 -306 172 -933 557 l-28 17 998 598 c550 329 1008 604 1019 611 11 7 26 13 32 13 7 1 79 -40 160 -91z m863 -2613 c0 -2073 -4 -1927 60 -1960 38 -20 83 -19 123 1 80 41 935 560 961 583 57 52 56 33 56 748 l0 658 78 44 c42 24 233 135 424 247 190 112 349 204 352 204 3 0 6 -926 6 -2058 l0 -2057 -411 -250 c-226 -138 -415 -251 -420 -253 -5 -2 -10 388 -11 932 l-3 936 -31 31 c-41 40 -103 49 -154 22 -19 -11 -156 -93 -305 -183 -148 -91 -364 -221 -480 -291 -115 -70 -219 -139 -230 -154 -20 -26 -20 -45 -25 -987 l-5 -961 -518 -314 c-285 -172 -521 -313 -523 -313 -2 0 -4 647 -4 1437 l0 1437 -66 245 c-36 135 -90 334 -119 441 -311 1150 -415 1533 -475 1750 -98 356 -200 735 -200 746 0 5 35 31 78 59 343 219 546 348 857 543 519 325 968 602 977 602 5 0 8 -848 8 -1885z m-2957 1089 c177 -108 417 -254 532 -325 l210 -129 34 -128 c32 -122 88 -327 497 -1822 102 -371 221 -807 265 -968 l79 -293 -2 -1395 -3 -1394 -285 172 c-157 95 -374 227 -482 293 l-197 120 -3 580 c-3 542 -4 582 -21 607 -11 16 -139 98 -330 211 -375 222 -347 207 -392 207 -46 0 -25 12 -511 -280 -229 -138 -418 -250 -421 -250 -9 0 -929 574 -947 591 -5 5 -2 26 7 51 9 24 45 122 81 218 70 189 190 514 291 785 35 94 105 278 155 410 85 223 201 533 531 1418 71 191 174 470 229 620 85 234 171 470 302 825 23 61 35 82 45 77 8 -3 159 -93 336 -201z m4280 -3 c563 -324 571 -328 545 -344 -156 -99 -802 -472 -811 -469 -34 10 -727 436 -720 442 4 4 170 102 368 217 198 116 376 220 395 232 19 11 39 21 43 21 4 0 85 -45 180 -99z m-711 -869 l298 -177 0 -621 0 -621 -310 -187 c-171 -102 -313 -186 -315 -186 -3 0 -5 446 -5 991 0 926 1 991 17 985 9 -4 151 -86 315 -184z m318 -3537 c0 -417 -2 -760 -3 -761 -2 -2 -48 25 -102 59 -55 34 -202 125 -327 202 l-228 140 0 360 0 360 78 48 c302 187 577 354 580 352 1 -1 2 -343 2 -760z" /><path d="M4393 7525 c-17 -7 -36 -22 -42 -33 -31 -57 -611 -1727 -611 -1758 0 -66 19 -85 197 -192 92 -55 364 -221 603 -367 419 -256 437 -266 478 -262 79 8 116 68 99 162 -20 114 -266 1172 -432 1855 -62 256 -116 481 -120 500 -11 49 -34 81 -72 96 -40 17 -59 17 -100 -1z m53 -836 c14 -57 49 -207 79 -334 30 -126 67 -286 84 -355 68 -285 141 -613 137 -618 -4 -4 -641 375 -673 400 -8 7 -6 25 9 71 55 167 332 947 335 943 2 -2 15 -50 29 -107z" /></g></svg> Silverhand <span>Console</span></div>
+      <div class="topbar-end" id="session" hidden>
+        <span class="stamp" id="stamp" role="status"></span>
+        <button class="button" id="refresh" disabled>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36" /><path d="M21 3v6h-6" /></svg><span id="refresh-label">Refresh</span>
+        </button>
+        <button class="button ghost" id="disconnect"><span class="status-dot" aria-hidden="true"></span>Disconnect</button>
       </div>
-      <div class="eyebrow">Console</div>
-      <nav aria-label="Console sections">
-        <a class="nav-link" href="#/overview" aria-current="page"
-          ><span class="nav-icon" aria-hidden="true">▦</span>Overview</a
-        >
-        <a class="nav-link" href="#/activity"
-          ><span class="nav-icon" aria-hidden="true">↗</span>Activity</a
-        >
-        <a class="nav-link" href="#/runtimes"
-          ><span class="nav-icon" aria-hidden="true">▤</span>Agent runtimes</a
-        >
-        <a class="nav-link" href="#/contract"
-          ><span class="nav-icon" aria-hidden="true">≡</span>Server contract</a
-        >
-      </nav>
-      <div class="sidebar-footer">
-        <strong><span class="dot"></span>Read-only console</strong>Product analytics<br />Silverhand
-        infrastructure
-      </div>
-    </aside>
-    <div class="shell">
-      <div class="topbar">
-        <div class="breadcrumb">
-          Console<span>/</span><strong id="breadcrumb-page">Overview</strong>
-        </div>
-        <div class="top-actions">
-          <span class="badge">Read only</span
-          ><button id="connection" class="button">
-            <span class="dot"></span><span id="connection-label">Connect</span>
-          </button>
-        </div>
-      </div>
-      <main id="main" tabindex="-1">
-        <header>
-          <div>
-            <h1 id="page-title" tabindex="-1">Overview</h1>
-            <p id="page-description">Resources across Silverhand.</p>
+    </header>
+    <main id="main" tabindex="-1">
+      <div id="error" class="notice" role="alert" hidden></div>
+      <section id="welcome" class="gate">
+        <form class="gate-card" id="auth">
+          <svg class="mark" viewBox="0 0 1254 1254" aria-hidden="true"><g transform="translate(0,1254) scale(0.1,-0.1)" fill="currentColor"><path d="M6190 10596 c-30 -7 -74 -22 -97 -34 -50 -26 -742 -440 -1423 -852 -267 -161 -552 -334 -635 -384 -162 -97 -233 -160 -277 -241 -23 -44 -494 -1293 -906 -2405 -83 -223 -225 -603 -317 -845 -436 -1152 -475 -1261 -475 -1317 0 -60 41 -159 81 -194 19 -17 634 -403 1029 -646 86 -53 133 -65 186 -48 20 7 227 127 461 267 262 157 430 252 439 249 9 -3 112 -63 230 -133 l214 -128 0 -560 c0 -522 2 -563 19 -600 10 -22 27 -47 37 -56 16 -14 425 -263 1090 -665 186 -113 235 -131 310 -114 28 6 134 64 282 154 130 78 419 252 642 386 223 134 416 253 429 264 13 12 32 39 42 61 17 37 19 73 19 448 0 224 2 407 5 407 5 0 102 -59 435 -264 312 -193 317 -196 378 -196 46 0 67 10 283 141 129 78 383 231 564 341 201 121 342 212 362 234 21 24 36 54 43 88 7 35 10 721 8 2236 l-3 2185 -31 55 c-36 65 10 35 -620 393 -476 272 -500 283 -591 266 -54 -10 -79 -22 -213 -101 -413 -243 -596 -348 -602 -348 -5 0 -8 258 -8 573 0 535 -2 575 -19 612 -10 22 -31 52 -47 66 -41 38 -975 624 -1074 674 -42 21 -142 46 -179 44 -9 0 -41 -6 -71 -13z m247 -358 c351 -217 733 -460 733 -466 -1 -4 -74 -52 -163 -107 -223 -137 -1073 -668 -1472 -920 -181 -114 -337 -210 -346 -212 -12 -3 -306 172 -933 557 l-28 17 998 598 c550 329 1008 604 1019 611 11 7 26 13 32 13 7 1 79 -40 160 -91z m863 -2613 c0 -2073 -4 -1927 60 -1960 38 -20 83 -19 123 1 80 41 935 560 961 583 57 52 56 33 56 748 l0 658 78 44 c42 24 233 135 424 247 190 112 349 204 352 204 3 0 6 -926 6 -2058 l0 -2057 -411 -250 c-226 -138 -415 -251 -420 -253 -5 -2 -10 388 -11 932 l-3 936 -31 31 c-41 40 -103 49 -154 22 -19 -11 -156 -93 -305 -183 -148 -91 -364 -221 -480 -291 -115 -70 -219 -139 -230 -154 -20 -26 -20 -45 -25 -987 l-5 -961 -518 -314 c-285 -172 -521 -313 -523 -313 -2 0 -4 647 -4 1437 l0 1437 -66 245 c-36 135 -90 334 -119 441 -311 1150 -415 1533 -475 1750 -98 356 -200 735 -200 746 0 5 35 31 78 59 343 219 546 348 857 543 519 325 968 602 977 602 5 0 8 -848 8 -1885z m-2957 1089 c177 -108 417 -254 532 -325 l210 -129 34 -128 c32 -122 88 -327 497 -1822 102 -371 221 -807 265 -968 l79 -293 -2 -1395 -3 -1394 -285 172 c-157 95 -374 227 -482 293 l-197 120 -3 580 c-3 542 -4 582 -21 607 -11 16 -139 98 -330 211 -375 222 -347 207 -392 207 -46 0 -25 12 -511 -280 -229 -138 -418 -250 -421 -250 -9 0 -929 574 -947 591 -5 5 -2 26 7 51 9 24 45 122 81 218 70 189 190 514 291 785 35 94 105 278 155 410 85 223 201 533 531 1418 71 191 174 470 229 620 85 234 171 470 302 825 23 61 35 82 45 77 8 -3 159 -93 336 -201z m4280 -3 c563 -324 571 -328 545 -344 -156 -99 -802 -472 -811 -469 -34 10 -727 436 -720 442 4 4 170 102 368 217 198 116 376 220 395 232 19 11 39 21 43 21 4 0 85 -45 180 -99z m-711 -869 l298 -177 0 -621 0 -621 -310 -187 c-171 -102 -313 -186 -315 -186 -3 0 -5 446 -5 991 0 926 1 991 17 985 9 -4 151 -86 315 -184z m318 -3537 c0 -417 -2 -760 -3 -761 -2 -2 -48 25 -102 59 -55 34 -202 125 -327 202 l-228 140 0 360 0 360 78 48 c302 187 577 354 580 352 1 -1 2 -343 2 -760z" /><path d="M4393 7525 c-17 -7 -36 -22 -42 -33 -31 -57 -611 -1727 -611 -1758 0 -66 19 -85 197 -192 92 -55 364 -221 603 -367 419 -256 437 -266 478 -262 79 8 116 68 99 162 -20 114 -266 1172 -432 1855 -62 256 -116 481 -120 500 -11 49 -34 81 -72 96 -40 17 -59 17 -100 -1z m53 -836 c14 -57 49 -207 79 -334 30 -126 67 -286 84 -355 68 -285 141 -613 137 -618 -4 -4 -641 375 -673 400 -8 7 -6 25 9 71 55 167 332 947 335 943 2 -2 15 -50 29 -107z" /></g></svg>
+          <h1>Silverhand Console</h1>
+          <p>Product activity, resource counts and the server contract. Read only.</p>
+          <label for="token">Access token</label>
+          <input id="token" type="password" autocomplete="off" required />
+          <div id="auth-error" role="alert"></div>
+          <button class="button primary" id="submit">Connect</button>
+        </form>
+      </section>
+
+      <div id="content" hidden>
+        <section class="section" aria-labelledby="totals-title">
+          <div class="section-head"><h2 id="totals-title">Overview</h2></div>
+          <div class="panel">
+            <div class="stats" id="totals"></div>
+            <div class="facts" id="resources"></div>
           </div>
-          <button class="button" id="refresh" disabled>↻ &nbsp; Refresh</button>
-        </header>
-        <div id="error" class="notice" role="alert" hidden></div>
-        <section id="welcome" class="panel empty">
-          <div class="empty-icon" aria-hidden="true">▦</div>
-          <h2>Your console, at a glance</h2>
-          <p>Connect to view product activity, resource counts and the current server contract.</p>
-          <button class="button primary" id="welcome-connect">Connect to console</button>
-          <div class="small">A console access token is required.</div>
         </section>
-        <div id="content" hidden>
-          <section data-view="overview" aria-label="Resource overview">
-            <div class="metrics" id="totals"></div>
-            <div class="resources" id="resources"></div>
-          </section>
-          <section id="activity" class="section" data-view="activity" hidden>
-            <div class="section-heading">
-              <h2>Activity overview</h2>
-              <div class="segmented" aria-label="Activity window">
-                <button type="button" data-days="7" aria-pressed="true">Last 7 days</button
-                ><button type="button" data-days="30" aria-pressed="false">Last 30 days</button>
-              </div>
+
+        <section class="section" aria-labelledby="activity-title">
+          <div class="section-head">
+            <h2 id="activity-title">Activity</h2>
+            <div class="segmented" role="group" aria-label="Activity window">
+              <button type="button" data-days="7" aria-pressed="true">7 days</button
+              ><button type="button" data-days="30" aria-pressed="false">30 days</button>
             </div>
-            <div class="panel activity" id="windows"></div>
-            <section class="user-section" aria-labelledby="users-title">
-              <div class="section-heading user-toolbar">
-                <div>
-                  <h2 id="users-title">User activity</h2>
-                  <p class="small">
-                    Ranked by original human messages · selected 7 / 30 day window
-                  </p>
-                </div>
-                <form class="user-search" id="user-search">
-                  <label for="user-query">Find a user</label
-                  ><input
-                    id="user-query"
-                    placeholder="Search name, handle or exact user ID"
-                    maxlength="128"
-                  /><button class="button" type="submit">Search</button>
-                </form>
-              </div>
-              <div id="users-state" class="small" role="status"></div>
-              <button class="button" id="users-retry" hidden>Retry user activity</button>
-              <div id="users-results" hidden>
-                <section
-                  class="panel user-section"
-                  id="user-detail"
-                  hidden
-                  aria-labelledby="user-detail-title"
-                >
-                  <div class="panel-head">
-                    <div>
-                      <h2 id="user-detail-title" tabindex="-1"></h2>
-                      <p id="user-detail-identity"></p>
-                    </div>
-                    <button class="button" id="user-clear">Close user</button>
-                  </div>
-                  <div class="activity detail-metrics" id="user-detail-metrics"></div>
-                  <div class="detail-meta" id="user-detail-meta"></div>
-                  <div class="chart-wrap">
-                    <h2 id="user-trend-title">Daily messages</h2>
-                    <div class="plot" style="margin-top: 20px">
-                      <div class="axis" id="user-axis"></div>
-                      <div
-                        class="chart"
-                        id="user-chart"
-                        aria-label="Selected user daily messages"
-                      ></div>
-                    </div>
-                    <div class="dates" id="user-dates"></div>
-                    <p class="small" id="user-chart-empty" hidden>No messages in this period.</p>
-                  </div>
-                </section>
-                <div class="panel">
-                  <div class="panel-head">
-                    <div>
-                      <h2>Top 10 users</h2>
-                      <p id="top-users-period">Most messages across all users</p>
-                    </div>
-                    <span class="badge">Human messages</span>
-                  </div>
-                  <div id="top-users" class="top-users"></div>
-                </div>
-                <div class="panel user-section">
-                  <div class="panel-head">
-                    <h2>Users</h2>
-                    <span class="small" id="users-total"></span>
-                  </div>
-                  <div class="table-scroll">
-                    <table class="users-table">
-                      <thead>
-                        <tr>
-                          <th scope="col">User</th>
-                          <th scope="col" class="number">Messages</th>
-                          <th scope="col" class="number">Active days</th>
-                          <th scope="col" class="number">Conversations</th>
-                          <th scope="col">Last message</th>
-                        </tr>
-                      </thead>
-                      <tbody id="user-rows"></tbody>
-                    </table>
-                  </div>
-                  <div class="pagination">
-                    <span class="small" id="users-page"></span>
-                    <div class="actions">
-                      <button class="button" id="users-prev">Previous</button
-                      ><button class="button" id="users-next">Next</button>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </section>
-            <div class="panel" style="margin-top: 20px">
+          </div>
+          <div class="panel stats" id="windows"></div>
+
+          <div class="grid chart-row">
+            <div class="panel">
               <div class="panel-head">
                 <div>
-                  <h2>Message volume</h2>
-                  <p>Original human and agent messages · last 30 days</p>
+                  <h3>Message volume</h3>
+                  <div class="sub">Original messages, last 30 days</div>
                 </div>
                 <div class="legend">
-                  <span><i class="swatch"></i>Human</span
-                  ><span><i class="swatch agent"></i>Agent</span>
+                  <span><i class="swatch"></i>Human</span><span><i class="swatch agent"></i>Agent</span>
                 </div>
               </div>
-              <div class="chart-wrap">
-                <div class="chart-stat">
-                  <strong id="message-total">—</strong
-                  ><span class="small">messages in 30 days</span>
-                </div>
+              <div class="chart-body">
+                <div class="chart-total"><strong id="message-total">0</strong><span class="muted">messages</span></div>
                 <div class="plot">
                   <div class="axis" id="axis"></div>
-                  <div class="chart" id="chart" aria-label="Daily message volume"></div>
+                  <div class="bars" id="chart" aria-label="Daily message volume"></div>
                 </div>
                 <div class="dates" id="dates"></div>
-                <p class="small" id="chart-empty" hidden>No messages in this period.</p>
+                <p class="chart-empty" id="chart-empty" hidden>No messages in this period.</p>
               </div>
             </div>
-          </section>
-          <section class="panel section" id="runtimes-section" data-view="runtimes" hidden>
-            <div class="panel-head">
-              <div>
-                <h2>Agent runtimes</h2>
-                <p>Distribution across registered agents</p>
+            <div class="panel">
+              <div class="panel-head">
+                <h3>Agent runtimes</h3>
+                <span class="sub" id="runtime-count"></span>
               </div>
-              <span class="badge" id="runtime-count"></span>
+              <ul class="runtime-list" id="runtimes"></ul>
             </div>
-            <table>
-              <thead>
-                <tr>
-                  <th scope="col">Runtime</th>
-                  <th scope="col" class="number">Agents</th>
-                  <th scope="col" class="number">Share</th>
-                </tr>
-              </thead>
-              <tbody id="runtimes"></tbody>
-            </table>
-          </section>
-          <section class="panel section" id="contract-section" data-view="contract" hidden>
-            <div class="panel-head">
-              <div>
-                <h2>Server contract</h2>
-                <p>Protocol versions of the running server</p>
+          </div>
+
+          <div class="grid users-row">
+            <div class="panel" id="top-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Most active</h3>
+                  <div class="sub" id="top-users-period">Human messages</div>
+                </div>
               </div>
-              <span class="badge">Current</span>
+              <ol class="top-list" id="top-users"></ol>
             </div>
-            <div id="contract"></div>
-            <div class="footnote">
-              Client release distribution is available in structured logs / SLS.
+            <div class="panel" id="users-panel">
+              <div class="panel-head">
+                <div>
+                  <h3>Users</h3>
+                  <div class="sub" id="users-total"></div>
+                </div>
+                <form class="search" id="user-search" role="search">
+                  <label for="user-query" class="visually-hidden">Find a user</label>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
+                  <input id="user-query" type="search" placeholder="Name, handle or user ID" maxlength="128" />
+                </form>
+              </div>
+              <div class="users-state" id="users-state" role="status" hidden></div>
+              <div class="table-scroll" id="users-table" hidden>
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">User</th>
+                      <th scope="col" class="right">Messages</th>
+                      <th scope="col" class="right">Active days</th>
+                      <th scope="col" class="right">Conversations</th>
+                      <th scope="col">Last message</th>
+                    </tr>
+                  </thead>
+                  <tbody id="user-rows"></tbody>
+                </table>
+              </div>
+              <div class="table-foot" id="users-foot" hidden>
+                <span id="users-page"></span>
+                <div class="pager">
+                  <button class="button" id="users-prev">Previous</button><button class="button" id="users-next">Next</button>
+                </div>
+              </div>
             </div>
-          </section>
-          <footer>
-            <span id="stamp" role="status"></span
-            ><span>Product statistics · snapshot may be cached for 30s</span>
-          </footer>
-        </div>
-      </main>
-    </div>
-    <dialog id="connect-dialog" aria-labelledby="dialog-title">
-      <div class="dialog-head">
-        <h2 id="dialog-title">Connect to console</h2>
-        <button class="quiet" id="close-dialog" aria-label="Close connection dialog">✕</button>
+          </div>
+        </section>
+
+        <footer>
+          <div class="contract" id="contract"></div>
+          <span>Snapshots may be cached for 30 seconds. Agent messages are not attributed to users.</span>
+        </footer>
       </div>
-      <p>
-        Enter the access token for this console. It is kept only in page memory. Reloading or
-        reopening this page requires entering it again.
-      </p>
-      <form id="auth">
-        <label for="token">Console access token</label
-        ><input
-          id="token"
-          type="password"
-          autocomplete="off"
-          placeholder="Enter your console token"
-          required
-        />
-        <div id="auth-error" role="alert"></div>
-        <div class="actions">
-          <button type="button" class="button" id="disconnect" hidden>Disconnect</button
-          ><button class="button primary" id="submit">Connect</button>
+    </main>
+
+    <dialog class="sheet" id="user-sheet" aria-labelledby="user-detail-title">
+      <div class="sheet-head">
+        <span class="avatar" id="user-detail-avatar" aria-hidden="true"></span>
+        <div>
+          <h2 id="user-detail-title" tabindex="-1"></h2>
+          <div class="person-handle" id="user-detail-handle"></div>
         </div>
-      </form>
+        <button class="button ghost" id="user-clear" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12" /></svg>
+        </button>
+      </div>
+      <div class="sheet-state" id="user-detail-state" role="status"></div>
+      <div class="sheet-body" id="user-detail-body" hidden>
+        <div class="stats" id="user-detail-metrics"></div>
+        <dl class="meta" id="user-detail-meta"></dl>
+        <h3 id="user-trend-title">Daily messages</h3>
+        <div class="plot">
+          <div class="axis" id="user-axis"></div>
+          <div class="bars" id="user-chart" aria-label="Daily messages for this user"></div>
+        </div>
+        <div class="dates" id="user-dates"></div>
+        <p class="chart-empty" id="user-chart-empty" hidden>No messages in this period.</p>
+      </div>
     </dialog>
+
     <script>
       const $ = (id) => document.getElementById(id);
       const fmt = new Intl.NumberFormat('en-US');
@@ -1141,10 +1075,11 @@
       let request = null;
       let usersRequest = null;
       let usersGeneration = 0;
+      let detailRequest = null;
+      let detailGeneration = 0;
       let usersPage = 1;
       let usersSearch = '';
       let selectedUserId = '';
-      let usersLoadedKey = '';
       let usersTimeZone = 'Asia/Shanghai';
       const escapeHtml = (value) =>
         String(value).replace(
@@ -1160,21 +1095,56 @@
         /* Storage may be disabled; this page uses memory only. */
       }
 
+      const stat = (label, value) =>
+        `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value">${fmt.format(value)}</div></div>`;
+
+      const initial = (name) => escapeHtml((Array.from(String(name).trim())[0] || '?').toUpperCase());
+
+      function shortDate(date) {
+        return new Intl.DateTimeFormat('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' }).format(
+          new Date(`${date}T00:00:00Z`),
+        );
+      }
+
+      function ceilingOf(maximum) {
+        const step = Math.max(2, 10 ** Math.floor(Math.log10(Math.max(1, maximum))));
+        return Math.ceil(Math.max(1, maximum) / step) * step;
+      }
+
+      // Draws stacked daily bars; `series` lists [key, label, className] bottom-up.
+      function drawChart(prefix, days, series) {
+        const totalOf = (day) => series.reduce((sum, [key]) => sum + day[key], 0);
+        const ceiling = ceilingOf(Math.max(0, ...days.map(totalOf)));
+        $(`${prefix}axis`).innerHTML = [ceiling, ceiling / 2, 0]
+          .map((value) => `<span>${fmt.format(value)}</span>`)
+          .join('');
+        $(`${prefix}chart`).innerHTML = days
+          .map((day) => {
+            const lines = series.map(([key, label]) => `${label} ${fmt.format(day[key])}`);
+            const label = `${shortDate(day.date)}: ${lines.join(', ')}`;
+            const fills = [...series]
+              .reverse()
+              .map(([key, , className]) => `<i class="${className}" style="height:${(day[key] / ceiling) * 100}%"></i>`)
+              .join('');
+            return `<div class="bar" tabindex="0" role="img" aria-label="${escapeHtml(label)}">${fills}<span class="tip" aria-hidden="true"><b>${escapeHtml(shortDate(day.date))}</b>${lines.map(escapeHtml).join('<br>')}</span></div>`;
+          })
+          .join('');
+        $(`${prefix}dates`).innerHTML = days.length
+          ? [days[0], days[Math.floor((days.length - 1) / 2)], days[days.length - 1]]
+              .map((day) => `<span>${escapeHtml(shortDate(day.date))}</span>`)
+              .join('')
+          : '';
+        return days.reduce((sum, day) => sum + totalOf(day), 0);
+      }
+
       function renderWindow() {
         const window = snapshot.activity_windows.find((item) => item.days === activeDays);
         $('windows').innerHTML = window
-          ? [
-              ['Authenticated users', window.authenticated_users],
-              ['Speaking users', window.speaking_users],
-              ['Human messages', window.human_messages],
-              ['Agent messages', window.agent_messages],
-            ]
-              .map(
-                ([label, value]) =>
-                  `<div><span class="metric-label">${label}</span><strong>${fmt.format(value)}</strong></div>`,
-              )
-              .join('')
-          : '<div>No activity window available.</div>';
+          ? stat('Authenticated users', window.authenticated_users) +
+            stat('Speaking users', window.speaking_users) +
+            stat('Human messages', window.human_messages) +
+            stat('Agent messages', window.agent_messages)
+          : '<div class="list-empty">No activity window available.</div>';
         document
           .querySelectorAll('[data-days]')
           .forEach((button) =>
@@ -1184,86 +1154,78 @@
 
       function render(data) {
         snapshot = data;
-        const totals = [
-          ['users', 'Users', 'Registered users'],
-          ['agents', 'Agents', 'Registered agents'],
-          ['regular_workspaces', 'Workspaces', 'Regular workspaces'],
-          ['messages', 'Messages', 'Original authored messages'],
-        ];
-        $('totals').innerHTML = totals
-          .map(
-            ([key, label, note]) =>
-              `<div class="panel metric"><div class="metric-label">${label}</div><div class="value">${fmt.format(data.totals[key])}</div><div class="metric-note">${note}</div></div>`,
-          )
-          .join('');
+        const totals = data.totals;
+        $('totals').innerHTML =
+          stat('Users', totals.users) +
+          stat('Agents', totals.agents) +
+          stat('Workspaces', totals.regular_workspaces) +
+          stat('Messages', totals.messages);
         $('resources').innerHTML = [
           ['active_channels', 'Active channels'],
           ['archived_channels', 'Archived channels'],
           ['active_computers', 'Active computers'],
         ]
-          .map(
-            ([key, label]) =>
-              `<span>${label}<strong>${fmt.format(data.totals[key])}</strong></span>`,
-          )
+          .map(([key, label]) => `<span>${label}<strong>${fmt.format(totals[key])}</strong></span>`)
           .join('');
         renderWindow();
 
-        const days = data.daily_activity;
-        const maximum = Math.max(1, ...days.map((day) => day.human_messages + day.agent_messages));
-        const step = Math.max(2, 10 ** Math.floor(Math.log10(maximum)));
-        const ceiling = Math.ceil(maximum / step) * step;
-        const total = days.reduce((sum, day) => sum + day.human_messages + day.agent_messages, 0);
+        const total = drawChart('', data.daily_activity, [
+          ['human_messages', 'Human', ''],
+          ['agent_messages', 'Agent', 'agent'],
+        ]);
         $('message-total').textContent = fmt.format(total);
-        $('axis').innerHTML = [ceiling, ceiling / 2, 0]
-          .map((value) => `<span>${fmt.format(value)}</span>`)
-          .join('');
-        $('chart').innerHTML = days
-          .map((day) => {
-            const label = `${day.date} · Human ${fmt.format(day.human_messages)} · Agent ${fmt.format(day.agent_messages)}`;
-            return `<div class="bar" tabindex="0" role="img" aria-label="${escapeHtml(label)}"><i class="agent" style="height:${(day.agent_messages / ceiling) * 100}%"></i><i style="height:${(day.human_messages / ceiling) * 100}%"></i><span>${escapeHtml(label)}</span></div>`;
-          })
-          .join('');
-        $('dates').innerHTML = days.length
-          ? [days[0], days[Math.floor((days.length - 1) / 2)], days[days.length - 1]]
-              .map((day) => `<span>${escapeHtml(day.date)}</span>`)
-              .join('')
-          : '';
         $('chart-empty').hidden = total !== 0;
 
         const runtimeTotal = data.agent_runtimes.reduce((sum, row) => sum + row.count, 0);
+        const runtimeMax = Math.max(1, ...data.agent_runtimes.map((row) => row.count));
         $('runtime-count').textContent = `${fmt.format(runtimeTotal)} agents`;
         $('runtimes').innerHTML = data.agent_runtimes.length
           ? data.agent_runtimes
               .map((row) => {
                 const share = runtimeTotal ? (row.count / runtimeTotal) * 100 : 0;
-                return `<tr><td class="runtime-name">${escapeHtml(row.runtime)}</td><td class="number">${fmt.format(row.count)}</td><td class="number"><div class="share"><span class="track" aria-hidden="true"><i style="width:${share}%"></i></span>${share.toFixed(1)}%</div></td></tr>`;
+                return `<li><span class="mono">${escapeHtml(row.runtime)}</span><span class="runtime-count"><strong>${fmt.format(row.count)}</strong>${share.toFixed(1)}%</span><span class="track" aria-hidden="true"><i style="width:${(row.count / runtimeMax) * 100}%"></i></span></li>`;
               })
               .join('')
-          : '<tr><td colspan="3" class="small">No registered agents yet.</td></tr>';
+          : '<li class="muted">No registered agents yet.</li>';
 
         const contractLabels = {
           current_desktop_api_epoch: 'Desktop API epoch',
-          minimum_client_api_epoch: 'Minimum client API epoch',
-          outbound_protocol_version: 'Outbound protocol version',
+          minimum_client_api_epoch: 'Minimum client epoch',
+          outbound_protocol_version: 'Outbound protocol',
         };
         $('contract').innerHTML = Object.entries(data.server_contract)
           .map(
             ([key, value]) =>
-              `<div class="contract-row"><span>${escapeHtml(contractLabels[key] || key.replaceAll('_', ' '))}</span><strong>${escapeHtml(value)}</strong></div>`,
+              `<span>${escapeHtml(contractLabels[key] || key.replaceAll('_', ' '))}<strong>${escapeHtml(value)}</strong></span>`,
           )
           .join('');
 
-        $('stamp').textContent =
-          `Snapshot ${new Intl.DateTimeFormat('en-GB', { dateStyle: 'medium', timeStyle: 'medium', timeZone: data.time_zone }).format(new Date(data.generated_at))} · ${data.time_zone}`;
+        const time = new Intl.DateTimeFormat('en-GB', {
+          dateStyle: 'medium',
+          timeStyle: 'medium',
+          timeZone: data.time_zone,
+        }).format(new Date(data.generated_at));
+        $('stamp').textContent = `Updated ${time} (${data.time_zone})`;
         $('content').hidden = false;
         $('welcome').hidden = true;
       }
 
       function setConnection(connected) {
-        $('connection').classList.toggle('connected', connected);
-        $('connection-label').textContent = connected ? 'Connected' : 'Connect';
-        $('disconnect').hidden = !currentToken;
+        $('session').hidden = !connected;
         $('refresh').disabled = !currentToken;
+      }
+
+      function signedOut(message) {
+        currentToken = '';
+        snapshot = null;
+        resetUsers();
+        $('content').hidden = true;
+        $('welcome').hidden = false;
+        setConnection(false);
+        if (message) {
+          $('error').textContent = message;
+          $('error').hidden = false;
+        }
       }
 
       async function load(token) {
@@ -1273,9 +1235,8 @@
         request = controller;
         const timeout = setTimeout(() => controller.abort(), 15000);
         $('submit').disabled = true;
-        $('disconnect').disabled = true;
         $('refresh').disabled = true;
-        $('refresh').textContent = 'Refreshing…';
+        $('refresh-label').textContent = 'Refreshing';
         $('auth-error').textContent = '';
         $('error').hidden = true;
         $('content').setAttribute('aria-busy', 'true');
@@ -1288,91 +1249,67 @@
           });
           if (controller.signal.aborted || request !== controller) return;
           if (!response.ok) {
-            if (response.status === 401) {
-              currentToken = '';
-              resetUsers();
-              snapshot = null;
-              $('content').hidden = true;
-              $('welcome').hidden = false;
-            }
+            if (response.status === 401) signedOut();
             throw new Error(
               response.status === 401
-                ? 'Invalid console token. Check the token and try again.'
-                : `Unable to refresh (${response.status}). Please try again.`,
+                ? 'Invalid access token.'
+                : `Unable to refresh (${response.status}). Try again.`,
             );
           }
 
           const nextSnapshot = await response.json();
           if (controller.signal.aborted || request !== controller) return;
+          const first = !currentToken;
           render(nextSnapshot);
           currentToken = token;
           setConnection(true);
-          $('connect-dialog').close();
           $('token').value = '';
-          usersLoadedKey = '';
-          if (location.hash === '#/activity') loadUsers();
+          if (first) {
+            loadUsers();
+          }
         } catch (error) {
           if (request !== controller) return;
           const message =
-            error.name === 'AbortError'
-              ? 'The request timed out. Please try again.'
-              : error.message;
-          $('auth-error').textContent = message;
-          $('error').textContent = `${snapshot ? 'Showing the last snapshot. ' : ''}${message}`;
-          $('error').hidden = false;
-          setConnection(false);
+            error.name === 'AbortError' ? 'The request timed out. Try again.' : error.message;
+          if (snapshot) {
+            $('error').textContent = `Showing the last snapshot. ${message}`;
+            $('error').hidden = false;
+          } else {
+            $('auth-error').textContent = message;
+          }
+          setConnection(Boolean(currentToken));
         } finally {
           clearTimeout(timeout);
           if (request === controller) {
             request = null;
             $('submit').disabled = false;
-            $('disconnect').disabled = false;
             $('refresh').disabled = !currentToken;
-            $('refresh').textContent = '↻  Refresh';
+            $('refresh-label').textContent = 'Refresh';
             $('content').setAttribute('aria-busy', 'false');
           }
         }
       }
 
-      function openConnection() {
-        $('auth-error').textContent = '';
-        $('connect-dialog').showModal();
-        $('token').focus();
-      }
-
-      $('connection').addEventListener('click', openConnection);
-      $('welcome-connect').addEventListener('click', openConnection);
-      $('close-dialog').addEventListener('click', () => {
-        $('token').value = '';
-        $('connect-dialog').close();
-      });
-      $('connect-dialog').addEventListener('cancel', () => {
-        $('token').value = '';
-      });
       $('auth').addEventListener('submit', (event) => {
         event.preventDefault();
         const token = $('token').value;
         $('token').value = '';
         load(token);
       });
-      $('refresh').addEventListener('click', () => load(currentToken));
+      $('refresh').addEventListener('click', () => {
+        load(currentToken);
+        loadUsers();
+      });
 
       function disconnect() {
         request?.abort();
         request = null;
-        currentToken = '';
-        snapshot = null;
-        resetUsers();
+        signedOut();
         $('token').value = '';
-        $('content').hidden = true;
-        $('welcome').hidden = false;
         $('error').hidden = true;
-        setConnection(false);
         $('submit').disabled = false;
-        $('disconnect').disabled = false;
-        $('refresh').textContent = '↻  Refresh';
+        $('refresh-label').textContent = 'Refresh';
         $('content').setAttribute('aria-busy', 'false');
-        $('connect-dialog').close();
       }
 
       $('disconnect').addEventListener('click', disconnect);
@@ -1389,21 +1326,27 @@
             renderWindow();
             usersPage = 1;
             loadUsers();
+            if (selectedUserId) loadUserDetail();
           }
         }),
       );
 
       function resetUsers() {
         usersGeneration += 1;
+        detailGeneration += 1;
         usersRequest?.abort();
+        detailRequest?.abort();
         usersRequest = null;
-        usersLoadedKey = '';
+        detailRequest = null;
         selectedUserId = '';
-        $('users-results').hidden = true;
-        $('users-state').textContent = '';
         $('user-query').value = '';
         usersSearch = '';
         usersPage = 1;
+        $('users-table').hidden = true;
+        $('users-foot').hidden = true;
+        $('users-state').hidden = true;
+        $('top-users').innerHTML = '';
+        if ($('user-sheet').open) $('user-sheet').close();
       }
 
       function userDate(value) {
@@ -1416,110 +1359,82 @@
             }).format(new Date(value));
       }
 
-      function userButton(user) {
-        return `<button class="user-name" data-user="${escapeHtml(user.user_id)}">${escapeHtml(user.display_name || user.name)}</button><div class="user-handle">@${escapeHtml(user.name)}</div>`;
+      function personButton(user) {
+        const name = user.display_name || user.name;
+        return `<button class="person" data-user="${escapeHtml(user.user_id)}"><span class="person-name">${escapeHtml(name)}</span><span class="person-handle">@${escapeHtml(user.name)}</span></button>`;
+      }
+
+      async function read(path, controller) {
+        const response = await fetch(path, {
+          headers: { Authorization: `Bearer ${currentToken}` },
+          signal: controller.signal,
+          cache: 'no-store',
+        });
+        if (!response.ok) {
+          const error = new Error(
+            response.status === 401
+              ? 'Your access token is no longer valid.'
+              : response.status === 404
+                ? 'This user no longer exists.'
+                : `Could not load user activity (${response.status}).`,
+          );
+          error.status = response.status;
+          throw error;
+        }
+        return response.json();
       }
 
       function renderUsers(data) {
         usersTimeZone = data.time_zone;
-        $('top-users-period').textContent =
-          `Most messages across all users · last ${data.days} days`;
+        $('top-users-period').textContent = `Human messages, last ${data.days} days`;
         $('top-users').innerHTML = data.top_users.length
           ? data.top_users
               .map(
                 (user, index) =>
-                  `<div class="top-user"><span class="rank">${index + 1}</span><div class="user-identity">${userButton(user)}</div><span class="user-count">${fmt.format(user.message_count)}</span></div>`,
+                  `<li><span class="rank">${index + 1}</span><span class="avatar" aria-hidden="true">${initial(user.display_name || user.name)}</span>${personButton(user)}<span class="top-count">${fmt.format(user.message_count)}</span></li>`,
               )
               .join('')
-          : '<p class="small" style="padding:14px 0">No users have sent messages in this period.</p>';
-        $('users-total').textContent = `${fmt.format(data.total_matching)} matching users`;
+          : '<li class="list-empty">No messages in this period.</li>';
+        $('users-total').textContent = `${fmt.format(data.total_matching)} ${data.total_matching === 1 ? 'user' : 'users'}${usersSearch ? ' matching' : ''}, last ${data.days} days`;
         $('user-rows').innerHTML = data.users.length
           ? data.users
               .map(
                 (user) =>
-                  `<tr><td>${userButton(user)}</td><td class="number">${fmt.format(user.message_count)}</td><td class="number">${fmt.format(user.active_days)}</td><td class="number">${fmt.format(user.conversation_count)}</td><td>${escapeHtml(userDate(user.last_message_at))}</td></tr>`,
+                  `<tr><td><div class="cell-person"><span class="avatar" aria-hidden="true">${initial(user.display_name || user.name)}</span>${personButton(user)}</div></td><td class="right">${fmt.format(user.message_count)}</td><td class="right">${fmt.format(user.active_days)}</td><td class="right">${fmt.format(user.conversation_count)}</td><td class="muted">${escapeHtml(userDate(user.last_message_at))}</td></tr>`,
               )
               .join('')
-          : '<tr><td colspan="5" class="small">No matching users. Try another name or clear the search.</td></tr>';
+          : '<tr><td colspan="5" class="muted">No matching users.</td></tr>';
         const pages = Math.max(1, Math.ceil(data.total_matching / data.page_size));
-        $('users-page').textContent =
-          `Page ${data.page} of ${fmt.format(pages)} · ${data.page_size} per page`;
+        $('users-page').textContent = `Page ${data.page} of ${fmt.format(pages)}`;
         $('users-prev').disabled = data.page <= 1;
         $('users-next').disabled = data.page >= pages || data.page >= 10000;
+        $('users-table').hidden = false;
+        $('users-foot').hidden = false;
       }
 
-      function renderUserDetail(data) {
-        const user = data.user;
-        $('user-detail-title').textContent = user.display_name || user.name;
-        $('user-detail-identity').textContent =
-          `@${user.name} · ${user.user_id} · last ${data.days} days`;
-        $('user-detail-metrics').innerHTML = [
-          ['Messages', user.message_count],
-          ['Active days', user.active_days],
-          ['Conversations', user.conversation_count],
-        ]
-          .map(
-            ([label, value]) =>
-              `<div><span class="metric-label">${label}</span><strong>${fmt.format(value)}</strong></div>`,
-          )
-          .join('');
-        $('user-detail-meta').innerHTML =
-          `<span>Last message <strong>${escapeHtml(userDate(user.last_message_at))}</strong></span><span>Last authenticated <strong>${escapeHtml(userDate(user.last_authenticated_at))}</strong></span><span>${escapeHtml(data.time_zone)} · within selected window</span>`;
-        const days = data.daily_activity;
-        const maximum = Math.max(1, ...days.map((day) => day.message_count));
-        const step = Math.max(2, 10 ** Math.floor(Math.log10(maximum)));
-        const ceiling = Math.ceil(maximum / step) * step;
-        $('user-axis').innerHTML = [ceiling, ceiling / 2, 0]
-          .map((count) => `<span>${fmt.format(count)}</span>`)
-          .join('');
-        $('user-trend-title').textContent = `Daily human messages · last ${data.days} days`;
-        $('user-chart').innerHTML = days
-          .map((day) => {
-            const label = `${day.date}: ${fmt.format(day.message_count)} messages`;
-            return `<div class="bar" tabindex="0" role="img" aria-label="${escapeHtml(label)}"><i style="height:${(day.message_count / ceiling) * 100}%"></i><span>${escapeHtml(label)}</span></div>`;
-          })
-          .join('');
-        $('user-dates').innerHTML = days.length
-          ? [days[0], days[Math.floor((days.length - 1) / 2)], days[days.length - 1]]
-              .map((day) => `<span>${escapeHtml(day.date)}</span>`)
-              .join('')
-          : '';
-        $('user-chart-empty').hidden = user.message_count !== 0;
-        $('user-detail').hidden = false;
+      function usersFailed(message) {
+        $('users-state').className = 'users-state error';
+        $('users-state').innerHTML = `${escapeHtml(message)}<button class="button" id="users-retry">Retry</button>`;
+        $('users-state').hidden = false;
+        $('users-table').hidden = true;
+        $('users-foot').hidden = true;
+        $('users-retry').addEventListener('click', () => loadUsers());
       }
 
-      async function loadUsers(focusUser = false) {
+      async function loadUsers() {
         if (!currentToken) return;
         usersRequest?.abort();
         const controller = new AbortController();
         usersRequest = controller;
         const generation = ++usersGeneration;
         const timeout = setTimeout(() => controller.abort(), 15000);
-        const key = `${activeDays}:${usersPage}:${usersSearch}:${selectedUserId}`;
-        usersLoadedKey = '';
-        $('users-state').textContent = 'Loading user activity…';
-        $('users-results').hidden = true;
-        $('users-retry').hidden = true;
-        $('user-detail').hidden = true;
-
-        async function read(path) {
-          const response = await fetch(path, {
-            headers: { Authorization: `Bearer ${currentToken}` },
-            signal: controller.signal,
-            cache: 'no-store',
-          });
-          if (!response.ok) {
-            const error = new Error(
-              response.status === 401
-                ? 'Your console token is no longer valid.'
-                : response.status === 404
-                  ? 'This user no longer exists. Select another user.'
-                  : `User activity could not be loaded (${response.status}). Please retry.`,
-            );
-            error.status = response.status;
-            throw error;
-          }
-          return response.json();
+        // Keep the previous page on screen, dimmed, so the layout holds still.
+        $('users-panel').setAttribute('aria-busy', 'true');
+        $('top-panel').setAttribute('aria-busy', 'true');
+        if ($('users-table').hidden) {
+          $('users-state').className = 'users-state';
+          $('users-state').textContent = 'Loading users…';
+          $('users-state').hidden = false;
         }
 
         try {
@@ -1528,51 +1443,108 @@
             page: String(usersPage),
             q: usersSearch,
           });
-          const list = await read(`/console/api/users?${query}`);
+          const list = await read(`/console/api/users?${query}`, controller);
           if (generation !== usersGeneration) return;
+          $('users-state').hidden = true;
           renderUsers(list);
-          $('users-results').hidden = false;
-          if (selectedUserId) {
-            const detail = await read(
-              `/console/api/users/${encodeURIComponent(selectedUserId)}?days=${activeDays}`,
-            );
-            if (generation !== usersGeneration) return;
-            renderUserDetail(detail);
-            if (focusUser) $('user-detail-title').focus();
-          }
-          usersLoadedKey = key;
-          $('users-state').textContent =
-            `User activity snapshot ${userDate(list.generated_at)} · ${list.time_zone}. Agent messages are not attributed to users.`;
         } catch (error) {
           if (generation !== usersGeneration) return;
-          $('users-state').textContent =
-            error.name === 'AbortError'
-              ? 'User activity request timed out. Please retry.'
-              : error.message;
-          $('users-retry').hidden = false;
-          if (error.status === 404) selectedUserId = '';
           if (error.status === 401) {
-            currentToken = '';
-            snapshot = null;
-            $('content').hidden = true;
-            $('welcome').hidden = false;
-            $('error').hidden = false;
-            $('error').textContent = error.message;
-            resetUsers();
-            setConnection(false);
+            signedOut(error.message);
+            return;
           }
+          usersFailed(error.name === 'AbortError' ? 'The request timed out.' : error.message);
         } finally {
           clearTimeout(timeout);
-          if (generation === usersGeneration) usersRequest = null;
+          if (generation === usersGeneration) {
+            usersRequest = null;
+            $('users-panel').setAttribute('aria-busy', 'false');
+            $('top-panel').setAttribute('aria-busy', 'false');
+          }
         }
       }
 
+      function renderUserDetail(data) {
+        const user = data.user;
+        $('user-detail-title').textContent = user.display_name || user.name;
+        $('user-detail-avatar').textContent = (Array.from((user.display_name || user.name).trim())[0] || '?').toUpperCase();
+        $('user-detail-handle').textContent = `@${user.name}`;
+        $('user-detail-metrics').innerHTML =
+          stat('Messages', user.message_count) +
+          stat('Active days', user.active_days) +
+          stat('Conversations', user.conversation_count);
+        $('user-detail-meta').innerHTML =
+          `<dt>Last message</dt><dd>${escapeHtml(userDate(user.last_message_at))}</dd>` +
+          `<dt>Last signed in</dt><dd>${escapeHtml(userDate(user.last_authenticated_at))}</dd>` +
+          `<dt>User ID</dt><dd class="mono">${escapeHtml(user.user_id)}</dd>`;
+        $('user-trend-title').textContent = `Daily human messages, last ${data.days} days`;
+        drawChart('user-', data.daily_activity, [['message_count', 'Messages', '']]);
+        $('user-chart-empty').hidden = user.message_count !== 0;
+        $('user-detail-state').hidden = true;
+        $('user-detail-body').hidden = false;
+      }
+
+      async function loadUserDetail() {
+        if (!currentToken || !selectedUserId) return;
+        detailRequest?.abort();
+        const controller = new AbortController();
+        detailRequest = controller;
+        const generation = ++detailGeneration;
+        const timeout = setTimeout(() => controller.abort(), 15000);
+        $('user-detail-state').className = 'sheet-state';
+        $('user-detail-state').textContent = 'Loading…';
+        $('user-detail-state').hidden = false;
+        $('user-detail-body').hidden = true;
+
+        try {
+          const detail = await read(
+            `/console/api/users/${encodeURIComponent(selectedUserId)}?days=${activeDays}`,
+            controller,
+          );
+          if (generation !== detailGeneration) return;
+          renderUserDetail(detail);
+        } catch (error) {
+          if (generation !== detailGeneration) return;
+          if (error.status === 401) {
+            signedOut(error.message);
+            return;
+          }
+          $('user-detail-state').className = 'sheet-state error';
+          $('user-detail-state').textContent =
+            error.name === 'AbortError' ? 'The request timed out.' : error.message;
+        } finally {
+          clearTimeout(timeout);
+          if (generation === detailGeneration) detailRequest = null;
+        }
+      }
+
+      function openUser(button) {
+        selectedUserId = button.dataset.user;
+        $('user-detail-title').textContent = button.querySelector('.person-name').textContent;
+        $('user-detail-handle').textContent = button.querySelector('.person-handle').textContent;
+        $('user-detail-avatar').textContent = button.closest('li, tr')?.querySelector('.avatar')?.textContent || '';
+        if (!$('user-sheet').open) $('user-sheet').showModal();
+        $('user-detail-title').focus();
+        loadUserDetail();
+      }
+
+      let searchTimer = 0;
       $('user-search').addEventListener('submit', (event) => {
         event.preventDefault();
+        clearTimeout(searchTimer);
         usersSearch = $('user-query').value.trim();
-        selectedUserId = '';
         usersPage = 1;
         loadUsers();
+      });
+      $('user-query').addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(() => {
+          const next = $('user-query').value.trim();
+          if (next === usersSearch) return;
+          usersSearch = next;
+          usersPage = 1;
+          loadUsers();
+        }, 300);
       });
       $('users-prev').addEventListener('click', () => {
         usersPage -= 1;
@@ -1582,71 +1554,25 @@
         usersPage += 1;
         loadUsers();
       });
-      $('users-retry').addEventListener('click', () => loadUsers());
-      $('user-clear').addEventListener('click', () => {
-        selectedUserId = '';
-        loadUsers();
-      });
-      $('users-results').addEventListener('click', (event) => {
+      $('content').addEventListener('click', (event) => {
         const button = event.target.closest('[data-user]');
-        if (button) {
-          selectedUserId = button.dataset.user;
-          loadUsers(true);
-        }
+        if (button) openUser(button);
       });
-
-      const pages = {
-        overview: { title: 'Overview', description: 'Resources across Silverhand.' },
-        activity: {
-          title: 'Activity',
-          description: 'Active users and message trends across Silverhand.',
-        },
-        runtimes: {
-          title: 'Agent runtimes',
-          description: 'Runtime distribution across registered agents.',
-        },
-        contract: {
-          title: 'Server contract',
-          description: 'Protocol compatibility of the running server.',
-        },
-      };
-      const navigation = [...document.querySelectorAll('.nav-link')];
-      const views = [...document.querySelectorAll('[data-view]')];
-
-      function showPage(moveFocus = false) {
-        const requested = location.hash.slice(2);
-        const page =
-          location.hash.startsWith('#/') && Object.hasOwn(pages, requested)
-            ? requested
-            : 'overview';
-        const route = `#/${page}`;
-        if (location.hash !== route) history.replaceState(null, '', route);
-
-        views.forEach((view) => {
-          view.hidden = view.dataset.view !== page;
-        });
-        navigation.forEach((link) => {
-          if (link.getAttribute('href') === route) link.setAttribute('aria-current', 'page');
-          else link.removeAttribute('aria-current');
-        });
-        $('page-title').textContent = pages[page].title;
-        $('page-description').textContent = pages[page].description;
-        $('breadcrumb-page').textContent = pages[page].title;
-        document.title = `${pages[page].title} · Silverhand Console`;
-        if (page === 'activity' && currentToken && !usersLoadedKey) loadUsers();
-
-        if (moveFocus) {
-          $('page-title').focus({ preventScroll: true });
-          window.scrollTo(0, 0);
-        }
-      }
+      $('user-clear').addEventListener('click', () => $('user-sheet').close());
+      $('user-sheet').addEventListener('click', (event) => {
+        if (event.target === $('user-sheet')) $('user-sheet').close();
+      });
+      $('user-sheet').addEventListener('close', () => {
+        detailGeneration += 1;
+        detailRequest?.abort();
+        detailRequest = null;
+        selectedUserId = '';
+      });
 
       document.querySelector('.skip').addEventListener('click', (event) => {
         event.preventDefault();
         $('main').focus();
       });
-      window.addEventListener('hashchange', () => showPage(true));
-      showPage();
     </script>
   </body>
 </html>

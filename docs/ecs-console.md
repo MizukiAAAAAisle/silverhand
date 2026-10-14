@@ -66,20 +66,15 @@ to a person.
 
 ## Dashboard controls
 
-The sidebar opens four separate views: Overview (`#/overview`) for resource
-counts, Activity (`#/activity`) for activity windows and the message chart,
-Agent runtimes (`#/runtimes`) for the runtime table, and Server contract
-(`#/contract`) for protocol compatibility. Only the selected view is displayed;
-its title, breadcrumb and active navigation item stay in sync. Links support
-reload, direct access and browser back/forward. Activity loads its user read model
-on first entry; revisiting a loaded view does not repeat the query.
-Unknown routes fall back to Overview. The selected view is preserved through
-connection, refresh and reconnect.
+The dashboard is a single page. Overview shows resource counts. Activity shows the
+activity window, the 30-day message chart, the agent runtime breakdown, the Top 10
+and the user directory. The server contract sits in the footer. The user directory
+loads once after connecting and again on Refresh.
 The 7/30-day switch affects the activity summary, user ranking, directory and
-selected user detail. The all-user message chart always shows 30 days. Chart values are available on hover and keyboard focus. Snapshot times
+selected user detail. Selecting a user opens their detail in a side sheet. The all-user message chart always shows 30 days. Chart values are available on hover and keyboard focus. Snapshot times
 use the response's `Asia/Shanghai` timezone.
 
-Connect through the token dialog, then use Refresh to request another snapshot.
+Connect on the token screen, then use Refresh to request another snapshot.
 Refresh failures label the retained snapshot as stale; authentication failures
 hide it and clear the in-memory token. Disconnect clears the in-memory token and
 returns to the connection screen. No automatic polling or external assets are
@@ -89,7 +84,7 @@ introduced.
 
 Activity includes a global Top 10, a searchable user directory and a selected
 user's statistics and daily trend. Click a name in either list to inspect that
-user. Search by name/display name substring or exact user ID; ASCII matching is
+user. Search runs as you type. Search by name/display name substring or exact user ID; ASCII matching is
 case-insensitive. Clear the search to browse all users, including users with no
 messages. The global Top 10 is independent of search and excludes zero-message
 users. Directory pages contain 25 users.
