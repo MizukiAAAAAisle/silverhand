@@ -9,8 +9,7 @@ import {
   type FormEvent,
   type KeyboardEvent,
 } from "react";
-import { AttachFileIcon, HashIcon, ImageIcon, MentionIcon } from "@/icons";
-import { iconMarkup } from "@/components/layout/native-page-bar";
+import { AttachFileIcon, HashIcon, MentionIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import type { ComposerDirectory } from "@/features/conversations/pane-mode";
 import { pendingAttachmentsBlockSend } from "@/features/messages/composer-draft-cache";
@@ -25,12 +24,9 @@ import {
   type PickerItem,
 } from "../model/composer-picker";
 import { MAX_ATTACHMENTS, shouldInterceptOversizedPaste } from "../model/oversize-paste";
-import {
-  ComposerActivityHeader,
-  useNativeComposerActivity,
-  useOpenAgentActivity,
-} from "./composer-activity-header";
-import { nativePickerOf, PickerMenu, rowKey } from "./composer-picker-menu";
+import { ComposerActivityHeader } from "./composer-activity-header";
+import { PickerMenu } from "./composer-picker-menu";
+import { pickerViewOf } from "../model/composer-picker-rows";
 import { Lightbox } from "./lightbox";
 import {
   AttachmentChip,
@@ -123,6 +119,10 @@ export function Composer({
   const menuOpen = !!trigger && (items.length > 0 || channelStatus !== "complete");
   const dismissed = trigger != null && dismissedPos === trigger.pos;
   const pickerShown = menuOpen && !dismissed;
+  const pickerView = useMemo(
+    () => pickerViewOf({ items, hiddenCount, channelStatus, peopleSections, showChannelWorkspace }),
+    [items, hiddenCount, channelStatus, peopleSections, showChannelWorkspace],
+  );
   const sendDisabled =
     disabled ||
     composer.sending ||
@@ -130,8 +130,6 @@ export function Composer({
     (!draft.trim() && pending.filter((p) => p.state === "done").length === 0);
 
   const native = useNativeComposerPlatform();
-  const nativeActivity = useNativeComposerActivity(conversationId, activityAgentIds, native);
-  const openAgentActivity = useOpenAgentActivity();
   const [accessoryHeight, setAccessoryHeight] = useState(0);
   const accessoryRef = useRef<HTMLDivElement>(null);
   const placeholder = archived
@@ -143,37 +141,18 @@ export function Composer({
         : "Message…";
   const nativeComposer = useNativeComposer({
     shown: native && !covered,
-    state: {
-      key: draftKey,
-      placeholder,
-      enabled: !disabled,
-      canSend: !sendDisabled,
-      sendLabel: "Send",
-      addLabel: "Add",
-      add: [
-        { id: "photos", label: "Photos", icon: iconMarkup(ImageIcon), pick: "photos" },
-        { id: "files", label: "Files", icon: iconMarkup(AttachFileIcon), pick: "files" },
-        ...(offersMentions
-          ? [{ id: "mention", label: "Mention a member", icon: iconMarkup(MentionIcon) }]
-          : []),
-        ...(offersChannels
-          ? [{ id: "channel", label: "Reference a channel", icon: iconMarkup(HashIcon) }]
-          : []),
-      ],
-      accessoryHeight,
-      picker: pickerShown
-        ? nativePickerOf({
-            items,
-            hiddenCount,
-            channelStatus,
-            peopleSections,
-            showChannelWorkspace,
-            agentAvatarUrls: sources.agentAvatarUrls,
-            humanAvatarUrls: sources.humanAvatarUrls,
-          })
-        : undefined,
-      activity: nativeActivity,
-    },
+    draftKey,
+    conversationId,
+    placeholder,
+    enabled: !disabled,
+    canSend: !sendDisabled,
+    offersMentions,
+    offersChannels,
+    accessoryHeight,
+    picker: pickerShown ? pickerView : null,
+    agentAvatarUrls: sources.agentAvatarUrls,
+    humanAvatarUrls: sources.humanAvatarUrls,
+    activityAgentIds,
     draft,
     caret,
     onChange: (text, nextCaret, nextComposing) => {
@@ -187,18 +166,8 @@ export function Composer({
       }
       composer.submit();
     },
-    onPick: (id) => {
-      const item = items.find((candidate) => rowKey(candidate) === id);
-      if (item) {
-        insertPick(item);
-      }
-    },
-    onActivity: openAgentActivity,
-    onAdd: (id) => {
-      if (id === "mention" || id === "channel") {
-        insertTrigger(id === "mention" ? "@" : "#");
-      }
-    },
+    onPick: insertPick,
+    onTrigger: insertTrigger,
     onFiles: (files) => composer.addFiles(files),
   });
 
@@ -428,14 +397,10 @@ export function Composer({
   const picker =
     pickerShown && !native ? (
       <PickerMenu
-        items={items}
-        hiddenCount={hiddenCount}
-        channelStatus={channelStatus}
+        view={pickerView}
         active={active}
         onPick={insertPick}
         onHover={setActive}
-        peopleSections={peopleSections}
-        showChannelWorkspace={showChannelWorkspace}
         agentAvatarUrls={sources.agentAvatarUrls}
         humanAvatarUrls={sources.humanAvatarUrls}
       />

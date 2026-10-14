@@ -9,16 +9,19 @@ import {
   WaitingIcon,
 } from "@/icons";
 import type { AgentDto, AgentRunState } from "@silverhand/shared";
-import type { ComposerActivity } from "@silverhand/client";
-import { BotIcon } from "@/icons";
-import { AgentAvatar, agentAvatarImage } from "@/components/agent-avatar";
-import { iconMarkup } from "@/components/layout/native-page-bar";
+import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentRunStates } from "@/features/channels/hooks";
 import { useAgents } from "@/features/agents/hooks/hooks";
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
-import { useNav } from "@/router";
-import { focusAgentSideSection } from "@/features/agents/components/agent-view";
+import { useOpenAgentActivity } from "../hooks/use-open-agent-activity";
+import {
+  activityAgentName,
+  activityLineOf,
+  activitySnippetKindLabel,
+  activityStatusLabel,
+  selectActiveRunStates,
+} from "../model/composer-activity";
 
 // ── Time helpers ─────────────────────────────────────────────────────────
 
@@ -38,179 +41,6 @@ function useLiveMs(epochMs: number): number {
     return () => clearInterval(id);
   }, [epochMs]);
   return delta;
-}
-
-// ── Status model ─────────────────────────────────────────────────────────
-
-const STATUS_LABEL: Record<string, string> = {
-  starting: "Starting…",
-  thinking: "Thinking…",
-  tool_running: "Thinking…",
-  waiting: "Waiting…",
-};
-
-const ACTIVITY_SNIPPET_KIND_LABEL: Record<
-  NonNullable<AgentRunState["activitySnippetKind"]>,
-  string
-> = {
-  thinking: "Thinking",
-  text: "Writing",
-  api_response: "Notice",
-};
-
-export function activitySnippetKindLabel(
-  kind: AgentRunState["activitySnippetKind"],
-): string | null {
-  return kind ? ACTIVITY_SNIPPET_KIND_LABEL[kind] : null;
-}
-
-/**
- * Main-status priority for the collapsed line's subject and for sorting
- * the expanded list. Lower rank = more "foreground". A running tool is
- * the most concrete signal; compaction is a notable transient; thinking
- * / starting are the quiet states. Same rank ties break on most-recent
- * activity (see `pickOrder`).
- */
-function statusRank(state: AgentRunState): number {
-  if (state.status === "tool_running") return 0;
-  if (state.compacting) return 1;
-  if (state.status === "thinking") return 2;
-  if (state.status === "waiting") return 3;
-  if (state.status === "starting") return 4;
-  return 5;
-}
-
-function pickOrder(a: AgentRunState, b: AgentRunState): number {
-  const r = statusRank(a) - statusRank(b);
-  if (r !== 0) return r;
-  return b.lastActivityAt - a.lastActivityAt; // newer first
-}
-
-/**
- * Active run-states for the bubble: non-terminal (drop `idle` / `failed`),
- * optionally restricted to an agent allow-list (the thread follower filter,
- * item 4), then sorted by main-status priority and recency. Pure — exported
- * for tests.
- *
- * `restrictToAgentIds` semantics: `null`/`undefined` = no restriction; a
- * list (even empty) restricts to exactly those agent ids, so an empty list
- * legitimately yields nothing (a thread with no follower agents).
- */
-export function selectActiveRunStates(
-  runStates: readonly AgentRunState[],
-  restrictToAgentIds?: readonly string[] | null,
-): AgentRunState[] {
-  const restrictSet = restrictToAgentIds ? new Set(restrictToAgentIds) : null;
-  return runStates
-    .filter((s) => s.status !== "idle" && s.status !== "failed")
-    .filter((s) => !restrictSet || restrictSet.has(s.agentId))
-    .sort(pickOrder);
-}
-
-interface ToolSummary {
-  /** The tool to surface on the collapsed line — the live current tool
-   *  (`state.detail`, set on each tool_call) when running, else the
-   *  highest-count tool as a fallback. */
-  name: string;
-  /** That ONE tool's own count — NOT the sum across tools. Summing under
-   *  a single tool's name reads as "shell ×everything", which is wrong. */
-  count: number;
-}
-
-/**
- * Pick the single tool to show on the collapsed line and its own count.
- * Prefers the live current tool (`detail`); falls back to the dominant
- * tool by count. Never sums distinct tools under one name — the full
- * per-tool breakdown lives in the expanded rows.
- */
-function currentToolSummary(state: AgentRunState): ToolSummary | null {
-  if (state.status !== "tool_running") return null;
-  const counts = state.toolCallCounts ?? {};
-  const entries = Object.entries(counts).filter(([, count]) => count > 0);
-  let name = state.detail?.trim() || null;
-  if (!name || !(name in counts)) {
-    // Fall back to the dominant tool when `detail` is absent / not yet
-    // reflected in the counts map.
-    if (entries.length === 0) return name ? { name, count: 0 } : null;
-    let max = entries[0]![1];
-    name = entries[0]![0];
-    for (const [n, c] of entries) {
-      if (c > max) {
-        max = c;
-        name = n;
-      }
-    }
-  }
-  return { name, count: counts[name] ?? 0 };
-}
-
-function displayNameOf(agent: AgentDto | undefined): string {
-  return agent ? `@${agent.display_name?.trim() || agent.name}` : "@agent";
-}
-
-// ── Native line ──────────────────────────────────────────────────────────
-
-const NATIVE_FACES = 3;
-
-/**
- * The compact composer's activity, for native to draw: the faces of the
- * agents running, the first one's name and state, and when it started. A tap
- * opens `openAgentActivity(activity.id)`.
- */
-export function useNativeComposerActivity(
-  conversationId: string,
-  restrictToAgentIds: readonly string[] | null | undefined,
-  enabled: boolean,
-): ComposerActivity | undefined {
-  const { data: runStates = [] } = useAgentRunStates(enabled ? conversationId : null);
-  const { data: directoryAgents = [] } = useAgents();
-  const active = useMemo(
-    () => selectActiveRunStates(runStates, restrictToAgentIds),
-    [runStates, restrictToAgentIds],
-  );
-  const shownAgents = useMemo(() => {
-    const ids = active.slice(0, NATIVE_FACES).map((state) => state.agentId);
-    return ids.flatMap((id) => directoryAgents.find((agent) => agent.id === id) ?? []);
-  }, [directoryAgents, active]);
-  const avatarUrls = useAgentAvatarObjectUrls(shownAgents);
-
-  const subject = active[0];
-  if (!enabled || !subject) {
-    return undefined;
-  }
-
-  const agent = shownAgents.find((candidate) => candidate.id === subject.agentId);
-  const name = displayNameOf(agent);
-  const others = active.length - 1;
-  const title = others > 0 ? `${name} +${others}` : name;
-  const tool = currentToolSummary(subject);
-  const detail = tool
-    ? tool.name
-    : subject.compacting
-      ? "Compacting…"
-      : STATUS_LABEL[subject.status] || subject.status;
-  const faces = active.slice(0, NATIVE_FACES).map((state) => {
-    const face = shownAgents.find((candidate) => candidate.id === state.agentId);
-    const image = face ? agentAvatarImage(face.runtime, avatarUrls.get(face.id) ?? null) : null;
-    return image ? { image } : { glyph: iconMarkup(BotIcon), ground: true };
-  });
-  return {
-    id: subject.agentId,
-    faces,
-    title,
-    detail,
-    since: subject.startedAt,
-    label: `${title}, ${detail}`,
-  };
-}
-
-/** Opens an agent's activity, as the line's avatar and name do. */
-export function useOpenAgentActivity(): (agentId: string) => void {
-  const { openAgentPanel } = useNav();
-  return (agentId) => {
-    focusAgentSideSection(agentId, "activity");
-    openAgentPanel(agentId);
-  };
 }
 
 // ── Component ────────────────────────────────────────────────────────────
@@ -248,12 +78,7 @@ export function ComposerActivityHeader({
   const { data: runStates = [] } = useAgentRunStates(conversationId);
   const { data: directoryAgents = [] } = useAgents();
   const [expanded, setExpanded] = useState(false);
-  const { openAgentPanel } = useNav();
-
-  const openAgentActivity = (agentId: string): void => {
-    focusAgentSideSection(agentId, "activity");
-    openAgentPanel(agentId);
-  };
+  const openAgentActivity = useOpenAgentActivity();
 
   const agentsById = useMemo(() => {
     const m = new Map<string, AgentDto>();
@@ -286,34 +111,21 @@ export function ComposerActivityHeader({
     if (active.length === 0 && expanded) setExpanded(false);
   }, [active.length, expanded]);
 
-  if (!subject) return null;
+  const line = activityLineOf(active, (id) => agentsById.get(id));
+  if (!subject || !line) return null;
 
   const subjectAgent = agentsById.get(subject.agentId);
-  const subjectName = displayNameOf(subjectAgent);
-  // Main-status priority: a running tool wins over compaction for the
-  // badge slot. Show the live tool with ITS OWN count, never a grand
-  // total summed across distinct tools.
-  const tool = currentToolSummary(subject);
-  const showCompaction = subject.compacting && !tool;
-  const badge = tool
-    ? tool.count > 1
-      ? `${tool.name} ×${tool.count}`
-      : tool.name
-    : showCompaction
-      ? "Compacting"
-      : null;
-  const snippetKindLabel =
-    subject.activitySnippet && !badge
-      ? activitySnippetKindLabel(subject.activitySnippetKind)
-      : null;
+  const subjectName = line.name;
+  const { badge, snippetKindLabel } = line;
+  const showCompaction = line.compacting;
   const SnippetKindIcon =
     subject.activitySnippetKind === "thinking"
       ? ThinkingIcon
       : subject.activitySnippetKind === "api_response"
         ? WaitingIcon
         : null;
-  const snippet = subject.activitySnippet || STATUS_LABEL[subject.status] || subject.status;
-  const extra = active.length - 1;
+  const snippet = line.progress;
+  const extra = line.others;
   const StatusIcon = showCompaction ? LayersIcon : SpinnerIcon;
 
   return (
@@ -468,8 +280,8 @@ function ActivityDetailRow({
   const elapsedMs = useLiveMs(state.startedAt);
   const compactionElapsedMs = useLiveMs(state.compactingSince ?? state.startedAt);
   const runtime = agent?.runtime ?? "claude";
-  const name = displayNameOf(agent);
-  const progressText = state.activitySnippet || STATUS_LABEL[state.status] || state.status;
+  const name = activityAgentName(agent);
+  const progressText = state.activitySnippet || activityStatusLabel(state);
   const snippetKindLabel = state.activitySnippet
     ? activitySnippetKindLabel(state.activitySnippetKind)
     : null;

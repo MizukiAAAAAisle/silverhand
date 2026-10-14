@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { AgentRunState } from "@silverhand/shared";
-import { activitySnippetKindLabel, selectActiveRunStates } from "./composer-activity-header";
+import {
+  activityLineOf,
+  activitySnippetKindLabel,
+  selectActiveRunStates,
+} from "./composer-activity";
 
 function runState(overrides: Partial<AgentRunState> = {}): AgentRunState {
   return {
@@ -84,5 +88,48 @@ describe("activitySnippetKindLabel", () => {
     expect(activitySnippetKindLabel("thinking")).toBe("Thinking");
     expect(activitySnippetKindLabel("text")).toBe("Writing");
     expect(activitySnippetKindLabel(undefined)).toBeNull();
+  });
+});
+
+describe("activityLineOf", () => {
+  const agents = new Map([["a-1", { id: "a-1", name: "toby", display_name: "Toby" }]]);
+  const line = (states: AgentRunState[]) =>
+    activityLineOf(selectActiveRunStates(states), (id) => agents.get(id));
+
+  it("is null while nothing runs", () => {
+    expect(line([runState({ status: "idle" })])).toBeNull();
+  });
+
+  it("leads with the subject and counts the others", () => {
+    const result = line([
+      runState({ agentId: "a-1", status: "tool_running", detail: "shell" }),
+      runState({ agentId: "a-2" }),
+    ]);
+    expect([result?.name, result?.others, result?.badge]).toEqual(["@Toby", 1, "shell"]);
+  });
+
+  it("shows the live tool with its own count, not a sum", () => {
+    const result = line([
+      runState({ status: "tool_running", detail: "read", toolCallCounts: { read: 3, shell: 9 } }),
+    ]);
+    expect(result?.badge).toBe("read ×3");
+  });
+
+  it("gives the badge to compaction only without a running tool", () => {
+    expect(line([runState({ compacting: true })])?.badge).toBe("Compacting");
+    expect(
+      line([runState({ status: "tool_running", detail: "shell", compacting: true })])?.badge,
+    ).toBe("shell");
+  });
+
+  it("keeps the status apart from the streamed snippet", () => {
+    const result = line([
+      runState({ activitySnippet: "Reading the file", activitySnippetKind: "thinking" }),
+    ]);
+    expect([result?.status, result?.progress, result?.snippetKindLabel]).toEqual([
+      "Thinking…",
+      "Reading the file",
+      "Thinking",
+    ]);
   });
 });
