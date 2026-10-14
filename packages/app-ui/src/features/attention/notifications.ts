@@ -14,6 +14,7 @@ import { conversationRefQueryOptions } from "@/features/conversations/conversati
 import { recordChannelWorkspace } from "@/features/channels/channel-workspace-index";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import { showMentionToast } from "./mention-toast";
+import { payloadString, systemNoticeOf } from "./system-notice";
 
 const unreadKey = ["notifications", "unread"] as const;
 const listKey = ["notifications", "list"] as const;
@@ -304,8 +305,7 @@ export function useNotificationToasts(
       // System notification — main process suppresses ordinary alerts when an
       // Electron window is focused; direct human mentions opt out via `force`.
       void getPlatform().notifications?.showSystemNotification({
-        title: "Silverhand",
-        body: buildSystemNotificationBody(n),
+        ...systemNoticeOf(n, buildToastLabel(n)),
         force: isViewerMention,
         notificationId: isClickableKind(n.kind) ? n.id : undefined,
       });
@@ -490,20 +490,4 @@ function buildToastLabel(n: NotificationDto): string {
     return conversationTitle ? `You were mentioned in #${conversationTitle}` : "You were mentioned";
   }
   return "New notification";
-}
-
-function payloadString(n: NotificationDto, key: string): string | null {
-  const value = n.payload?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function buildSystemNotificationBody(n: NotificationDto): string {
-  if (n.kind === "mention_self") {
-    const triggerName = payloadString(n, "trigger_name") ?? "Someone";
-    const conversationTitle = payloadString(n, "conversation_title");
-    return conversationTitle
-      ? `${triggerName} mentioned you in #${conversationTitle}.`
-      : `${triggerName} mentioned you.`;
-  }
-  return buildToastLabel(n);
 }

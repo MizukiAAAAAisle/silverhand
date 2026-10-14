@@ -194,7 +194,9 @@ const api: DesktopBridge = {
   },
   showSystemNotification: (opts: {
     title: string;
-    body: string;
+    subtitle?: string;
+    body?: string;
+    groupId?: string;
     force?: boolean;
     /** Opaque id echoed back via `onNotificationClicked` so the renderer
      *  can route the click to the right navigation target. Fire-and-
