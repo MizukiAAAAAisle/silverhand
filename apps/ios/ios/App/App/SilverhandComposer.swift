@@ -50,6 +50,10 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private static let cardRadius: CGFloat = 26
   private static let grabberZone: CGFloat = 28
   private static let snapDistance: CGFloat = 24
+  /// How far into the home indicator's inset the composer sits with the
+  /// keyboard down, level with the system's floating bars (the vertical tab
+  /// bar on iPhone Duo ends 24pt above the bottom, inside a 34pt inset).
+  private static let homeOverlap: CGFloat = 10
 
   private let backdrop: UIVisualEffectView
   private let picker = ComposerPickerView()
@@ -143,15 +147,23 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     host.addSubview(self)
     translatesAutoresizingMaskIntoConstraints = false
     let guide = host.keyboardLayoutGuide
+    // Hidden, the guide sits at the bottom edge rather than the safe area, so
+    // the composer's own cap below decides its resting place.
+    if #available(iOS 17.0, *) { guide.usesBottomSafeArea = false }
     // Leaving a superview drops only the constraints to it; the height is
     // the composer's own and would otherwise pile up, one per install.
     heightConstraint?.isActive = false
     let height = heightAnchor.constraint(equalToConstant: collapsedHeight)
+    let pull = bottomAnchor.constraint(equalTo: guide.topAnchor, constant: -Self.padding)
+    pull.priority = .defaultHigh
     heightConstraint = height
     NSLayoutConstraint.activate([
       leadingAnchor.constraint(equalTo: host.safeAreaLayoutGuide.leadingAnchor, constant: 12),
       trailingAnchor.constraint(equalTo: host.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-      bottomAnchor.constraint(equalTo: guide.topAnchor, constant: -Self.padding),
+      bottomAnchor.constraint(lessThanOrEqualTo: guide.topAnchor, constant: -Self.padding),
+      bottomAnchor.constraint(
+        lessThanOrEqualTo: host.safeAreaLayoutGuide.bottomAnchor, constant: Self.homeOverlap),
+      pull,
       height,
     ])
 
@@ -398,7 +410,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   func publishMetrics() {
     guard let host = superview, state != nil else { return }
     let bottom = host.bounds.maxY - frame.maxY
-    let rest = host.safeAreaInsets.bottom + Self.padding + collapsedHeight
+    let rest = max(Self.padding, host.safeAreaInsets.bottom - Self.homeOverlap) + collapsedHeight
     // The activity line stays while agents run, so the page clears it as it
     // clears the composer; the picker is passing and covers the page instead.
     let lasting = activityShown && state?.picker == nil ? listSpace : 0
