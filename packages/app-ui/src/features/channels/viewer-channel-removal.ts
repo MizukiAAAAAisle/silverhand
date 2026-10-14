@@ -322,6 +322,11 @@ export interface ChannelKeyClassification {
  * query-definition chokepoint; the renderer has no such chokepoint today.
  */
 export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyClassification> = {
+  "account-deletion": {
+    verdicts: ["exempt"],
+    reason:
+      "the viewer's own account-deletion preflight (blocking workspaces and agents); no conversation axis",
+  },
   activity: {
     verdicts: ["cleaned"],
     reason: "global list; every item carries conversation_id → registry `activity`",
