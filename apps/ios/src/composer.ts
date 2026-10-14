@@ -1,16 +1,35 @@
 import type { ClientPlatform } from "@silverhand/client";
-import { rasterizeMarkup } from "./glyph";
+import type { ComposerPicker } from "@silverhand/client";
+import { rasterizeImage, rasterizeMarkup } from "./glyph";
 import type { NativeBridge } from "./bridge";
 
 const pngs = new Map<string, Promise<string>>();
 
-function png(markup: string): Promise<string> {
-  let cached = pngs.get(markup);
+function png(source: string, picture = false): Promise<string> {
+  const key = (picture ? "image:" : "glyph:") + source;
+  let cached = pngs.get(key);
   if (!cached) {
-    cached = rasterizeMarkup(markup);
-    pngs.set(markup, cached);
+    // Pictures are object URLs that live as long as the page does.
+    if (pngs.size > 256) {
+      pngs.clear();
+    }
+    cached = picture ? rasterizeImage(source) : rasterizeMarkup(source);
+    pngs.set(key, cached);
   }
   return cached;
+}
+
+async function withPngs(picker: ComposerPicker): Promise<ComposerPicker> {
+  const rows = await Promise.all(
+    picker.rows.map(async (row) => ({
+      ...row,
+      icon:
+        "image" in row.icon
+          ? { image: await png(row.icon.image, true) }
+          : { ...row.icon, glyph: await png(row.icon.glyph) },
+    })),
+  );
+  return { ...picker, rows };
 }
 
 /** The compact composer, drawn natively over the page. */
@@ -27,10 +46,11 @@ export function createIOSComposer(bridge: NativeBridge): NonNullable<ClientPlatf
   return {
     sync: (state) =>
       run(async () => {
-        const add = await Promise.all(
-          state.add.map(async (item) => ({ ...item, icon: await png(item.icon) })),
-        );
-        await bridge.composerSync({ state: { ...state, add } });
+        const [add, picker] = await Promise.all([
+          Promise.all(state.add.map(async (item) => ({ ...item, icon: await png(item.icon) }))),
+          state.picker ? withPngs(state.picker) : undefined,
+        ]);
+        await bridge.composerSync({ state: { ...state, add, picker } });
       }),
     remove: (key) => run(() => bridge.composerRemove({ key })),
     setText: (input) => run(() => bridge.composerSetText(input)),

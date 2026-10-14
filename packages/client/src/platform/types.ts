@@ -267,15 +267,40 @@ export interface ComposerState {
   sendLabel: string;
   addLabel: string;
   add: ComposerMenuItem[];
-  /** The height of the controls the shared UI floats above the composer (the
-   * attachments, the `@` and `#` picker); a tap on them keeps the keyboard. */
+  /** The height of the controls the shared UI floats above the composer and
+   * its picker (the activity line, the attachments); a tap on them keeps the
+   * keyboard. */
   accessoryHeight: number;
+  /** The `@` / `#` candidates native lists above the composer; a tap comes
+   * back as `pick`. Absent while no trigger is open. */
+  picker?: ComposerPicker;
+}
+/** A candidate's face: a picture drawn as it is, or a glyph (SVG markup on a
+ * 24px grid) native tints, on a square ground when `ground`. */
+export type ComposerPickerIcon = { image: string } | { glyph: string; ground?: boolean };
+export interface ComposerPickerRow {
+  id: string;
+  title: string;
+  /** A handle, set in monospace. */
+  handle?: string;
+  detail?: string;
+  icon: ComposerPickerIcon;
+  /** A row outside the conversation, drawn quieter. */
+  dimmed?: boolean;
+  /** Starts a section with this header. */
+  section?: string;
+}
+export interface ComposerPicker {
+  rows: ComposerPickerRow[];
+  /** A note under the rows (more matches, loading). */
+  footer?: string;
 }
 export type ComposerEvent =
   | { kind: "change"; key: string; text: string; caret: number; composing: boolean }
   /** Carries the text sent, which a `change` may not have delivered yet. */
   | { kind: "send"; key: string; text: string; caret: number }
   | { kind: "add"; key: string; id: string }
+  | { kind: "pick"; key: string; id: string }
   | { kind: "files"; key: string; files: { name: string; type: string; base64: string }[] };
 export interface ComposerCapability {
   /** Shows the composer for draft `state.key`. */

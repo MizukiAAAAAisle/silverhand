@@ -15,6 +15,7 @@ struct ComposerState: Equatable {
   /// The page's controls floating above the composer.
   let accessoryHeight: CGFloat
   let add: [ComposerMenuItem]
+  let picker: ComposerPicker?
 }
 
 /// The compact composer, floating over the page above the keyboard. The page
@@ -32,7 +33,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   var onEvent: (([String: Any]) -> Void)?
   /// Distances up from the bottom of the host view to the composer's top: at
   /// rest (`rest`), at the height its text gives it (`reserve`), and as drawn
-  /// (`overlay`).
+  /// (`overlay`); and the height of the picker over it (`picker`).
   var onMetrics: ((_ metrics: [String: CGFloat]) -> Void)?
   /// Presents the system pickers.
   weak var presenter: UIViewController?
@@ -49,6 +50,8 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private static let snapDistance: CGFloat = 24
 
   private let backdrop: UIVisualEffectView
+  private let picker = ComposerPickerView()
+  private var pickerHeight: NSLayoutConstraint?
   private let textView = ComposerTextView()
   private let placeholder = UILabel()
   private let grabber = UIView()
@@ -92,9 +95,13 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     grabber.alpha = 0
     backdrop.contentView.addSubview(grabber)
 
-    var add = UIButton.Configuration.plain()
+    // The same round ground the send button rests on while empty.
+    var add = UIButton.Configuration.filled()
+    add.cornerStyle = .capsule
     add.image = UIImage(
-      systemName: "plus", withConfiguration: UIImage.SymbolConfiguration(weight: .medium))
+      systemName: "plus",
+      withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .medium))
+    add.baseBackgroundColor = .tertiarySystemFill
     add.baseForegroundColor = .label
     addButton.configuration = add
     addButton.showsMenuAsPrimaryAction = true
@@ -107,6 +114,12 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     let pan = UIPanGestureRecognizer(target: self, action: #selector(drag(_:)))
     pan.delegate = self
     addGestureRecognizer(pan)
+    picker.alpha = 0
+    picker.onPick = { [weak self] id in
+      guard let key = self?.state?.key else { return }
+      self?.onEvent?(["kind": "pick", "key": key, "id": id])
+    }
+
     // A tap on the capsule anywhere starts editing, as on its text.
     let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
     tap.cancelsTouchesInView = false
@@ -132,6 +145,18 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
       bottomAnchor.constraint(equalTo: guide.topAnchor, constant: -Self.padding),
       height,
     ])
+
+    host.addSubview(picker)
+    picker.translatesAutoresizingMaskIntoConstraints = false
+    pickerHeight?.isActive = false
+    let listHeight = picker.heightAnchor.constraint(equalToConstant: 0)
+    pickerHeight = listHeight
+    NSLayoutConstraint.activate([
+      picker.leadingAnchor.constraint(equalTo: leadingAnchor),
+      picker.trailingAnchor.constraint(equalTo: trailingAnchor),
+      picker.bottomAnchor.constraint(equalTo: topAnchor, constant: -Self.padding),
+      listHeight,
+    ])
   }
 
   func apply(_ next: ComposerState) {
@@ -153,7 +178,26 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     })
     sendButton.accessibilityLabel = next.sendLabel
     styleSend(enabled: next.enabled && next.canSend)
+    showPicker(next.picker)
     refresh(animated: false)
+  }
+
+  private func showPicker(_ next: ComposerPicker?) {
+    let opening = picker.picker == nil && next != nil
+    if let next { picker.apply(next) }
+    superview?.layoutIfNeeded()
+    let height = next == nil ? 0 : picker.preferredHeight
+    if pickerHeight?.constant != height || opening {
+      pickerHeight?.constant = height
+      if opening { superview?.layoutIfNeeded() }
+    }
+    let shown = next != nil
+    UIView.animate(withDuration: 0.18, delay: 0, options: [.beginFromCurrentState]) {
+      self.picker.alpha = shown ? 1 : 0
+    } completion: { _ in
+      if !shown, self.state?.picker == nil { self.picker.apply(nil) }
+    }
+    publishMetrics()
   }
 
   /// Replaces the text the page holds for draft `key`.
@@ -173,7 +217,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   /// the controls the page floats above the composer.
   func endsEditing(at point: CGPoint) -> Bool {
     guard textView.isFirstResponder, let state else { return false }
-    return point.y < frame.minY - state.accessoryHeight - Self.padding * 2
+    return point.y < frame.minY - listSpace - state.accessoryHeight - Self.padding * 2
   }
 
   func endEditing() { textView.resignFirstResponder() }
@@ -196,6 +240,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   func setBackProgress(_ progress: CGFloat?) {
     let share = min(1, max(0, progress ?? 0))
     transform = CGAffineTransform(translationX: (superview?.bounds.width ?? 0) * share, y: 0)
+    picker.transform = transform
   }
 
   /// A web modal covers the page; native chrome cannot sit under its
@@ -203,6 +248,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   func setBlocked(_ blocked: Bool) {
     if blocked, textView.isFirstResponder { textView.resignFirstResponder() }
     isHidden = blocked
+    picker.isHidden = blocked
   }
 
   /// Takes the composer off screen and forgets its draft.
@@ -213,9 +259,14 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     draggedHeight = nil
     editing = false
     transform = .identity
+    picker.transform = .identity
+    picker.alpha = 0
+    picker.apply(nil)
+    pickerHeight?.constant = 0
+    picker.removeFromSuperview()
     removeFromSuperview()
     published = nil
-    onMetrics?(["rest": 0, "reserve": 0, "overlay": 0])
+    onMetrics?(["rest": 0, "reserve": 0, "overlay": 0, "picker": 0])
   }
 
   // MARK: Layout
@@ -308,10 +359,15 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     guard let host = superview, state != nil else { return }
     let bottom = host.bounds.maxY - frame.maxY
     let rest = host.safeAreaInsets.bottom + Self.padding + collapsedHeight
-    let next = [rest, bottom + heights().reserve, bottom + frame.height]
+    let next = [rest, bottom + heights().reserve, bottom + frame.height, listSpace]
     guard published != next else { return }
     published = next
-    onMetrics?(["rest": next[0], "reserve": next[1], "overlay": next[2]])
+    onMetrics?(["rest": next[0], "reserve": next[1], "overlay": next[2], "picker": next[3]])
+  }
+
+  /// The room the picker takes over the composer.
+  private var listSpace: CGFloat {
+    state?.picker == nil ? 0 : (pickerHeight?.constant ?? 0) + Self.padding
   }
 
   // MARK: Editing

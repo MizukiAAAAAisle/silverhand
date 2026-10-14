@@ -26,7 +26,7 @@ import {
 } from "../model/composer-picker";
 import { MAX_ATTACHMENTS, shouldInterceptOversizedPaste } from "../model/oversize-paste";
 import { ComposerActivityHeader } from "./composer-activity-header";
-import { PickerMenu } from "./composer-picker-menu";
+import { nativePickerOf, PickerMenu, rowKey } from "./composer-picker-menu";
 import { Lightbox } from "./lightbox";
 import {
   AttachmentChip,
@@ -118,6 +118,7 @@ export function Composer({
   // "no channels"; `@` opens only on rows.
   const menuOpen = !!trigger && (items.length > 0 || channelStatus !== "complete");
   const dismissed = trigger != null && dismissedPos === trigger.pos;
+  const pickerShown = menuOpen && !dismissed;
   const sendDisabled =
     disabled ||
     composer.sending ||
@@ -154,6 +155,17 @@ export function Composer({
           : []),
       ],
       accessoryHeight,
+      picker: pickerShown
+        ? nativePickerOf({
+            items,
+            hiddenCount,
+            channelStatus,
+            peopleSections,
+            showChannelWorkspace,
+            agentAvatarUrls: sources.agentAvatarUrls,
+            humanAvatarUrls: sources.humanAvatarUrls,
+          })
+        : undefined,
     },
     draft,
     caret,
@@ -167,6 +179,12 @@ export function Composer({
         composer.updateDraft(text, nextCaret);
       }
       composer.submit();
+    },
+    onPick: (id) => {
+      const item = items.find((candidate) => rowKey(candidate) === id);
+      if (item) {
+        insertPick(item);
+      }
     },
     onAdd: (id) => {
       if (id === "mention" || id === "channel") {
@@ -400,7 +418,7 @@ export function Composer({
     </AnimatePresence>
   );
   const picker =
-    menuOpen && !dismissed ? (
+    pickerShown && !native ? (
       <PickerMenu
         items={items}
         hiddenCount={hiddenCount}
@@ -439,7 +457,6 @@ export function Composer({
               restrictToAgentIds={activityAgentIds}
             />
             {tray}
-            {picker}
           </div>
         )}
         {lightbox}

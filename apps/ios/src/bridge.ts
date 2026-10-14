@@ -38,7 +38,7 @@ export interface NativeBridge {
    * PNG. A null state removes it. */
   pageBar(input: { state: PageBarState | null }): Promise<void>;
   pageBarBackProgress(input: { progress: number | null }): Promise<void>;
-  /** The compact composer; menu icons are base64 PNG. */
+  /** The compact composer; menu and picker icons are base64 PNG. */
   composerSync(input: { state: ComposerState }): Promise<void>;
   /** Removes the composer if it shows draft `key`; without a key, whatever it shows. */
   composerRemove(input: { key?: string }): Promise<void>;
@@ -101,7 +101,7 @@ export interface NativeBridge {
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "composerMetrics",
-    handler: (metrics: { rest: number; reserve: number; overlay: number }) => void,
+    handler: (metrics: { rest: number; reserve: number; overlay: number; picker: number }) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "fold",

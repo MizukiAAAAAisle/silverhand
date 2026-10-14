@@ -266,6 +266,22 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         return ComposerMenuItem(
           id: id, label: item["label"] as? String ?? "", icon: item["icon"] as? String ?? "",
           pick: item["pick"] as? String)
+      },
+      picker: (state["picker"] as? JSObject).map { picker in
+        ComposerPicker(
+          rows: (picker["rows"] as? JSArray ?? []).compactMap { value in
+            guard let row = value as? JSObject, let id = row["id"] as? String,
+              let icon = row["icon"] as? JSObject
+            else { return nil }
+            let face: ComposerPickerRow.Icon =
+              (icon["image"] as? String).map { .image($0) }
+              ?? .glyph(icon["glyph"] as? String ?? "", ground: icon["ground"] as? Bool ?? false)
+            return ComposerPickerRow(
+              id: id, title: row["title"] as? String ?? "", handle: row["handle"] as? String,
+              detail: row["detail"] as? String, section: row["section"] as? String, icon: face,
+              dimmed: row["dimmed"] as? Bool ?? false)
+          },
+          footer: picker["footer"] as? String)
       })
     Task { @MainActor [self] in
       if let host = navigationHost {

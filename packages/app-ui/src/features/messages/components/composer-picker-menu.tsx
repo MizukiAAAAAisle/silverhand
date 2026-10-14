@@ -1,7 +1,9 @@
 import { InlineLoading } from "@/components/layout/inline-loading";
 import { Fragment, useEffect, useRef } from "react";
-import { HashIcon } from "@/icons";
-import { AgentAvatar } from "@/components/agent-avatar";
+import type { ComposerPicker, ComposerPickerRow } from "@silverhand/client";
+import { BotIcon, HashIcon, UserIcon } from "@/icons";
+import { AgentAvatar, agentAvatarImage } from "@/components/agent-avatar";
+import { iconMarkup } from "@/components/layout/native-page-bar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { type PickerItem, type ChannelSourceStatus } from "../model/composer-picker";
@@ -54,11 +56,7 @@ export function PickerMenu({
   // candidate for, or a DM whose counterpart is a human / not owned), the whole list
   // is "other" and a lone "Other channels" header labels nothing — render it flat
   // instead (#task:2147).
-  const hasInSection =
-    peopleSections && items.some((item) => item.kind !== "channel" && item.inConversation);
-  const headerBoundaryIndex = hasInSection
-    ? items.findIndex((item) => item.kind !== "channel" && !item.inConversation)
-    : -1;
+  const { hasInSection, headerBoundaryIndex } = sectionsOf(items, peopleSections);
   return (
     <div
       className="absolute bottom-full left-0 mb-1.5 w-64 overflow-hidden rounded-(--select-content-radius) bg-bg-floating shadow-popover"
@@ -123,6 +121,90 @@ export function PickerMenu({
       ) : null}
     </div>
   );
+}
+
+function sectionsOf(
+  items: PickerItem[],
+  peopleSections: boolean,
+): { hasInSection: boolean; headerBoundaryIndex: number } {
+  const hasInSection =
+    peopleSections && items.some((item) => item.kind !== "channel" && item.inConversation);
+  const headerBoundaryIndex = hasInSection
+    ? items.findIndex((item) => item.kind !== "channel" && !item.inConversation)
+    : -1;
+  return { hasInSection, headerBoundaryIndex };
+}
+
+/** The menu's rows for the native composer (iOS), which draws them itself. */
+export function nativePickerOf({
+  items,
+  hiddenCount,
+  channelStatus,
+  peopleSections,
+  showChannelWorkspace,
+  agentAvatarUrls,
+  humanAvatarUrls,
+}: {
+  items: PickerItem[];
+  hiddenCount: number;
+  channelStatus: ChannelSourceStatus;
+  peopleSections: boolean;
+  showChannelWorkspace: boolean;
+  agentAvatarUrls: Map<string, string | null>;
+  humanAvatarUrls: Map<string, string | null>;
+}): ComposerPicker {
+  const { hasInSection, headerBoundaryIndex } = sectionsOf(items, peopleSections);
+  const rows = items.map((item, i): ComposerPickerRow => {
+    const section =
+      i === 0 && hasInSection
+        ? "In this channel"
+        : i === headerBoundaryIndex
+          ? "Other channels"
+          : undefined;
+    if (item.kind === "agent") {
+      const image = agentAvatarImage(
+        item.agent.runtime,
+        agentAvatarUrls.get(item.agent.id) ?? null,
+      );
+      return {
+        id: rowKey(item),
+        title: item.agent.display_name?.trim() || item.agent.name,
+        handle: `@${item.agent.name}`,
+        detail: item.agent.runtime,
+        icon: image ? { image } : { glyph: iconMarkup(BotIcon), ground: true },
+        dimmed: !item.inConversation,
+        section,
+      };
+    }
+    if (item.kind === "human") {
+      const image = humanAvatarUrls.get(item.human.id) ?? null;
+      return {
+        id: rowKey(item),
+        title: item.human.display_name?.trim() || item.human.name,
+        handle: `@${item.human.name}`,
+        detail: "human",
+        icon: image ? { image } : { glyph: iconMarkup(UserIcon), ground: true },
+        dimmed: !item.inConversation,
+        section,
+      };
+    }
+    return {
+      id: rowKey(item),
+      title: item.channel.title,
+      detail: showChannelWorkspace ? (item.workspaceName ?? undefined) : undefined,
+      icon: { glyph: iconMarkup(HashIcon) },
+      section,
+    };
+  });
+  const footer =
+    channelStatus === "loading"
+      ? "Loading channels"
+      : channelStatus === "partial_error"
+        ? "Some channels unavailable"
+        : hiddenCount > 0
+          ? `+${hiddenCount} more`
+          : undefined;
+  return { rows, footer };
 }
 
 export function SectionHeader({ label }: { label: string }): JSX.Element {
