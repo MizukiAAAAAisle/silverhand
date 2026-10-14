@@ -13,6 +13,7 @@ import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from "@/lib/ws-
 import { conversationRefQueryOptions } from "@/features/conversations/conversation-ref-query";
 import { recordChannelWorkspace } from "@/features/channels/channel-workspace-index";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
+import { showMentionToast } from "./mention-toast";
 
 const unreadKey = ["notifications", "unread"] as const;
 const listKey = ["notifications", "list"] as const;
@@ -246,28 +247,34 @@ export function useNotificationToasts(
         continue;
       }
 
-      const label = buildToastLabel(n);
-      // Sonner's `ExternalToast` doesn't expose a whole-surface
-      // `onClick`; the idiomatic pattern is the `action` button. We
-      // surface "View" so a click on the toast's affordance jumps to
-      // the source message. The system-notification path (main process)
-      // still fires on full-surface click — that one is governed by
-      // the OS-level Notification semantics, not sonner.
-      const toastOptions = isClickableKind(n.kind)
-        ? {
-            action: {
-              label: "View",
-              onClick: () => handleClickById(n.id),
-            },
-          }
-        : undefined;
-
-      if (isAgentFailure) {
-        toast.error(label, toastOptions);
+      if (isViewerMention) {
+        showMentionToast(
+          {
+            sender: n.sender ?? null,
+            fallbackName: payloadString(n, "trigger_name") ?? "Someone",
+            conversationTitle: payloadString(n, "conversation_title"),
+            excerpt: payloadString(n, "mention_excerpt"),
+          },
+          () => handleClickById(n.id),
+        );
       } else {
-        // Neutral notifications carry the shared "notification" icon so "new
-        // activity" reads at a glance; agent failures stay on the error level.
-        toast(label, { ...toastOptions, icon: toastIcon("notification") });
+        const label = buildToastLabel(n);
+        // A plain toast has no whole-surface click, so a clickable kind gets a
+        // "View" action instead.
+        const toastOptions = isClickableKind(n.kind)
+          ? {
+              action: {
+                label: "View",
+                onClick: () => handleClickById(n.id),
+              },
+            }
+          : undefined;
+
+        if (isAgentFailure) {
+          toast.error(label, toastOptions);
+        } else {
+          toast(label, { ...toastOptions, icon: toastIcon("notification") });
+        }
       }
 
       // System notification — main process suppresses ordinary alerts when an
