@@ -87,7 +87,8 @@ export function RecentList(props: {
     threadRootId: string;
     messageId: string;
   }) => void;
-  /** Icon actions held at the end of the filter row. */
+  /** Icon actions held at the end of the filter row; null where a native bar
+   *  carries them. */
   actions: ReactNode;
 }): JSX.Element {
   const [workspaceFilter, setWorkspaceFilter] = useState<string | null>(null);
@@ -180,32 +181,37 @@ export function RecentList(props: {
     <>
       {/* Pinned while the list scrolls: the filter and the entries beside it are
           how the list is steered, so they stay in reach. */}
-      <div className="sticky top-0 z-10 flex shrink-0 items-center gap-1 bg-(--pane-bg,var(--bg-base)) px-1 pb-2">
-        {liveWorkspaces.length > 1 ? (
-          <div
-            role="radiogroup"
-            aria-label="Filter by workspace"
-            className="scrollbar-hide flex min-w-0 flex-1 gap-1 overflow-x-auto mask-[linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] pr-4"
-          >
-            <FilterChip
-              label="All"
-              selected={workspaceFilter === null}
-              onSelect={() => setWorkspaceFilter(null)}
-            />
-            {liveWorkspaces.map((w) => (
+      {liveWorkspaces.length > 1 || props.actions ? (
+        <div
+          data-recent-filter
+          className="sticky top-0 z-10 flex shrink-0 items-center gap-1 bg-(--pane-bg,var(--bg-base)) px-1 pb-2"
+        >
+          {liveWorkspaces.length > 1 ? (
+            <div
+              role="radiogroup"
+              aria-label="Filter by workspace"
+              className="scrollbar-hide flex min-w-0 flex-1 gap-1 overflow-x-auto mask-[linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] pr-4"
+            >
               <FilterChip
-                key={w.id}
-                label={w.name}
-                selected={workspaceFilter === w.id}
-                onSelect={() => setWorkspaceFilter(w.id)}
+                label="All"
+                selected={workspaceFilter === null}
+                onSelect={() => setWorkspaceFilter(null)}
               />
-            ))}
-          </div>
-        ) : (
-          <div className="flex-1" />
-        )}
-        {props.actions}
-      </div>
+              {liveWorkspaces.map((w) => (
+                <FilterChip
+                  key={w.id}
+                  label={w.name}
+                  selected={workspaceFilter === w.id}
+                  onSelect={() => setWorkspaceFilter(w.id)}
+                />
+              ))}
+            </div>
+          ) : (
+            <div className="flex-1" />
+          )}
+          {props.actions}
+        </div>
+      ) : null}
 
       {loading ? <SidebarRowsSkeleton label="Loading conversations" /> : null}
 
@@ -266,6 +272,7 @@ function FilterChip({
       type="button"
       role="radio"
       aria-checked={selected}
+      data-filter-chip
       onClick={onSelect}
       className={cn(
         "h-6 max-w-32 shrink-0 truncate rounded-(--chip-radius) border-(length:--control-border-width) px-2 text-xs font-medium transition-colors focus-outline",

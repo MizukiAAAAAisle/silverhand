@@ -767,6 +767,11 @@
   top: 0;
   padding-top: var(--pane-chrome-height, 0px);
 }
+/* The Recent filter row is chrome, not content: held clear of the native bar's
+   edge fade, which would otherwise dissolve the chips pinned under it. */
+[data-layout="compact"] [data-recent-filter] {
+  padding-top: 12px;
+}
 /* A side panel's find bar sits under the native bar. */
 [data-native-bar-clearance] ~ [data-thread-find] {
   top: var(--native-bar-bottom, env(safe-area-inset-top, 0px));

@@ -304,6 +304,11 @@
   border-radius: 9999px;
 }
 
+/* iOS draws a conversation list's pictures as circles. */
+[data-theme="glass"][data-layout="compact"] [data-recent-avatar] > * {
+  border-radius: 9999px;
+}
+
 [data-theme="glass"][data-layout="compact"] :is([data-input], [data-composer-editor]) {
   border-radius: 16px;
 }

@@ -143,20 +143,56 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
   };
 
   const readingPosition = useListReadingPosition("chat-list");
-  // The compact list is the Chats root, titled like the other Tab roots.
+  const style = useSidebarStyle();
+  // The compact list is the Chats root, titled like the other Tab roots. In the
+  // Recent style the bar also takes the list's own entries: Search beside New
+  // workspace, Saved and Archived behind the bar's menu.
+  const recentEntries = style === "recent";
   const [chatsBar, chatsBarHandlers] = nativeActionBar(
-    { title: "Chats", titleAction: null, largeTitle: true, tabs: null, addTabs: null },
+    {
+      title: "Chats",
+      titleAction: null,
+      largeTitle: true,
+      tabs: null,
+      addTabs: null,
+      overflow: recentEntries ? { label: "More", icon: iconMarkup(MoreIcon) } : undefined,
+    },
     [
+      recentEntries
+        ? {
+            id: "search",
+            label: "Search",
+            icon: iconMarkup(SearchIcon),
+            primary: true,
+            run: props.onSelectSearch,
+          }
+        : null,
       {
         id: "create-workspace",
         label: "New workspace",
         icon: iconMarkup(PlusIcon),
+        primary: true,
         run: props.onCreateWorkspace,
       },
+      recentEntries
+        ? {
+            id: "saved",
+            label: "Saved",
+            icon: iconMarkup(BookmarkIcon),
+            run: props.onSelectSaved,
+          }
+        : null,
+      recentEntries
+        ? {
+            id: "archived",
+            label: "Archived",
+            icon: iconMarkup(ArchiveIcon),
+            run: props.onSelectArchived,
+          }
+        : null,
     ],
   );
   const native = useNativeBar(props.fill ? chatsBar : null, chatsBarHandlers);
-  const style = useSidebarStyle();
 
   return (
     <Sidebar
@@ -187,15 +223,17 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                   onSelectDirectPair={props.onSelectDirectPair}
                   onOpenThread={props.onOpenThread}
                   actions={
-                    <RecentActions
-                      searchActive={props.searchActive}
-                      onSelectSearch={props.onSelectSearch}
-                      savedActive={props.savedActive}
-                      onSelectSaved={props.onSelectSaved}
-                      savedCount={props.savedCount}
-                      archivedActive={props.archivedActive}
-                      onSelectArchived={props.onSelectArchived}
-                    />
+                    native.active ? null : (
+                      <RecentActions
+                        searchActive={props.searchActive}
+                        onSelectSearch={props.onSelectSearch}
+                        savedActive={props.savedActive}
+                        onSelectSaved={props.onSelectSaved}
+                        savedCount={props.savedCount}
+                        archivedActive={props.archivedActive}
+                        onSelectArchived={props.onSelectArchived}
+                      />
+                    )
                   }
                 />
               </>
