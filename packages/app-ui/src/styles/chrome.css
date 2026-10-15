@@ -292,3 +292,13 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   width: 6px;
   height: 6px;
 }
+
+/* The Recent avatar takes the row's corner scaled to its own size (32 of the
+   56px row), so it speaks the same shape language as the selected fill: round
+   where rows are round, square where rows are square. A strict concentric
+   inset would square it off in themes whose row corner is smaller than the
+   12px between them. */
+[data-recent-avatar] > * {
+  border-radius: calc(var(--nav-row-radius, var(--row-radius)) * 32 / 56);
+  corner-shape: var(--nav-corner-shape, normal);
+}

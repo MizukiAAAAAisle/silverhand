@@ -26,6 +26,12 @@ import { CONTROL_HOVER_LIFT } from "@/components/common/control-ink-border";
 import { cn } from "@/lib/cn";
 import { useAppearance } from "@/features/appearance/use-appearance";
 import {
+  SIDEBAR_STYLES,
+  setSidebarStyle,
+  useSidebarStyle,
+  type SidebarStyle,
+} from "@/features/conversation-shell/use-sidebar-style";
+import {
   MESSAGE_LAYOUT_MODES,
   setMessageLayoutMode,
   useMessageLayoutMode,
@@ -320,6 +326,7 @@ function AppearancePane({
                 })}
               </div>
               <MessageAlignmentControl />
+              <SidebarStyleControl />
             </div>
           </SettingsSection>
 
@@ -360,6 +367,70 @@ function AppearancePane({
         </div>
       </div>
     </section>
+  );
+}
+
+const SIDEBAR_STYLE_META: Record<SidebarStyle, string> = {
+  tree: "Workspace groups",
+  recent: "Chat list",
+};
+
+function SidebarStyleControl(): JSX.Element {
+  const style = useSidebarStyle();
+
+  return (
+    <div className="grid min-w-0 grid-cols-1 gap-3 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
+      <h3 className="text-sm font-semibold text-text-primary">Sidebar</h3>
+      <div role="radiogroup" aria-label="Sidebar" className="grid grid-cols-2 gap-3">
+        {SIDEBAR_STYLES.map((id) => {
+          const selected = id === style;
+
+          return (
+            <button
+              key={id}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              onClick={() => setSidebarStyle(id)}
+              className={cn(
+                "flex min-w-0 flex-col gap-3 rounded-(--control-radius) border-(length:--control-border-width) p-3 text-xs font-medium transition-colors focus-outline",
+                selected
+                  ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
+                  : "border-border-subtle bg-bg-base text-text-secondary hover:border-(--border-control-hover) hover:bg-(--bg-hover) hover:text-text-primary",
+              )}
+            >
+              <div aria-hidden="true" className="flex h-16 w-full flex-col justify-center gap-1.5">
+                {id === "tree"
+                  ? [0, 1, 2, 3].map((row) => (
+                      <div
+                        key={row}
+                        className={cn("flex items-center gap-1.5", row % 2 === 1 && "pl-3")}
+                      >
+                        <span className="size-2.5 shrink-0 rounded-(--control-radius) bg-current opacity-40" />
+                        <span
+                          className={cn(
+                            "h-2 rounded-(--control-radius) bg-current opacity-20",
+                            row % 2 === 0 ? "w-1/3" : "w-1/2",
+                          )}
+                        />
+                      </div>
+                    ))
+                  : [0, 1].map((row) => (
+                      <div key={row} className="flex items-center gap-1.5">
+                        <span className="size-5 shrink-0 rounded-(--control-radius) bg-current opacity-40" />
+                        <span className="flex flex-1 flex-col gap-1">
+                          <span className="h-2 w-1/2 rounded-(--control-radius) bg-current opacity-30" />
+                          <span className="h-2 w-5/6 rounded-(--control-radius) bg-current opacity-15" />
+                        </span>
+                      </div>
+                    ))}
+              </div>
+              <span>{SIDEBAR_STYLE_META[id]}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

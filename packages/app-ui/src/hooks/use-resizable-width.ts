@@ -37,7 +37,7 @@ export function useResizableWidth({
   max,
   cssVar,
 }: Options): ResizableWidth {
-  const [width, setWidth] = useState<number>(() => {
+  const readStored = (): number => {
     try {
       const raw = localStorage.getItem(storageKey);
       const n = raw !== null ? Number(raw) : NaN;
@@ -46,7 +46,15 @@ export function useResizableWidth({
       /* private mode — fall through to default */
     }
     return defaultWidth;
-  });
+  };
+  const [width, setWidth] = useState<number>(readStored);
+  // A caller may switch keys (one width per sidebar style); the new key's
+  // stored width replaces the old one in the same render.
+  const [loadedKey, setLoadedKey] = useState(storageKey);
+  if (loadedKey !== storageKey) {
+    setLoadedKey(storageKey);
+    setWidth(readStored());
+  }
 
   const widthRef = useRef(width);
   const frameRef = useRef<number | null>(null);

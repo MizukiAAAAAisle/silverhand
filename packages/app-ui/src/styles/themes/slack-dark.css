@@ -78,6 +78,7 @@
   --nav-rail-indicator-display: none;
   --nav-rail-item-border-width: 2px;
   --row-radius: 6px;
+  --nav-row-radius: 10px;
   --sidebar-row-border-width: 2px;
   --text-nav-rail: var(--text-secondary);
   --text-nav-rail-hover: var(--text-primary);

@@ -367,6 +367,11 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyC
     reason: "['conversation-members', cid] → position 1",
   },
   "conversation-ref": { verdicts: ["swept"], reason: "['conversation-ref', cid] → position 1" },
+  "conversation-latest": {
+    verdicts: ["retained"],
+    reason:
+      "previews for the Recent sidebar, whose rows come from the channel and direct-pair lists; an entry for a lost conversation is never rendered and the next snapshot drops it",
+  },
   conversations: {
     verdicts: ["swept"],
     reason: "['conversations', cid, 'agent-activity', agentId] → position 1",

@@ -2,6 +2,7 @@ import type { QueryClient } from "@tanstack/react-query";
 import { activityKey } from "@/features/attention/hooks";
 import { messageReactorsKeyPrefix } from "@/features/channels/reaction-hooks";
 import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/use-conversation-members";
+import { conversationLatestKey } from "@/features/conversations/latest/use-conversation-latest";
 import { directPairsKey } from "@/features/direct-pairs/hooks";
 import { favoritesKey } from "@/features/workspaces/favorites";
 import { hostResourcesKeyPrefix, hostStatusKeyPrefix } from "@/features/computers/hooks/hooks";
@@ -180,6 +181,13 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     // presentation-only.
     facets: ["presentation"],
     filter: { predicate: (q) => isChannelAuthorCarrierKey(q.queryKey) },
+  },
+  {
+    // `ConversationLatest.sender` — the Recent sidebar's preview author.
+    id: "conversation-latest",
+    kinds: ["agent", "human"],
+    facets: ["presentation"],
+    filter: { queryKey: conversationLatestKey },
   },
   {
     // `SavedMessageDto.message.author` — the saved row embeds the whole message,
