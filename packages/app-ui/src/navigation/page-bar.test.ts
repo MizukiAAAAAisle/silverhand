@@ -47,6 +47,15 @@ describe("PageBarHub", () => {
     expect(sent.map((state) => state?.title ?? null)).toEqual(["A", "B"]);
   });
 
+  it("draws the bar again after it was cleared outside a flush", () => {
+    const { hub, sent } = setup();
+    hub.claim(hub.order(), { bar: declaration("Chats"), handlers: () => ({}) });
+    hub.flush();
+    hub.clear();
+    hub.flush();
+    expect(sent.map((state) => state?.title ?? null)).toEqual(["Chats", null, "Chats"]);
+  });
+
   it("shows the fallback only while no page claims the bar", () => {
     const { hub, sent } = setup();
     hub.claim(FALLBACK_ORDER, { bar: declaration("Members"), handlers: () => ({}) });
