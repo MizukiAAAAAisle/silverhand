@@ -2497,7 +2497,7 @@ async fn the_composition_mounts_stale_message_resolution_behind_the_runtime_peri
 /// handler's own status (never the perimeter's bodiless `401`), and never the `404`
 /// fallback. Removing any mounted route's
 /// `.merge(...)` from `prepare()` flips its entry to `404` and reddens this gate.
-/// The tables are named consts with per-table `assert_eq!(len)` (113 human / 28 runtime
+/// The tables are named consts with per-table `assert_eq!(len)` (114 human / 28 runtime
 /// / 2 WebSocket / 7 anonymous / 1 connect-info-gated) so a mis-added or mis-deleted
 /// row reddens the count directly.
 ///
@@ -2522,10 +2522,10 @@ async fn the_composition_mounts_every_declared_route() {
     let router = app.router;
     let unauthorized = r#"{"error":"unauthorized"}"#;
 
-    // The 113 human-perimeter product doors. Anonymous (no bearer) → the human
+    // The 114 human-perimeter product doors. Anonymous (no bearer) → the human
     // session perimeter's `401` envelope, never a `404`: each path IS mounted and
     // guarded. (`.layer` runs the perimeter for any matched human route.)
-    const HUMAN_PERIMETER_DOORS: [(&str, &str); 113] = [
+    const HUMAN_PERIMETER_DOORS: [(&str, &str); 114] = [
         ("POST", "/api/hosts"),
         // #2219 CP4 host-custody batch B — the three perimeter-guarded custody doors.
         // `GET /api/hosts` shares the path node with the invite POST above, so its anon
@@ -2570,6 +2570,7 @@ async fn the_composition_mounts_every_declared_route() {
         // double-method gate below distinguishes GET-window from POST-send.
         ("GET", "/api/conversations/conv000000000001/ref"),
         ("GET", "/api/conversations/conv000000000001/unread"),
+        ("GET", "/api/conversations/latest"),
         ("GET", "/api/conversations/conv000000000001/threads"),
         ("GET", "/api/channels/conv000000000001/messages"),
         ("GET", "/api/search"),
@@ -2757,7 +2758,7 @@ async fn the_composition_mounts_every_declared_route() {
         ("GET", "/api/tasks/by-number"),
         ("GET", "/api/tasks/task-1"),
     ];
-    assert_eq!(HUMAN_PERIMETER_DOORS.len(), 113);
+    assert_eq!(HUMAN_PERIMETER_DOORS.len(), 114);
     for (method, path) in HUMAN_PERIMETER_DOORS {
         let (status, body) = request(&router, method, path, None).await;
         assert_eq!(status, StatusCode::UNAUTHORIZED, "{method} {path}: {body}");
@@ -4207,6 +4208,65 @@ async fn the_composition_publishes_saved_changed_to_the_writer_on_the_real_hub()
     assert_eq!(
         unsaved["payload"],
         serde_json::json!({"message_id":"message00000001","action":"unsave"})
+    );
+
+    socket.close(None).await.unwrap();
+    shutdown_tx.send(()).unwrap();
+    running.await.unwrap().unwrap();
+}
+
+/// #2845: a composed send publishes `conversation_latest_changed` to the sender's own
+/// viewer scope, and the snapshot route serves the same summary.
+#[tokio::test]
+async fn the_composition_publishes_the_latest_summary_and_serves_its_snapshot() {
+    let fixture = fixture(true).await;
+    seed_human(&fixture.path).await;
+    seed_workspace_conversation(&fixture.path).await;
+    let app = prepare(&config(fixture.path.clone())).await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (shutdown_tx, shutdown_rx) = oneshot::channel();
+    let running = tokio::spawn(serve(listener, app, async move {
+        let _ = shutdown_rx.await;
+        Ok::<(), std::io::Error>(())
+    }));
+    let bearer = format!("Bearer {TOKEN}");
+    let mut socket = subscribe_own_viewer(address).await;
+
+    let sent = http_over_tcp(
+        address,
+        "POST",
+        &format!("/api/channels/{CONVERSATION_ID}/messages"),
+        Some(&bearer),
+        r#"{"content":"latest  hello"}"#,
+    )
+    .await;
+    assert!(sent.starts_with("HTTP/1.1 201 Created\r\n"), "{sent}");
+
+    let latest = loop {
+        let frame = next_socket_json(&mut socket).await;
+        if frame["kind"] == "conversation_latest_changed" {
+            break frame;
+        }
+    };
+    assert_eq!(latest["scope"], "viewer:user-1");
+    assert_eq!(latest["payload"]["conversation_id"], CONVERSATION_ID);
+    assert_eq!(latest["payload"]["preview"], "latest hello");
+    assert_eq!(latest["payload"]["thread_root_id"], serde_json::Value::Null);
+    assert_eq!(latest["payload"]["sender"]["id"], "user-1");
+
+    let snapshot = http_over_tcp(
+        address,
+        "GET",
+        "/api/conversations/latest",
+        Some(&bearer),
+        "",
+    )
+    .await;
+    assert!(snapshot.starts_with("HTTP/1.1 200 OK\r\n"), "{snapshot}");
+    assert_eq!(
+        http_json_body(&snapshot),
+        serde_json::json!({ "items": [latest["payload"].clone()] })
     );
 
     socket.close(None).await.unwrap();
@@ -8928,12 +8988,12 @@ async fn the_composition_delivers_the_pair_open_and_the_aftermath_to_the_real_hu
     // VIEWER axis — the winner-only pair-open sink. Two ABSOLUTE increments, pinned to the
     // measured production behavior; `N == M + 1` is the winner-only pair-open.
     assert_eq!(
-        first_viewer_increment, 2,
-        "first POST viewer frames: winner pair-open + one per-send direct-pair invalidation"
+        first_viewer_increment, 3,
+        "first POST viewer frames: winner pair-open + direct-pair invalidation + latest summary"
     );
     assert_eq!(
-        second_viewer_increment, 1,
-        "second POST viewer frames: the per-send direct-pair invalidation only (no re-announce)"
+        second_viewer_increment, 2,
+        "second POST viewer frames: direct-pair invalidation + latest summary (no re-announce)"
     );
     assert_eq!(
         first_viewer_increment,

@@ -16,6 +16,7 @@ pub mod conversation_agent_activity;
 pub mod conversation_agent_directory;
 pub mod conversation_agent_run_states;
 pub mod conversation_agent_runtime;
+pub mod conversation_latest;
 pub mod conversation_log_debug;
 pub mod conversation_message_window;
 pub mod conversation_ref;

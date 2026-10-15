@@ -197,6 +197,7 @@ pub(super) async fn compose_after_audit(
     // message-window GET shares its path with the send POST — see the merge below.
     let conversation_ref_read = messaging_store.conversation_refs();
     let conversation_unread_read = messaging_store.conversation_unread();
+    let conversation_latest_read = messaging_store.conversation_latest();
     let conversation_threads_read = messaging_store.conversation_threads();
     let conversation_message_window_read = messaging_store.conversation_message_window();
     let human_search_read = messaging_store.human_search();
@@ -1152,6 +1153,7 @@ pub(super) async fn compose_after_audit(
             .merge(activity::router(activity_read_model))
             .merge(conversation_ref::router(conversation_ref_read))
             .merge(conversation_unread::router(conversation_unread_read))
+            .merge(conversation_latest::router(conversation_latest_read))
             .merge(conversation_threads::router(conversation_threads_read))
             // #2217: the two viewer-owned message-state lanes, mounted behind this same
             // authenticated human perimeter. Thread follow/unfollow rides its store and

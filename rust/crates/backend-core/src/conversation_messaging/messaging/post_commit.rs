@@ -330,6 +330,8 @@ pub enum EffectStep {
     /// What every reader's unread state now is. It READS the record above, so it
     /// runs after that write has been attempted.
     UnreadPublished,
+    /// The conversation's latest-message summary, to every participant.
+    LatestPublished,
     MainDelivered,
     /// Only for recipients that are not already running.
     IdleStarted,
@@ -476,6 +478,15 @@ pub trait UnreadPublication {
     fn publish_unread(
         &self,
         conversation: &ConversationId,
+    ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
+}
+
+/// The conversation's latest-message summary after this send, to every human
+/// participant including the sender.
+pub trait LatestPublication {
+    fn publish_latest(
+        &self,
+        latest: &super::collaboration::conversation_latest::ConversationLatest,
     ) -> impl Future<Output = Result<(), EffectFailure>> + Send;
 }
 

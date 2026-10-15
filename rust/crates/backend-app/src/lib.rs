@@ -61,8 +61,8 @@ use silverhand_backend_server::{
             },
             attention_preference, attention_projection, channel_directory, channel_lifecycle,
             conversation_agent_activity, conversation_agent_directory, conversation_agent_runtime,
-            conversation_log_debug, conversation_message_window, conversation_ref,
-            conversation_threads, conversation_unread, human_search,
+            conversation_latest, conversation_log_debug, conversation_message_window,
+            conversation_ref, conversation_threads, conversation_unread, human_search,
             membership as conversation_membership, message_unread, notification, reaction,
             runtime_control as conversation_runtime_control, saved,
             stale_message_resolution::{

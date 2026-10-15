@@ -19,14 +19,16 @@ use axum::Router;
 use silverhand_backend_core::conversation_messaging::messaging::{
     ChannelAccess, DirectLineAuthority, DirectPairOpenedFact, DirectPairOpenedPort, SendCapability,
     SendMessageOutcome, SendMessageUnitOfWork, TargetAddress,
-    collaboration::direct_pair_initiation::DirectPairInitiationSource,
+    collaboration::{
+        conversation_latest::ConversationLatest, direct_pair_initiation::DirectPairInitiationSource,
+    },
     mention_cc::MentionCopySkip,
     post_commit::{
         CommittedMessagePublication, CopyNotification, DirectLineInvalidation, EffectReport,
-        IdleStart, MainDelivery, MainEffects, MentionSkipRecord, MentionedViewerRecord,
-        MessagePublication, ReplyDelivery, ReplyEffects, RuntimeDelivery, RuntimeStart,
-        SendEffects, SkippedMention, UnreadPublication, ViewerNotification, announce_main_send,
-        announce_reply_send, announce_send,
+        EffectStep, IdleStart, LatestPublication, MainDelivery, MainEffects, MentionSkipRecord,
+        MentionedViewerRecord, MessagePublication, ReplyDelivery, ReplyEffects, RuntimeDelivery,
+        RuntimeStart, SendEffects, SkippedMention, UnreadPublication, ViewerNotification,
+        announce_main_send, announce_reply_send, announce_send,
     },
 };
 
@@ -228,7 +230,7 @@ where
         + Sync,
     D: RuntimeStart + RuntimeDelivery + MainDelivery + ReplyDelivery + IdleStart + Send + Sync,
     M: MentionedViewerRecord + Send + Sync,
-    U: UnreadPublication + Send + Sync,
+    U: UnreadPublication + LatestPublication + Send + Sync,
 {
     async fn announce(&self, outcome: &SendMessageOutcome) {
         let committed = outcome.committed();
@@ -287,6 +289,20 @@ where
                 message_id = committed.message().id.as_str(),
                 "committed send has neither a main-line nor reply aftermath"
             );
+        }
+
+        if let Some(latest) = ConversationLatest::from_created(committed.message()) {
+            let mut report = EffectReport::default();
+            let id = latest.message.clone();
+            report
+                .attempted
+                .push((id.clone(), EffectStep::LatestPublished));
+            if let Err(failure) = self.inner.unread.publish_latest(&latest).await {
+                report
+                    .failed
+                    .push((id, EffectStep::LatestPublished, failure));
+            }
+            report_failures(report);
         }
     }
 }

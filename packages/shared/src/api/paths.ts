@@ -340,6 +340,8 @@ export const apiPaths = {
    *  ONLY by the viewer-scoped `unread_updated` WS signal — never inferred from
    *  message events (unread is server-scored). Human viewer-scoped. */
   conversationUnread: (id: string) => `/api/conversations/${id}/unread`,
+  /** Every participating conversation's latest message summary (#task:2845). */
+  conversationLatest: '/api/conversations/latest',
   /** Per-(viewer, channel) attention mode (#task:1227 / #task:1870,
    *  docs/activity-lifecycle-v1.md §9.3). **PUT only** — the stored mode's read
    *  face is `attentionModes`, which carries `mode` beside `effective_mode` for
