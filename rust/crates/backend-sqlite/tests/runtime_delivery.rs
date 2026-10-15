@@ -212,6 +212,8 @@ async fn open(path: &std::path::Path) -> SqliteConnection {
     .unwrap()
 }
 
+type InboxRow = (i64, Option<i64>, Option<i64>, Option<String>, Option<i64>);
+
 #[tokio::test]
 async fn target_projection_and_claim_are_bound_to_live_custody() {
     let fixture = fixture().await;
@@ -1579,11 +1581,10 @@ async fn archive_blocks_existing_queue_without_changing_its_rows() {
     let principal = claim_runtime(&fixture, "daemon-1").await;
     let mut connection = open(&fixture.path).await;
     let snapshot_sql = "SELECT id, delivered_at, failed_at, in_flight_owner, in_flight_at FROM conversation_inboxes ORDER BY id";
-    let before: Vec<(i64, Option<i64>, Option<i64>, Option<String>, Option<i64>)> =
-        sqlx::query_as(snapshot_sql)
-            .fetch_all(&mut connection)
-            .await
-            .unwrap();
+    let before: Vec<InboxRow> = sqlx::query_as(snapshot_sql)
+        .fetch_all(&mut connection)
+        .await
+        .unwrap();
     assert!(!before.is_empty());
 
     // A caller may already hold a live dispatch projection when archive commits.
@@ -1630,10 +1631,9 @@ async fn archive_blocks_existing_queue_without_changing_its_rows() {
         .await
         .unwrap();
     assert_eq!(outcome, ClaimPendingInbox::Archived);
-    let after: Vec<(i64, Option<i64>, Option<i64>, Option<String>, Option<i64>)> =
-        sqlx::query_as(snapshot_sql)
-            .fetch_all(&mut connection)
-            .await
-            .unwrap();
+    let after: Vec<InboxRow> = sqlx::query_as(snapshot_sql)
+        .fetch_all(&mut connection)
+        .await
+        .unwrap();
     assert_eq!(after, before);
 }

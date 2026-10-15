@@ -41,7 +41,6 @@ async fn unread_ids(port: &impl NotificationReadPort, viewer: &UserId) -> Vec<St
         },
     )
     .await
-    .ok()
     .expect("unread list succeeds")
     .into_iter()
     .map(|listed| listed.notification.id.as_str().to_owned())

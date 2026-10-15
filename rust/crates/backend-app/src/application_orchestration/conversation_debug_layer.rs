@@ -208,17 +208,16 @@ where
                     continue;
                 }
                 let extensions = span.extensions();
-                if let Some(formatted) = extensions.get::<FormattedFields<N>>() {
-                    if let Ok(values) = serde_json::from_str::<Value>(formatted.fields.as_str()) {
-                        if let Some(id) = values["request_id"].as_str() {
-                            let key = if span.name() == "http_request" {
-                                "http_request_id"
-                            } else {
-                                "request_id"
-                            };
-                            fields.insert(key.to_owned(), Value::String(id.to_owned()));
-                        }
-                    }
+                if let Some(formatted) = extensions.get::<FormattedFields<N>>()
+                    && let Ok(values) = serde_json::from_str::<Value>(formatted.fields.as_str())
+                    && let Some(id) = values["request_id"].as_str()
+                {
+                    let key = if span.name() == "http_request" {
+                        "http_request_id"
+                    } else {
+                        "request_id"
+                    };
+                    fields.insert(key.to_owned(), Value::String(id.to_owned()));
                 }
             }
         }

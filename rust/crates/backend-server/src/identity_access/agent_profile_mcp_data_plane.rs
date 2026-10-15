@@ -87,7 +87,7 @@ impl<C, D, H> crate::application_orchestration::daemon_delivery::DaemonDeliveryR
     ) -> ProductionAgentProfileMcpDataPlane<P>
     where
         P: silverhand_backend_core::identity_access::agent_profile_mcp::AgentProfileMcpPlacementRead,
-    {
+{
         ProductionAgentProfileMcpDataPlane::new(placements, self.owning_host_data_plane())
     }
 }

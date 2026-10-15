@@ -589,6 +589,95 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
     }
 }
 
+async fn sidebar_ids_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+) -> Result<Vec<String>, PersistenceFailure> {
+    let rows = sqlx::query(
+        "SELECT w.id
+         FROM workspaces w
+         WHERE w.archived_at IS NULL
+           AND EXISTS (
+               SELECT 1 FROM workspace_users wu
+               WHERE wu.workspace_id = w.id AND wu.user_id = ?
+           )
+         ORDER BY (w.owner_agent_id IS NOT NULL), w.created_at, w.id",
+    )
+    .bind(viewer.as_str())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ViewerSortStoreError::from)?;
+
+    let mut ids = vec![
+        "section:starred".to_owned(),
+        "section:direct_messages".to_owned(),
+    ];
+    for row in rows {
+        ids.push(format!(
+            "workspace:{}",
+            row.try_get::<String, _>("id")
+                .map_err(ViewerSortStoreError::from)?
+        ));
+    }
+    Ok(ids)
+}
+
+async fn sidebar_projection_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+) -> Result<ViewerSortStateProjection, PersistenceFailure> {
+    let ids = sidebar_ids_tx(tx, viewer).await?;
+    let rows = sqlx::query(
+        "SELECT entity_id,rank FROM user_sort_entry WHERE user_id=? AND list_key='sidebar'",
+    )
+    .bind(viewer.as_str())
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(ViewerSortStoreError::from)?;
+    let mut ranks = BTreeMap::new();
+    for row in rows {
+        ranks.insert(
+            row.try_get::<String, _>("entity_id")
+                .map_err(ViewerSortStoreError::from)?,
+            vs_js_safe(row.try_get("rank").map_err(ViewerSortStoreError::from)?)?,
+        );
+    }
+    let mut entries: Vec<_> = ids
+        .into_iter()
+        .map(|entity_id| ViewerSortEntryProjection {
+            rank: ranks.get(&entity_id).copied().flatten(),
+            entity_id,
+            last_accessed_at: None,
+            starred_at: None,
+        })
+        .collect();
+    // Stable sort preserves the explicit default order for unranked/tied rows.
+    entries.sort_by_key(|e| (e.rank.is_none(), e.rank));
+    Ok(ViewerSortStateProjection {
+        list_key: SortListKey::Sidebar,
+        modes: BTreeMap::from([("".to_owned(), SortMode::Manual)]),
+        entries,
+    })
+}
+
+impl silverhand_backend_core::viewer_read_model::viewer_sort_state::ViewerSidebarRead
+    for SqliteViewerSort
+{
+    async fn sidebar_sort(
+        &self,
+        viewer: &UserId,
+    ) -> Result<ViewerSortStateProjection, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(ViewerSortStoreError::from)?;
+        let result = sidebar_projection_tx(&mut tx, viewer).await?;
+        tx.commit().await.map_err(ViewerSortStoreError::from)?;
+        Ok(result)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1113,94 +1202,5 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
             entry.last_accessed_at.is_some(),
             "home last_accessed_at preserved"
         );
-    }
-}
-
-async fn sidebar_ids_tx(
-    tx: &mut Transaction<'_, Sqlite>,
-    viewer: &UserId,
-) -> Result<Vec<String>, PersistenceFailure> {
-    let rows = sqlx::query(
-        "SELECT w.id
-         FROM workspaces w
-         WHERE w.archived_at IS NULL
-           AND EXISTS (
-               SELECT 1 FROM workspace_users wu
-               WHERE wu.workspace_id = w.id AND wu.user_id = ?
-           )
-         ORDER BY (w.owner_agent_id IS NOT NULL), w.created_at, w.id",
-    )
-    .bind(viewer.as_str())
-    .fetch_all(&mut **tx)
-    .await
-    .map_err(ViewerSortStoreError::from)?;
-
-    let mut ids = vec![
-        "section:starred".to_owned(),
-        "section:direct_messages".to_owned(),
-    ];
-    for row in rows {
-        ids.push(format!(
-            "workspace:{}",
-            row.try_get::<String, _>("id")
-                .map_err(ViewerSortStoreError::from)?
-        ));
-    }
-    Ok(ids)
-}
-
-async fn sidebar_projection_tx(
-    tx: &mut Transaction<'_, Sqlite>,
-    viewer: &UserId,
-) -> Result<ViewerSortStateProjection, PersistenceFailure> {
-    let ids = sidebar_ids_tx(tx, viewer).await?;
-    let rows = sqlx::query(
-        "SELECT entity_id,rank FROM user_sort_entry WHERE user_id=? AND list_key='sidebar'",
-    )
-    .bind(viewer.as_str())
-    .fetch_all(&mut **tx)
-    .await
-    .map_err(ViewerSortStoreError::from)?;
-    let mut ranks = BTreeMap::new();
-    for row in rows {
-        ranks.insert(
-            row.try_get::<String, _>("entity_id")
-                .map_err(ViewerSortStoreError::from)?,
-            vs_js_safe(row.try_get("rank").map_err(ViewerSortStoreError::from)?)?,
-        );
-    }
-    let mut entries: Vec<_> = ids
-        .into_iter()
-        .map(|entity_id| ViewerSortEntryProjection {
-            rank: ranks.get(&entity_id).copied().flatten(),
-            entity_id,
-            last_accessed_at: None,
-            starred_at: None,
-        })
-        .collect();
-    // Stable sort preserves the explicit default order for unranked/tied rows.
-    entries.sort_by_key(|e| (e.rank.is_none(), e.rank));
-    Ok(ViewerSortStateProjection {
-        list_key: SortListKey::Sidebar,
-        modes: BTreeMap::from([("".to_owned(), SortMode::Manual)]),
-        entries,
-    })
-}
-
-impl silverhand_backend_core::viewer_read_model::viewer_sort_state::ViewerSidebarRead
-    for SqliteViewerSort
-{
-    async fn sidebar_sort(
-        &self,
-        viewer: &UserId,
-    ) -> Result<ViewerSortStateProjection, PersistenceFailure> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(ViewerSortStoreError::from)?;
-        let result = sidebar_projection_tx(&mut tx, viewer).await?;
-        tx.commit().await.map_err(ViewerSortStoreError::from)?;
-        Ok(result)
     }
 }

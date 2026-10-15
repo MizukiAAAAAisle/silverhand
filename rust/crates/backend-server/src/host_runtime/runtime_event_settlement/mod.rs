@@ -953,6 +953,7 @@ where
         ))
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn complete_consumed(
         &self,
         scope: RuntimeScope,

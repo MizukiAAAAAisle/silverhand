@@ -8,9 +8,11 @@ installation, Node build, Desktop packaging or ECS deployment is performed.
 
 This builds only `silverhand-backend` for `x86_64-unknown-linux-gnu` inside a
 `linux/amd64` container. On Apple Silicon this uses OrbStack's architecture
-emulation, not a macOS linker. The Rust 1.94.0 Debian bullseye image is pinned by
-digest; Cargo uses `--locked`. Registry and Linux target caches use separate named
-Docker volumes and never overwrite the macOS target cache. The source mount is
+emulation, not a macOS linker. The Debian bullseye `rust` image is pinned by
+digest and supplies only the glibc floor and rustup; the compiler is the exact
+`RUST_TOOLCHAIN` in the script, installed by rustup (first run needs network).
+Cargo uses `--locked`. Registry, toolchain and Linux target caches use separate
+named Docker volumes and never overwrite the macOS target cache. The source mount is
 read-only. `CARGO_BUILD_JOBS=2 ./scripts/build-rust-linux.sh` reduces build load.
 
 Each run writes a new `.cache/linux-server/<UTC timestamp>-<commit>/` directory

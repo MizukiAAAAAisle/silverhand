@@ -732,7 +732,7 @@ mod tests {
             &self,
             _agent: &AgentId,
         ) -> Result<(), silverhand_backend_core::identity_access::agent_profile_write::AgentChangedAnnounceFailure>
-        {
+{
             self.calls.fetch_add(1, SeqCst);
             if self.fail {
                 Err(

@@ -183,6 +183,62 @@ pub fn serialize_password_hash_params(params: &PasswordHashParams) -> String {
     serde_json::to_string(&wire).expect("serializing password_hash_params cannot fail")
 }
 
+impl silverhand_backend_core::identity_access::credential::PasswordChangeStore
+    for SqliteCredentialStore
+{
+    async fn password_for_user(&self, user: &UserId) -> Result<Option<String>, PersistenceFailure> {
+        sqlx::query_scalar("SELECT password_hash FROM user_password_credentials WHERE user_id = ?")
+            .bind(user.as_str())
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(PersistenceFailure::from_source)
+    }
+
+    async fn replace_password(
+        &self,
+        user: &UserId,
+        session: &silverhand_backend_core::identity_access::auth::SessionTokenHash,
+        expected: &str,
+        replacement: silverhand_backend_core::identity_access::credential::PreparedPasswordCredential,
+        now_ms: i64,
+    ) -> Result<bool, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        let changed = sqlx::query("UPDATE user_password_credentials
+            SET password_hash = ?, password_hash_params = ?, password_updated_at = ?
+            WHERE user_id = ? AND password_hash = ?
+            AND EXISTS (SELECT 1 FROM auth_sessions WHERE user_id = ? AND token_hash = ? AND revoked_at IS NULL)")
+            .bind(replacement.phc)
+            .bind(serialize_password_hash_params(&replacement.params))
+            .bind(now_ms)
+            .bind(user.as_str())
+            .bind(expected)
+            .bind(user.as_str())
+            .bind(session.as_str())
+            .execute(&mut *tx)
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+
+        if changed.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+        )
+        .bind(now_ms)
+        .bind(user.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+
+        tx.commit().await.map_err(PersistenceFailure::from_source)?;
+        Ok(true)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -282,61 +338,5 @@ INSERT INTO user_password_credentials (user_id, password_hash, password_hash_par
         };
         let fixture = include_str!("../../tests/fixtures/password-hash-params-rust.json");
         assert_eq!(serialize_password_hash_params(&params), fixture.trim_end());
-    }
-}
-
-impl silverhand_backend_core::identity_access::credential::PasswordChangeStore
-    for SqliteCredentialStore
-{
-    async fn password_for_user(&self, user: &UserId) -> Result<Option<String>, PersistenceFailure> {
-        sqlx::query_scalar("SELECT password_hash FROM user_password_credentials WHERE user_id = ?")
-            .bind(user.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(PersistenceFailure::from_source)
-    }
-
-    async fn replace_password(
-        &self,
-        user: &UserId,
-        session: &silverhand_backend_core::identity_access::auth::SessionTokenHash,
-        expected: &str,
-        replacement: silverhand_backend_core::identity_access::credential::PreparedPasswordCredential,
-        now_ms: i64,
-    ) -> Result<bool, PersistenceFailure> {
-        let mut tx = self
-            .pool
-            .begin_with("BEGIN IMMEDIATE")
-            .await
-            .map_err(PersistenceFailure::from_source)?;
-        let changed = sqlx::query("UPDATE user_password_credentials
-            SET password_hash = ?, password_hash_params = ?, password_updated_at = ?
-            WHERE user_id = ? AND password_hash = ?
-            AND EXISTS (SELECT 1 FROM auth_sessions WHERE user_id = ? AND token_hash = ? AND revoked_at IS NULL)")
-            .bind(replacement.phc)
-            .bind(serialize_password_hash_params(&replacement.params))
-            .bind(now_ms)
-            .bind(user.as_str())
-            .bind(expected)
-            .bind(user.as_str())
-            .bind(session.as_str())
-            .execute(&mut *tx)
-            .await
-            .map_err(PersistenceFailure::from_source)?;
-
-        if changed.rows_affected() == 0 {
-            return Ok(false);
-        }
-        sqlx::query(
-            "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
-        )
-        .bind(now_ms)
-        .bind(user.as_str())
-        .execute(&mut *tx)
-        .await
-        .map_err(PersistenceFailure::from_source)?;
-
-        tx.commit().await.map_err(PersistenceFailure::from_source)?;
-        Ok(true)
     }
 }

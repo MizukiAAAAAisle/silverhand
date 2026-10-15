@@ -825,20 +825,18 @@ where
                 // A scope hint is target information: disclose it only through the
                 // existing peer-profile workspace horizon + read_messages authority.
                 // Reads and invisible handles retain their opaque resolution contract.
-                if intent == DeliveryIntent::Write {
-                    if let PrincipalIdentity::Agent(peer) = &other {
-                        if self
-                            .store
-                            .visible_peer_dm_scope_refusal(agent, peer)
-                            .await
-                            .map_err(TargetAddressStoreError::Persistence)?
-                        {
-                            return Ok(Err(RejectedTarget::new(
-                                AddressRefusal::DirectMessageScope,
-                                TargetAddressOperatorReason::DirectMessageScope,
-                            )));
-                        }
-                    }
+                if intent == DeliveryIntent::Write
+                    && let PrincipalIdentity::Agent(peer) = &other
+                    && self
+                        .store
+                        .visible_peer_dm_scope_refusal(agent, peer)
+                        .await
+                        .map_err(TargetAddressStoreError::Persistence)?
+                {
+                    return Ok(Err(RejectedTarget::new(
+                        AddressRefusal::DirectMessageScope,
+                        TargetAddressOperatorReason::DirectMessageScope,
+                    )));
                 }
                 let participants = DirectPairParticipants::between(me, other).map_err(|_| {
                     TargetAddressStoreError::Persistence(corrupt("direct_pair.participants"))
@@ -1833,44 +1831,6 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{ParsedTarget, parse_target};
-
-    #[test]
-    fn parser_keeps_the_three_published_arms_disjoint() {
-        assert!(matches!(
-            parse_target("#conv:aBcDeFgHiJkLmN_P"),
-            Some(ParsedTarget::Conversation { thread: None, .. })
-        ));
-        for malformed in [
-            "#silverhand/%20general",
-            "#silverhand/general%20",
-            "#silverhand/gene\u{200d}ral",
-            "#silverhand/❤\u{fe0f}",
-            "#silverhand/1\u{20e3}",
-            "#silverhand/\u{1f1e8}\u{1f1f3}",
-        ] {
-            assert!(parse_target(malformed).is_none(), "{malformed:?}");
-        }
-        assert!(matches!(
-            parse_target("#conv:aBcDeFgHiJkLmN_P/room"),
-            Some(ParsedTarget::Named { thread: None, .. })
-        ));
-        assert!(matches!(
-            parse_target("#silverhand/thread:aBcDeFgHiJkLmN_P"),
-            Some(ParsedTarget::Named { thread: None, .. })
-        ));
-        assert!(matches!(
-            parse_target("#silverhand/thread:aBcDeFgHiJkLmN_P/thread:root000000000001"),
-            Some(ParsedTarget::Named {
-                thread: Some(_),
-                ..
-            })
-        ));
-    }
-}
-
 impl<E: Send + Sync> MessagingStore<E> {
     async fn visible_peer_dm_scope_refusal(
         &self,
@@ -1916,5 +1876,43 @@ impl<E: Send + Sync> MessagingStore<E> {
             }
         }
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ParsedTarget, parse_target};
+
+    #[test]
+    fn parser_keeps_the_three_published_arms_disjoint() {
+        assert!(matches!(
+            parse_target("#conv:aBcDeFgHiJkLmN_P"),
+            Some(ParsedTarget::Conversation { thread: None, .. })
+        ));
+        for malformed in [
+            "#silverhand/%20general",
+            "#silverhand/general%20",
+            "#silverhand/gene\u{200d}ral",
+            "#silverhand/❤\u{fe0f}",
+            "#silverhand/1\u{20e3}",
+            "#silverhand/\u{1f1e8}\u{1f1f3}",
+        ] {
+            assert!(parse_target(malformed).is_none(), "{malformed:?}");
+        }
+        assert!(matches!(
+            parse_target("#conv:aBcDeFgHiJkLmN_P/room"),
+            Some(ParsedTarget::Named { thread: None, .. })
+        ));
+        assert!(matches!(
+            parse_target("#silverhand/thread:aBcDeFgHiJkLmN_P"),
+            Some(ParsedTarget::Named { thread: None, .. })
+        ));
+        assert!(matches!(
+            parse_target("#silverhand/thread:aBcDeFgHiJkLmN_P/thread:root000000000001"),
+            Some(ParsedTarget::Named {
+                thread: Some(_),
+                ..
+            })
+        ));
     }
 }

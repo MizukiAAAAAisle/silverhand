@@ -16,9 +16,11 @@ for tool in docker git; do
 done
 docker info >/dev/null
 
-# Debian 11 glibc 2.31 is below the verified ECS glibc 2.32. Do not replace
-# this with bookworm/trixie without rechecking the deployment ABI floor.
+# The image supplies only the Debian 11 glibc 2.31 floor (below ECS 2.32) and
+# rustup; do not move to bookworm/trixie without rechecking that floor. The
+# compiler is RUST_TOOLCHAIN, installed by rustup into its own volume.
 IMAGE='rust:1.94.0-bullseye@sha256:16950191527a4cb9e0762d9d48b705a6315158e4035e64f7a93ce8656a1b053c'
+RUST_TOOLCHAIN='1.99.0'
 JOBS="${CARGO_BUILD_JOBS:-4}"
 [[ "$JOBS" =~ ^[1-9][0-9]*$ ]] || { echo 'CARGO_BUILD_JOBS must be positive' >&2; exit 2; }
 COMMIT="$(git rev-parse HEAD)"
@@ -34,14 +36,17 @@ docker run --rm --init --platform linux/amd64 \
   --mount "type=bind,source=$ROOT,target=/src,readonly" \
   --mount "type=bind,source=$OUTPUT,target=/out" \
   --mount type=volume,source=silverhand-rust-linux-registry,target=/usr/local/cargo/registry \
-  --mount type=volume,source=silverhand-rust-linux-target-1-94,target=/cargo-target \
+  --mount type=volume,source=silverhand-rust-linux-rustup,target=/rustup \
+  --mount "type=volume,source=silverhand-rust-linux-target-${RUST_TOOLCHAIN//./-},target=/cargo-target" \
+  --env RUSTUP_HOME=/rustup \
+  --env "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" \
   --workdir /src/rust \
   --env CARGO_TARGET_DIR=/cargo-target \
   --env "CARGO_BUILD_JOBS=$JOBS" \
   --env CARGO_HTTP_MULTIPLEXING=false \
   --env CARGO_HTTP_TIMEOUT=120 \
   --env CARGO_NET_RETRY=5 \
-  --env 'RUSTFLAGS=--remap-path-prefix=/src/=source/ --remap-path-prefix=/usr/local/cargo/registry/src/=cargo/ --remap-path-prefix=/usr/local/rustup/toolchains/=rustup/' \
+  --env 'RUSTFLAGS=--remap-path-prefix=/src/=source/ --remap-path-prefix=/usr/local/cargo/registry/src/=cargo/ --remap-path-prefix=/rustup/toolchains/=rustup/' \
   --env "BUILD_COMMIT=$COMMIT" --env "BUILD_DIRTY=$DIRTY" --env "BUILD_IMAGE=$IMAGE" \
   "$IMAGE" bash /src/scripts/build-rust-linux-container.sh
 

@@ -5408,7 +5408,7 @@ async fn assert_membership_hint_reaches_viewer(create_workspace: bool) {
         .into_iter()
         .filter(|id| !before_ids.contains(id))
         .collect();
-    assert_eq!(gained, [workspace_id.clone()]);
+    assert_eq!(gained, std::slice::from_ref(&workspace_id));
 
     // Idempotent re-enroll: a second identical POST still answers 201 but owes no
     // announce. The membership stays a single row and the viewer stream does NOT

@@ -17,7 +17,7 @@ publish npm packages, bump versions, or create tags.
 - Ordinary branch pushes and daemon tags do not trigger packaging.
 
 Version and source SHA come from the checked-out commit, not the latest main.
-Node 22, the root `packageManager` pnpm version and Rust 1.94.0 are used; pnpm
+Node 22, the root `packageManager` pnpm version and Rust 1.99.0 are used; pnpm
 and Cargo lockfiles are enforced. Actions are SHA-pinned. Rust compilation is
 cached for embedded builds; target/config/toolchain changes invalidate its key.
 Each build job has a 60-minute timeout, adjustable after hosted-runner evidence.
