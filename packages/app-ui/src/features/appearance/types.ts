@@ -41,7 +41,7 @@ export interface AppearanceSettings {
 }
 
 export const DEFAULT_APPEARANCE: AppearanceSettings = {
-  theme: "poster",
+  theme: "studio-light",
 };
 
 /** Allowed font-size range for the shared markdown override. Out-of-range
