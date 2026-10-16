@@ -98,7 +98,7 @@ const CAPABILITY_LABELS: Record<AgentCapability, { label: string; hint: string }
   create_channels: { label: "Create channels", hint: "Create channels." },
   manage_conversation_members: {
     label: "Manage members",
-    hint: "Add workspace members to channels and threads.",
+    hint: "Add project members to channels and threads.",
   },
   manage_schedules: {
     label: "Manage schedules",

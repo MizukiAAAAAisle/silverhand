@@ -329,7 +329,7 @@ function RegularMemberPicker({
       <div className="flex flex-col gap-1.5">
         <Label>Members</Label>
         <span className="text-xs text-text-muted">
-          This workspace has no members yet. Add them from the Members panel first.
+          This project has no members yet. Add them from the Members panel first.
         </span>
       </div>
     );

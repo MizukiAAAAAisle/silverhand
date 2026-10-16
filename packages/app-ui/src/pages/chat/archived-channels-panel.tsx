@@ -133,7 +133,7 @@ export function ArchivedChannelsPanel({
           className="shrink-0 border-b border-border-subtle px-4 py-3"
         >
           <div className="flex flex-wrap items-end gap-3">
-            <FilterBlock label="Workspace" className="w-full sm:w-72">
+            <FilterBlock label="Project" className="w-full sm:w-72">
               <WorkspaceFilterSelect
                 value={workspaceFilter}
                 workspaces={workspaces}
@@ -158,7 +158,7 @@ export function ArchivedChannelsPanel({
          * reaching anything archived inside it. */}
         {workspaceRows.length > 0 ? (
           <section>
-            <SectionLabel text="Workspaces" />
+            <SectionLabel text="Projects" />
             <ul className="space-y-2">
               {workspaceRows.map((workspace) => (
                 <ArchivedWorkspaceRow
@@ -211,7 +211,7 @@ export function ArchivedChannelsPanel({
           <EmptyState
             text={
               hasFilters
-                ? "No archived workspaces or channels match these filters"
+                ? "No archived projects or channels match these filters"
                 : "Nothing archived"
             }
           />
@@ -281,7 +281,7 @@ function ArchivedWorkspaceRow({
             onClick={onSettings}
             className="m-3 ml-0 inline-flex size-7 shrink-0 items-center justify-center self-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover focus-outline"
             aria-label={`Settings for ${workspace.name}`}
-            title="Workspace settings"
+            title="Project settings"
           >
             <SettingsIcon className="size-3.5" />
           </button>
@@ -295,7 +295,7 @@ function ArchivedWorkspaceRow({
           disabled={restorePending}
           className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
           aria-label={`Restore ${archivedWorkspaceRowLabel(workspace)}`}
-          title="Restore workspace"
+          title="Restore project"
         >
           <UnarchiveIcon className="size-3.5" />
           Restore
@@ -339,7 +339,7 @@ function ArchivedChannelRow({
               <span className="font-medium text-text-primary">
                 {archivedRowWorkspaceLabel(item)}
               </span>
-              {item.workspace.archived_at !== null ? <span>archived workspace</span> : null}
+              {item.workspace.archived_at !== null ? <span>archived project</span> : null}
             </span>
             <span className="mt-1 block truncate text-sm font-medium text-text-primary">
               {item.channel.title}

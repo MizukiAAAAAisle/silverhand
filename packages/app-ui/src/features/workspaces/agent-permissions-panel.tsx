@@ -89,7 +89,7 @@ export function AgentPermissionsPanel({
   }
   if (agents.length === 0) {
     return (
-      <PanelEmpty icon={<EmptyIcon className="size-6" />}>No agents in this workspace</PanelEmpty>
+      <PanelEmpty icon={<EmptyIcon className="size-6" />}>No agents in this project</PanelEmpty>
     );
   }
 

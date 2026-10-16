@@ -169,7 +169,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
         : null,
       {
         id: "create-workspace",
-        label: "New workspace",
+        label: "New project",
         icon: iconMarkup(PlusIcon),
         primary: true,
         run: props.onCreateWorkspace,
@@ -302,7 +302,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                   ))}
                 </SortableGroup>
                 {props.workspacesLoading && props.workspaces.length === 0 ? (
-                  <SidebarRowsSkeleton label="Loading workspaces" />
+                  <SidebarRowsSkeleton label="Loading projects" />
                 ) : null}
               </>
             )}
@@ -319,7 +319,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                   onClick={props.onCreateWorkspace}
                 >
                   <PlusIcon className="size-4" />
-                  <span>New workspace</span>
+                  <span>New project</span>
                 </Button>
               </div>
             )}

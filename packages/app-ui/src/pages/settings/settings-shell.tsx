@@ -371,7 +371,7 @@ function AppearancePane({
 }
 
 const SIDEBAR_STYLE_META: Record<SidebarStyle, string> = {
-  tree: "Workspace groups",
+  tree: "Project groups",
   recent: "Chat list",
 };
 

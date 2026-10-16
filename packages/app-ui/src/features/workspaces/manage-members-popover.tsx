@@ -168,9 +168,7 @@ export function WorkspaceMembersPanel({
           disabled={addMember.isPending}
           ariaLabel={canAddHumans ? "Add member" : "Add agent"}
           emptyHint={
-            canAddHumans
-              ? "Everyone is already in this workspace"
-              : "You have no agents left to add"
+            canAddHumans ? "Everyone is already in this project" : "You have no agents left to add"
           }
         />
       ) : null}
@@ -294,12 +292,11 @@ function formatAddError(err: unknown): string {
     if (code === "agent_not_owned") {
       return "You can only add agents you created. Someone else's can be brought in only by its creator.";
     }
-    if (err.status === 403)
-      return "You do not have permission to manage members of this workspace.";
+    if (err.status === 403) return "You do not have permission to manage members of this project.";
     if (err.status === 404) {
       if (detail === "user not found") return "This user does not exist or has been deleted.";
       if (detail === "agent not found") return "This agent does not exist or has been deleted.";
-      return "This workspace does not exist.";
+      return "This project does not exist.";
     }
     if (err.status === 400) return "Invalid parameters. Please refresh and try again.";
     return `Failed to add member (HTTP ${err.status}).`;
@@ -318,7 +315,7 @@ function formatRemoveAgentError(err: unknown): string {
   if (err instanceof ApiError) {
     const { code } = parseApiErrorBody(err.body);
     if (code === "agent_not_owned") {
-      return "You can only remove agents you created. Ask a workspace admin for the others.";
+      return "You can only remove agents you created. Ask a project admin for the others.";
     }
     if (err.kind === "backend_unreachable") return "Remove failed: cannot reach the backend.";
     if (err.status === 403) return "You do not have permission to remove this member.";
@@ -339,7 +336,7 @@ function formatRemoveHumanError(err: unknown): string {
     if (err.kind === "backend_unreachable") return "Remove failed: cannot reach the backend.";
     if (err.status === 403)
       return "You do not have permission to remove this member (owner required).";
-    if (err.status === 400) return "Cannot remove the workspace owner.";
+    if (err.status === 400) return "Cannot remove the project owner.";
     if (err.status === 404) return "This member does not exist or has already been removed.";
     return `Failed to remove member (HTTP ${err.status}).`;
   }

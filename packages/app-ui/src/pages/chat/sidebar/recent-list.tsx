@@ -189,7 +189,7 @@ export function RecentList(props: {
           {liveWorkspaces.length > 1 ? (
             <div
               role="radiogroup"
-              aria-label="Filter by workspace"
+              aria-label="Filter by project"
               className="scrollbar-hide flex min-w-0 flex-1 gap-1 overflow-x-auto mask-[linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] pr-4"
             >
               <FilterChip

@@ -35,10 +35,10 @@ export function WorkspaceFilterSelect({
   value,
   workspaces,
   onChange,
-  allLabel = "All workspaces",
+  allLabel = "All projects",
   allIcon,
   showArchivedSuffix = false,
-  ariaLabel = "Workspace filter",
+  ariaLabel = "Project filter",
 }: {
   value: WorkspaceFilterValue;
   /** Full list — every workspace the viewer can see is offered. */
@@ -111,7 +111,7 @@ export function WorkspaceFilterSelect({
                     }
                     suffix={
                       showArchivedSuffix && workspace.archived_at !== null
-                        ? "archived workspace"
+                        ? "archived project"
                         : undefined
                     }
                   >
@@ -123,7 +123,7 @@ export function WorkspaceFilterSelect({
             {peopleOwned.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
-                  Workspaces
+                  Projects
                 </Select.Label>
                 {peopleOwned.map((workspace) => (
                   <FilterSelectItem
@@ -137,7 +137,7 @@ export function WorkspaceFilterSelect({
                     }
                     suffix={
                       showArchivedSuffix && workspace.archived_at !== null
-                        ? "archived workspace"
+                        ? "archived project"
                         : undefined
                     }
                   >
@@ -170,13 +170,13 @@ function workspaceFilterLabel(
     // PLACEHOLDER, not a claim about ownership — a generic word and the neutral
     // badge, never the vanished workspace's identity.
     return {
-      label: "Workspace",
+      label: "Project",
       icon: <WorkspaceIcon ownerAgentId={null} ownerAgentAvatarUrls={agentAvatarUrls} />,
     };
   }
   // One label either way (the row's own name); only the identity glyph
   // differs — an agent space wears its agent's face, a people-owned workspace the
-  // serif "W", and `WorkspaceIcon` picks that off the ownership arc itself.
+  // serif "P", and `WorkspaceIcon` picks that off the ownership arc itself.
   return {
     label: workspace.name,
     icon: (

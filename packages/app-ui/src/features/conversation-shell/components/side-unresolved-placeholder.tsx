@@ -34,7 +34,7 @@ const STATUS_COPY: Record<SidePlaceholderStatus, { header: string; body: string;
       // DM the viewer isn't in — so "you don't have access to the workspace"
       // would be a false statement about the one thing the viewer can verify.
       body: "You don't have access to this conversation.",
-      hint: "It may be private, archived, or in another workspace.",
+      hint: "It may be private, archived, or in another project.",
     },
     not_found: {
       header: "Conversation not found",

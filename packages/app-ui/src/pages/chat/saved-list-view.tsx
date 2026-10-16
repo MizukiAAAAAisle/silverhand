@@ -198,7 +198,7 @@ export function SavedListView({
             className="shrink-0 border-b border-border-subtle px-4 py-3"
           >
             <div className="flex flex-wrap items-end gap-3">
-              <FilterBlock label="Workspace" className="w-full sm:w-72">
+              <FilterBlock label="Project" className="w-full sm:w-72">
                 <WorkspaceFilterSelect
                   value={workspace}
                   workspaces={workspaces}
@@ -365,7 +365,7 @@ function SavedItem({
               {/* The workspace segment is drawn only when the join RESOLVED
                   (#task:2078). It used to render unconditionally, filling the
                   gaps with `kind ?? 'regular'` + `name ?? ''` — so an
-                  unresolved workspace read as a confident serif "W" beside a
+                  unresolved workspace read as a confident serif "P" beside a
                   blank name, i.e. absence dressed as a people-owned workspace.
                   Glyph and name are one nullability branch: either the row
                   states where it is, or it says nothing and lets the channel +

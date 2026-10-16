@@ -168,7 +168,7 @@ function WorkspaceSegment({ name }: { name: string }): JSX.Element {
           aria-hidden
           className="shrink-0 self-center font-serif text-(length:--text-strong) font-semibold leading-none"
         >
-          W
+          P
         </span>
       }
       label={name}
@@ -203,7 +203,7 @@ function Segment({ sigil, label }: { sigil: JSX.Element; label: string }): JSX.E
  *  does; a thread renames the whole coordinate because the thread IS what a
  *  thread-bearing locator points at. */
 function locatorTooltip(locator: Locator): string {
-  if (locator.kind === "workspace") return `Workspace ${locator.workspace.name}`;
+  if (locator.kind === "workspace") return `Project ${locator.workspace.name}`;
   const [kind, path] =
     locator.kind === "channel"
       ? [faceLabel("channel"), `${locator.workspace.name} / ${locator.channel.title}`]

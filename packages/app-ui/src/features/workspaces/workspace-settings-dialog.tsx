@@ -131,7 +131,7 @@ export function WorkspaceSettingsDialog({
     if (!workspaceId) return;
     const trimmed = name.trim();
     if (!trimmed) {
-      setRenameError("Please enter a workspace name");
+      setRenameError("Please enter a project name");
       return;
     }
     // ONE format rule for both doors (#task:1827): the shared
@@ -196,7 +196,7 @@ export function WorkspaceSettingsDialog({
       <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-baseline gap-2">
-            Workspace Settings
+            Project Settings
             {workspaceName ? (
               <span className="min-w-0 truncate text-sm font-normal text-text-muted">
                 {workspaceName}
@@ -432,7 +432,7 @@ function GeneralSection({
           <div className="flex items-center justify-between gap-3 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3">
             <div className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-text-primary">
-                {isArchived ? "Archived" : "Archive workspace"}
+                {isArchived ? "Archived" : "Archive project"}
               </span>
               <span className="text-xs text-text-muted">
                 {isArchived
@@ -462,7 +462,7 @@ function GeneralSection({
 
           <div className="flex flex-col gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-error/30 bg-error/5 p-3">
             <div className="flex flex-col gap-0.5">
-              <span className="text-sm font-medium text-text-primary">Delete workspace</span>
+              <span className="text-sm font-medium text-text-primary">Delete project</span>
               <span className="text-xs text-text-muted">
                 All channels, threads, and messages are removed permanently and cannot be recovered.
               </span>
@@ -471,9 +471,9 @@ function GeneralSection({
               <DeleteButton
                 onConfirm={onDelete}
                 disabled={!workspaceId || deletePending}
-                confirmLabel="Confirm delete workspace"
+                confirmLabel="Confirm delete project"
               >
-                {deletePending ? "Deleting…" : "Delete workspace"}
+                {deletePending ? "Deleting…" : "Delete project"}
               </DeleteButton>
             </div>
           </div>
@@ -492,9 +492,9 @@ function GeneralSection({
       {hasLifecycle && canLeave ? (
         <div className="flex flex-col gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3">
           <div className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium text-text-primary">Leave workspace</span>
+            <span className="text-sm font-medium text-text-primary">Leave project</span>
             <span className="text-xs text-text-muted">
-              You leave this workspace and all its channels.
+              You leave this project and all its channels.
             </span>
           </div>
           <div className="flex justify-end">
@@ -502,10 +502,10 @@ function GeneralSection({
               onConfirm={onLeave}
               variant="neutral"
               disabled={!workspaceId || leavePending}
-              confirmLabel="Confirm leave workspace"
+              confirmLabel="Confirm leave project"
             >
               <LeaveIcon className="size-3.5" />
-              {leavePending ? "Leaving…" : "Leave workspace"}
+              {leavePending ? "Leaving…" : "Leave project"}
             </DeleteButton>
           </div>
         </div>

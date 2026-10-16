@@ -37,7 +37,7 @@ describe("RenameRow scope (#task:1109)", () => {
     // `scope` splits only the VERB (a workspace rename broadcasts to every
     // channel, a channel rename does not) — and legacy rows without it default
     // to 'workspace'.
-    expect(html).toContain("workspace renamed");
+    expect(html).toContain("project renamed");
     // A workspace name is a free-text label since #task:1827 — Chinese and
     // spaces are legal and it is not `#`-addressable, so BOTH scopes render the
     // bare name. A `#` prefix would spell a channel reference resolving to

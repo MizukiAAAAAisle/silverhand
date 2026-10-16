@@ -93,7 +93,7 @@ export interface ChannelOption {
  *  message-search workspace filter, which lists them too). `ownerAgentId` is both
  *  halves of the identity: it says WHICH side of the split this row is on and, for
  *  an agent space, WHICH agent's avatar the canonical {@link WorkspaceIcon} shows —
- *  a serif "W" when it is null (#task:2078). */
+ *  a serif "P" when it is null (#task:2078). */
 export interface WorkspaceOption {
   id: string;
   label: string;
@@ -552,7 +552,7 @@ function ChannelFilter({
   const sections = useMemo(
     () =>
       [
-        { key: "workspace" as const, label: "Workspaces" },
+        { key: "workspace" as const, label: "Projects" },
         { key: "agent_space" as const, label: "Agent Spaces" },
       ]
         .map((s) => ({ ...s, items: filtered.filter((o) => o.group === s.key) }))
@@ -814,7 +814,7 @@ function BoardScopeFilter({
           active={containerValue !== null}
           aria-label="Board scope"
         >
-          {`Workspace:${selectedWs?.label ?? "All"}`}
+          {`Project:${selectedWs?.label ?? "All"}`}
         </FilterTrigger>
       </Popover.Trigger>
       <FilterPanel

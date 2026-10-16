@@ -321,7 +321,7 @@ export function RenameRow(props: RendererProps): JSX.Element {
       className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
     >
       <EditIcon aria-hidden className="size-3.5 shrink-0 opacity-60" />
-      <span>{isConversation ? "channel renamed" : "workspace renamed"}</span>
+      <span>{isConversation ? "channel renamed" : "project renamed"}</span>
       <span className="text-text-secondary">{meta.old_name}</span>
       <span aria-hidden>→</span>
       <span className="font-medium text-text-primary">{meta.new_name}</span>

@@ -93,7 +93,7 @@ function WorkspaceLeaveMenuItem({
 
   return (
     <AppContextMenuItem icon={<LeaveIcon className="size-3.5" />} onSelect={onSelect}>
-      Leave workspace
+      Leave project
     </AppContextMenuItem>
   );
 }
