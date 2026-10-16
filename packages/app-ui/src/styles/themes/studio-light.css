@@ -234,12 +234,6 @@
   --panel-border-width: 1px;
 }
 
-/* Hooks: Identity */
-
-[data-theme="studio-light"] [data-panel="sidebar"] {
-  --pane-bg: #f7f8fa;
-}
-
 /* Hooks: Messages and composer */
 
 [data-theme="studio-light"] [data-message-task-tag] {
