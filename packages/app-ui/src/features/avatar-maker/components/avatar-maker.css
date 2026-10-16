@@ -58,8 +58,34 @@
   grid-auto-rows: max-content;
   align-content: start;
   gap: 8px;
+  /* Room for the selection ring, which draws outside the tiles. */
+  padding: 4px;
   overflow-y: auto;
   scrollbar-width: none;
+}
+
+/* The part art is black ink drawn for a light ground, so tiles keep a paper ground in
+   every theme; the selection ring sits outside the tile so it reads on light and dark. */
+.avatar-maker-tile {
+  background: color-mix(in oklab, #111 7%, white);
+}
+
+.avatar-maker-tile:hover {
+  background: color-mix(in oklab, #111 11%, white);
+}
+
+.avatar-maker-tile[aria-checked="true"] {
+  background: white;
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+.avatar-maker-tile-none {
+  color: #8a8a8a;
+}
+
+.avatar-maker-swatch {
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12);
 }
 
 .avatar-maker-grid::-webkit-scrollbar,

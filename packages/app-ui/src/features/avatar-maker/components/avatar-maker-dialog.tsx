@@ -1,9 +1,11 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { toast } from "sonner";
 import "./avatar-maker.css";
 import { CancelledIcon, RandomizeIcon, UndoIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { cn } from "@/lib/cn";
+import { getPlatform } from "@/platform";
 import { AVATAR_LIBRARY } from "../model/avatar-library";
 import {
   composePartThumbnailSvg,
@@ -49,6 +51,18 @@ export function AvatarMakerDialog({
   initialConfig,
   onSave,
 }: AvatarMakerDialogProps) {
+  // Read only while open: closed editors render on every avatar surface, including tests
+  // and previews that configure no platform.
+  if (open && getPlatform().avatarMaker) {
+    return (
+      <NativeAvatarMaker
+        onOpenChange={onOpenChange}
+        initialConfig={initialConfig}
+        onSave={onSave}
+      />
+    );
+  }
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -76,6 +90,44 @@ export function AvatarMakerDialog({
       </DialogContent>
     </Dialog>
   );
+}
+
+/** Hands the edit to the platform's native editor; storage stays with the caller.
+ *  Mounted only while open, so one mount is one presentation. */
+function NativeAvatarMaker({
+  onOpenChange,
+  initialConfig,
+  onSave,
+}: Omit<AvatarMakerDialogProps, "open">) {
+  const presented = useRef(false);
+
+  useEffect(() => {
+    const maker = getPlatform().avatarMaker;
+
+    // StrictMode re-runs effects on the same mount; the ref keeps it to one sheet.
+    if (!maker || presented.current) {
+      return;
+    }
+
+    presented.current = true;
+
+    void (async () => {
+      try {
+        const result = await maker.edit({ config: initialConfig });
+
+        if (result) {
+          const png = new File([result.pngBytes], "avatar.png", { type: "image/png" });
+          await onSave({ config: result.config, png });
+        }
+      } catch {
+        toast.error("Couldn't save the avatar. Try again.");
+      } finally {
+        onOpenChange(false);
+      }
+    })();
+  }, [initialConfig, onSave, onOpenChange]);
+
+  return null;
 }
 
 function AvatarMakerBody({
@@ -174,7 +226,7 @@ function AvatarMakerBody({
                   onSelect={() => setConfig((current) => ({ ...current, bg: index }))}
                 >
                   <span
-                    className="size-1/2 rounded-full border border-border-subtle"
+                    className="avatar-maker-swatch size-1/2 rounded-full"
                     style={{ background: color }}
                   />
                 </PartTile>
@@ -189,7 +241,7 @@ function AvatarMakerBody({
                           selected={config.parts[tab] === -1}
                           onSelect={() => selectPart(-1)}
                         >
-                          <CancelledIcon className="size-5 text-text-muted" />
+                          <CancelledIcon className="avatar-maker-tile-none size-5" />
                         </PartTile>,
                       ]
                     : []),
@@ -244,10 +296,7 @@ function PartTile({
       aria-label={label}
       onClick={onSelect}
       className={cn(
-        "grid aspect-square place-items-center overflow-hidden rounded-(--control-radius) p-1.5 transition-colors focus-outline",
-        selected
-          ? "bg-bg-base shadow-[inset_0_0_0_2px_var(--text-primary)]"
-          : "bg-bg-inset hover:bg-bg-hover",
+        "avatar-maker-tile grid aspect-square place-items-center overflow-hidden rounded-(--control-radius) p-1.5 transition-colors focus-outline",
       )}
     >
       {children}

@@ -116,6 +116,15 @@ export interface AppUpdateCapability {
   onShowDialog(handler: () => void): () => void;
 }
 
+/** A native avatar editor over the shared part library. The UI owns storage: it
+ *  passes the starting config and uploads what comes back. */
+export interface AvatarMakerCapability {
+  /** Null when the person closes the editor without choosing. */
+  edit(input: {
+    config: { parts: Record<string, number>; bg: number };
+  }): Promise<{ config: { parts: Record<string, number>; bg: number }; pngBytes: Uint8Array<ArrayBuffer> } | null>;
+}
+
 /** Installed once by an application entry point, before mounting the UI. */
 export interface ClientPlatform {
   client: ClientAdapter;
@@ -128,6 +137,7 @@ export interface ClientPlatform {
   pageBar?: PageBarCapability;
   composer?: ComposerCapability;
   banner?: BannerCapability;
+  avatarMaker?: AvatarMakerCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
   /** The store page this build is installed from, offered when the server requires a newer app. */

@@ -79,6 +79,10 @@ export interface NativeBridge {
   closeSocket(input: { id: string }): Promise<void>;
   saveAttachment(input: { filename: string; base64: string }): Promise<{ completed: boolean }>;
   sharePng(input: { base64: string }): Promise<{ completed: boolean }>;
+  /** The native avatar editor; both fields are absent when it was dismissed. */
+  avatarMakerEdit(input: {
+    config: { parts: Record<string, number>; bg: number };
+  }): Promise<{ config?: { parts: Record<string, number>; bg: number }; base64?: string }>;
   openExternal(input: { url: string }): Promise<void>;
   appVersion(): Promise<{ version: string }>;
   addListener(

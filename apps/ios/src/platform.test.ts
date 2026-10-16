@@ -54,6 +54,7 @@ function harness() {
     addListener: vi.fn(async () => ({ remove: vi.fn() })),
     saveAttachment: vi.fn(async () => ({ completed: true })),
     sharePng: vi.fn(async () => ({ completed: true })),
+    avatarMakerEdit: vi.fn(async () => ({})),
     openExternal: vi.fn(),
     appVersion: vi.fn(async () => ({ version: "1.0" })),
     openSocket: vi.fn(),
@@ -127,6 +128,22 @@ describe("iOS platform", () => {
     expect(await platform.files.sharePngExport!({ pngBytes })).toEqual({
       ok: false,
       error: "Sharing unavailable",
+    });
+  });
+  it("returns the native avatar editor's config and exact PNG bytes, or null when dismissed", async () => {
+    const { native, platform } = harness();
+    const config = { parts: { eyes: 2 }, bg: 1 };
+    expect(await platform.avatarMaker!.edit({ config })).toBeNull();
+    expect(native.avatarMakerEdit).toHaveBeenCalledWith({ config });
+
+    const pngBytes = Uint8Array.from([137, 80, 78, 71, 0, 255]);
+    native.avatarMakerEdit.mockResolvedValueOnce({
+      config: { parts: { eyes: 3 }, bg: 0 },
+      base64: btoa(String.fromCharCode(...pngBytes)),
+    } as never);
+    expect(await platform.avatarMaker!.edit({ config })).toEqual({
+      config: { parts: { eyes: 3 }, bg: 0 },
+      pngBytes,
     });
   });
   it("never advertises local host or desktop shell capabilities", async () => {
@@ -231,6 +248,13 @@ describe("iOS platform", () => {
       signup: authPaths.signup,
       logout: authPaths.logout,
     });
+  });
+
+  it("bundles the same avatar part library the web editor draws from", () => {
+    const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+    expect(read("../native/Sources/SilverhandNative/Resources/AvatarLibrary.json")).toBe(
+      read("../../../packages/app-ui/src/features/avatar-maker/model/avatar-library.json"),
+    );
   });
 
   it("has no remote WebView URL, wildcard navigation or relaxed TLS", () => {

@@ -15,6 +15,7 @@ import { createIOSPageBar } from "./page-bar";
 import { createIOSBanner } from "./banner";
 import { createIOSComposer } from "./composer";
 import { createIOSFiles, encodeBytes } from "./files";
+import { createIOSAvatarMaker } from "./avatar-maker";
 
 function parse(text?: string): unknown {
   try {
@@ -61,6 +62,7 @@ export function createIOSPlatform(
     pageBar: createIOSPageBar(bridge),
     composer: createIOSComposer(bridge),
     banner: createIOSBanner(bridge),
+    avatarMaker: createIOSAvatarMaker(bridge),
     client: {
       getConnectionPolicy: async () => ({ allow_insecure_remote: false }),
       getConnectionInfo: async () => {

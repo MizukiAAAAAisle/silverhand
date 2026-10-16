@@ -12,7 +12,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "bannerShow", "sharePng", "saveAttachment",
+    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "bannerShow", "sharePng", "saveAttachment", "avatarMakerEdit",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -84,6 +84,32 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
           call.resolve(["completed": completed])
         }
         host.present(picker, animated: true)
+      } catch { call.reject(error.localizedDescription) }
+    }
+  }
+
+  @objc func avatarMakerEdit(_ call: CAPPluginCall) {
+    let config = call.getObject("config") ?? [:]
+    let parts = (config["parts"] as? [String: Any] ?? [:]).compactMapValues { $0 as? Int }
+    let bg = config["bg"] as? Int ?? 0
+    Task { @MainActor in
+      guard let host = self.bridge?.viewController, host.view.window != nil,
+        host.presentedViewController == nil
+      else {
+        call.reject("Unable to present the avatar editor")
+        return
+      }
+      do {
+        try SilverhandAvatarMaker.present(from: host, parts: parts, bg: bg) { result in
+          guard let result else {
+            call.resolve([:])
+            return
+          }
+          call.resolve([
+            "config": ["parts": result.config.parts, "bg": result.config.bg],
+            "base64": result.png.base64EncodedString(),
+          ])
+        }
       } catch { call.reject(error.localizedDescription) }
     }
   }
