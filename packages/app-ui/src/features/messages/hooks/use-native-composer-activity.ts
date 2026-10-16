@@ -16,7 +16,7 @@ const FACES = 3;
  * web line's resting state without the snippet, which a phone has no room for.
  */
 export function useNativeComposerActivity(
-  conversationId: string,
+  conversationId: string | null,
   restrictToAgentIds: readonly string[] | null | undefined,
   enabled: boolean,
 ): ComposerActivity | undefined {

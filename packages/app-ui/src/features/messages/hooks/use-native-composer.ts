@@ -25,7 +25,8 @@ interface NativeComposerOptions {
   /** False while something covers the composer. */
   shown: boolean;
   draftKey: string;
-  conversationId: string;
+  /** Null while the conversation does not exist yet (a direct-message draft). */
+  conversationId: string | null;
   placeholder: string;
   enabled: boolean;
   canSend: boolean;
