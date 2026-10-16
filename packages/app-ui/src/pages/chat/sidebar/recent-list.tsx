@@ -423,8 +423,8 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
           ) : null}
           <span
             className={cn(
-              "min-w-0 truncate text-[13px] leading-4",
-              selected || row.badge ? "font-semibold text-text-primary" : "font-medium",
+              "min-w-0 truncate text-[13px] leading-4 text-text-primary",
+              selected || row.badge ? "font-semibold" : "font-medium",
               selected && "text-text-nav-selected",
             )}
           >
@@ -461,7 +461,7 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
                 className="mr-1 inline size-3 align-[-2px]"
               />
             ) : null}
-            {senderLabel ? <span className="text-text-secondary">{senderLabel}: </span> : null}
+            {senderLabel ? `${senderLabel}: ` : null}
             {preview}
           </span>
           {row.kind === "channel" && row.muted ? <MutedMarker /> : null}
