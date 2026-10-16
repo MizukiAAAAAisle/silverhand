@@ -133,7 +133,7 @@ export function useLayoutKeyboardShortcuts(
 }
 
 /**
- * App menu's "Settings…" item (Cmd+,) — main process focuses the window and
+ * App menu's "Settings" item (Cmd+,) — main process focuses the window and
  * pushes this; renderer just navigates. `toSettings` is stable across renders.
  */
 export function useSettingsMenuNav(toSettings: () => void): void {

@@ -2081,7 +2081,7 @@ function createWindow(): void {
 function buildAppMenu(): Menu {
   const isMac = process.platform === "darwin";
 
-  // macOS convention: "Settings…" lives in the App menu directly under
+  // macOS convention: "Settings" lives in the App menu directly under
   // About, with the standard Cmd+, accelerator. Electron's
   // `{ role: 'appMenu' }` shortcut omits Settings, so we hand-build the
   // App submenu here when running on darwin.
@@ -2095,7 +2095,7 @@ function buildAppMenu(): Menu {
             : []),
           { type: "separator" },
           {
-            label: "Settings…",
+            label: "Settings",
             accelerator: "CmdOrCtrl+,",
             click: () => openSettings(),
           },
@@ -2165,7 +2165,7 @@ function buildAppMenu(): Menu {
 
 /**
  * Show + focus the main window and tell the renderer to navigate to the
- * Settings page. Triggered by the App menu's "Settings…" item (Cmd+,).
+ * Settings page. Triggered by the App menu's "Settings" item (Cmd+,).
  * If the window was closed (mac-style background app) we recreate it so
  * the shortcut also brings the app back from the dock.
  */

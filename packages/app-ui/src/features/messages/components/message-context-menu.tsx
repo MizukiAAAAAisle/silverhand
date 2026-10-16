@@ -30,7 +30,7 @@ import {
  * - **Save / Unsave** (`onToggleSave` + `saved`) — label switches
  *   based on current `saved` state. We never silently flip "Save"
  *   into a destructive unsave — Cindy's review constraint #2.
- * - **Share…** (`onShare`) — enters multi-select mode with this
+ * - **Share** (`onShare`) — enters multi-select mode with this
  *   message preselected. Hidden until the export pipeline lands
  *   (Cindy's "no half-baked Share entry" constraint), so callers
  *   in the unfinished commits omit `onShare` entirely.
@@ -160,7 +160,7 @@ export function MessageContextMenu({
         <>
           <AppContextMenuSeparator />
           <AppContextMenuItem icon={<ShareLinkIcon className="size-3.5" />} onSelect={onShare}>
-            Share…
+            Share
           </AppContextMenuItem>
         </>
       ) : null}

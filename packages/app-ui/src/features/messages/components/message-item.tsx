@@ -184,7 +184,7 @@ export interface MessageItemProps {
   onToggleSelected?: (msg: CachedMessage) => void;
   /** Right-click → Copy markdown menu item. Hidden when undefined. */
   onCopyMarkdown?: (msg: CachedMessage) => void;
-  /** Right-click → Share… menu item. Hidden when undefined; the
+  /** Right-click → Share menu item. Hidden when undefined; the
    *  parent only passes this in once the export pipeline is live so
    *  the user never sees a half-baked Share entry (Cindy review). */
   onShare?: (msg: CachedMessage) => void;

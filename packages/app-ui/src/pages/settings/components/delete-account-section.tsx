@@ -78,7 +78,7 @@ export function DeleteAccountSection({ handle }: { handle: string }): JSX.Elemen
           setOpen(true);
         }}
       >
-        Delete account…
+        Delete account
       </Button>
       <DeleteAccountDialog
         open={open}

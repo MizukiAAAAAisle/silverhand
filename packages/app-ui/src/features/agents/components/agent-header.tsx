@@ -92,7 +92,7 @@ export function AgentHeader({
         <HeaderAction
           compact={compact}
           label="Delete"
-          title="Delete agent…"
+          title="Delete agent"
           destructive
           onClick={() => setDeleteOpen(true)}
         >

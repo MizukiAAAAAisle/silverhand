@@ -168,7 +168,7 @@ const api: DesktopBridge = {
     ipcRenderer.on("window:full-screen", listener);
     return () => ipcRenderer.off("window:full-screen", listener);
   },
-  /** Fired by the App menu's "Settings…" item (Cmd+,) so the renderer
+  /** Fired by the App menu's "Settings" item (Cmd+,) so the renderer
    *  can navigate to the Settings page. The main process also focuses
    *  the window before emitting, so the handler only needs to navigate. */
   onNavigateSettings: (handler: () => void): (() => void) => {

@@ -293,7 +293,7 @@ function RoleSelect({
             >
               <span className="w-3.5 shrink-0" />
               <Select.ItemText asChild>
-                <span className="text-xs font-medium">Transfer ownership…</span>
+                <span className="text-xs font-medium">Transfer ownership</span>
               </Select.ItemText>
             </Select.Item>
           </Select.Viewport>
