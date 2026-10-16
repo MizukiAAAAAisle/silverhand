@@ -4,6 +4,7 @@ import { agentStreamCache } from "@/features/agents/model/agent-stream-cache";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
+  AVATAR_DESIGN_FIELD,
   apiPaths,
   type AuthLoginInput,
   type AuthSignupInput,
@@ -16,6 +17,8 @@ import { ApiError, api, apiUpload } from "@/lib/api";
 import { clearCurrentUser, setCurrentUserId } from "@/features/session/current-user";
 import { eventWsClient } from "@/lib/ws-client";
 import { clearPlaceMemory } from "@/features/app-shell/place-memory";
+import { avatarDesignKey } from "@/features/avatar-maker/hooks/use-avatar-design";
+import type { DraftAvatar } from "@/features/avatar-maker/hooks/use-draft-avatar";
 import {
   clearAvatarBlobCache,
   getAvatarBlobUrl,
@@ -318,6 +321,8 @@ export interface UploadAvatarVars {
   /** Renderer-side limit so users get fast feedback before the
    *  upload starts. Backend mirrors this with the same shared cap. */
   file: File;
+  /** `avatarDesignField` output when the image came from the avatar maker. */
+  design?: string;
 }
 
 /** POST /api/me/avatar (multipart). Returns the new avatar_url +
@@ -325,15 +330,43 @@ export interface UploadAvatarVars {
 export function useUploadAvatar() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({ file }: UploadAvatarVars) => {
+    mutationFn: async ({ file, design }: UploadAvatarVars) => {
       const form = new FormData();
+      if (design) {
+        form.set(AVATAR_DESIGN_FIELD, design);
+      }
       form.set("file", file);
       return apiUpload<{ avatar_url: string; user: UserDto }>(apiPaths.meAvatar, form);
     },
     onSuccess: (result) => {
       cacheViewer(qc, result.user);
+      qc.removeQueries({ queryKey: avatarDesignKey("me") });
     },
   });
+}
+
+/** Uploads the avatar chosen on the signup form once the account exists. Best effort:
+ *  on failure the account keeps the initials fallback and the maker stays one click away. */
+export function useUploadDraftViewerAvatar() {
+  const qc = useQueryClient();
+
+  return (draft: DraftAvatar) => {
+    void (async () => {
+      const upload = await draft.resolve();
+
+      if (!upload) {
+        return;
+      }
+
+      const form = new FormData();
+      if (upload.design) {
+        form.set(AVATAR_DESIGN_FIELD, upload.design);
+      }
+      form.set("file", upload.file);
+      const result = await apiUpload<{ user: UserDto }>(apiPaths.meAvatar, form);
+      cacheViewer(qc, result.user);
+    })().catch(() => {});
+  };
 }
 
 /**

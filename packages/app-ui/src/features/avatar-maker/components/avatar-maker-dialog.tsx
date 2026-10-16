@@ -1,0 +1,285 @@
+import { useState } from "react";
+import "./avatar-maker.css";
+import { CancelledIcon, RandomizeIcon, UndoIcon } from "@/icons";
+import { Button } from "@/components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { cn } from "@/lib/cn";
+import { AVATAR_LIBRARY } from "../model/avatar-library";
+import {
+  composePartThumbnailSvg,
+  defaultAvatarConfig,
+  randomAvatarConfig,
+  type AvatarConfig,
+} from "../model/avatar-config";
+import { renderAvatarPng } from "../model/render-avatar-png";
+import { AvatarConfigPreview } from "./avatar-config-preview";
+
+const CATEGORY_LABELS: Record<string, string> = {
+  eyebrows: "Brows",
+  eyes: "Eyes",
+  nose: "Nose",
+  mouth: "Mouth",
+  hair: "Hair",
+  glasses: "Glasses",
+  headwear: "Headwear",
+  status: "Mood",
+  gesture: "Gesture",
+  buddy: "Buddy",
+  background: "Color",
+};
+
+const BACKGROUND_TAB = "background";
+
+export interface AvatarMakerResult {
+  config: AvatarConfig;
+  png: File;
+}
+
+export interface AvatarMakerDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  /** Starting point: the saved design when there is one, otherwise a random face. */
+  initialConfig: AvatarConfig;
+  onSave: (result: AvatarMakerResult) => Promise<void>;
+}
+
+export function AvatarMakerDialog({
+  open,
+  onOpenChange,
+  initialConfig,
+  onSave,
+}: AvatarMakerDialogProps) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent
+        data-avatar-maker
+        className="max-w-3xl gap-0 p-0"
+        cornerBand="top"
+        onOpenAutoFocus={(event) => {
+          // Focus the sheet itself: the first tabbable control is Reset, and a ring on it
+          // at open reads as a pending action.
+          event.preventDefault();
+          (event.currentTarget as HTMLElement).focus({ preventScroll: true });
+        }}
+        aria-describedby={undefined}
+      >
+        {open ? (
+          <AvatarMakerBody
+            initialConfig={initialConfig}
+            onCancel={() => onOpenChange(false)}
+            onSave={async (result) => {
+              await onSave(result);
+              onOpenChange(false);
+            }}
+          />
+        ) : null}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AvatarMakerBody({
+  initialConfig,
+  onCancel,
+  onSave,
+}: {
+  initialConfig: AvatarConfig;
+  onCancel: () => void;
+  onSave: (result: AvatarMakerResult) => Promise<void>;
+}) {
+  const [config, setConfig] = useState(initialConfig);
+  const [tab, setTab] = useState(AVATAR_LIBRARY.categories[0]?.id ?? BACKGROUND_TAB);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const category = AVATAR_LIBRARY.categories.find((candidate) => candidate.id === tab);
+  const tabs = [...AVATAR_LIBRARY.categories.map((candidate) => candidate.id), BACKGROUND_TAB];
+
+  const selectPart = (index: number) => {
+    setConfig((current) => ({ ...current, parts: { ...current.parts, [tab]: index } }));
+  };
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+
+    try {
+      const png = await renderAvatarPng(config);
+      await onSave({ config, png });
+    } catch {
+      setError("Couldn't save the avatar. Try again.");
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="flex min-w-0 flex-col">
+      <DialogHeader className="px-5 pt-4 pb-3">
+        <DialogTitle>Make an avatar</DialogTitle>
+      </DialogHeader>
+
+      <div className="avatar-maker-body">
+        <div className="avatar-maker-stage">
+          <div className="avatar-maker-preview">
+            <AvatarConfigPreview config={config} />
+          </div>
+          <div className="avatar-maker-actions">
+            <Button variant="neutral" size="sm" onClick={() => setConfig(randomAvatarConfig())}>
+              <RandomizeIcon className="size-3.5" />
+              Random
+            </Button>
+            <Button variant="neutral" size="sm" onClick={() => setConfig(defaultAvatarConfig())}>
+              <UndoIcon className="size-3.5" />
+              Reset
+            </Button>
+          </div>
+        </div>
+
+        <div
+          role="tablist"
+          aria-orientation="vertical"
+          aria-label="Avatar parts"
+          className="avatar-maker-tabs"
+        >
+          {tabs.map((id) => (
+            <button
+              key={id}
+              type="button"
+              role="tab"
+              aria-selected={tab === id}
+              onClick={() => setTab(id)}
+              className={cn(
+                "shrink-0 rounded-(--control-radius) px-3 py-1.5 text-left text-sm transition-colors focus-outline",
+                tab === id
+                  ? "bg-bg-hover font-medium text-text-primary"
+                  : "text-text-secondary hover:bg-bg-hover/60 hover:text-text-primary",
+              )}
+            >
+              {CATEGORY_LABELS[id] ?? id}
+            </button>
+          ))}
+        </div>
+
+        <div
+          role="radiogroup"
+          aria-label={CATEGORY_LABELS[tab] ?? tab}
+          className="avatar-maker-grid"
+        >
+          {tab === BACKGROUND_TAB
+            ? AVATAR_LIBRARY.backgrounds.map((color, index) => (
+                <PartTile
+                  key={color}
+                  label={`Color ${index + 1}`}
+                  selected={config.bg === index}
+                  onSelect={() => setConfig((current) => ({ ...current, bg: index }))}
+                >
+                  <span
+                    className="size-1/2 rounded-full border border-border-subtle"
+                    style={{ background: color }}
+                  />
+                </PartTile>
+              ))
+            : category
+              ? [
+                  ...(category.optional
+                    ? [
+                        <PartTile
+                          key="none"
+                          label="None"
+                          selected={config.parts[tab] === -1}
+                          onSelect={() => selectPart(-1)}
+                        >
+                          <CancelledIcon className="size-5 text-text-muted" />
+                        </PartTile>,
+                      ]
+                    : []),
+                  ...category.parts.map((_, index) => (
+                    <PartTile
+                      key={index}
+                      label={`${CATEGORY_LABELS[tab] ?? tab} ${index + 1}`}
+                      selected={config.parts[tab] === index}
+                      onSelect={() => selectPart(index)}
+                    >
+                      <PartThumbnail svg={composePartThumbnailSvg(tab, index)} />
+                    </PartTile>
+                  )),
+                ]
+              : null}
+        </div>
+      </div>
+
+      <div className="flex items-center justify-end gap-2 px-5 py-3">
+        {error ? (
+          <p role="alert" className="mr-auto text-xs text-error">
+            {error}
+          </p>
+        ) : null}
+        <Button variant="cancel" onClick={onCancel} disabled={saving}>
+          Cancel
+        </Button>
+        <Button variant="primary" onClick={() => void save()} disabled={saving}>
+          {saving ? "Saving…" : "Use avatar"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+function PartTile({
+  label,
+  selected,
+  onSelect,
+  children,
+}: {
+  label: string;
+  selected: boolean;
+  onSelect: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      role="radio"
+      aria-checked={selected}
+      aria-label={label}
+      onClick={onSelect}
+      className={cn(
+        "grid aspect-square place-items-center overflow-hidden rounded-(--control-radius) p-1.5 transition-colors focus-outline",
+        selected
+          ? "bg-bg-base shadow-[inset_0_0_0_2px_var(--text-primary)]"
+          : "bg-bg-inset hover:bg-bg-hover",
+      )}
+    >
+      {children}
+    </button>
+  );
+}
+
+// Parts range from a pair of brow strokes to a full hood, so a fixed category crop
+// leaves small parts as specks. Each tile crops to its own drawing instead.
+const THUMBNAIL_PADDING = 0.14;
+const THUMBNAIL_MIN_SIDE = 28;
+
+function PartThumbnail({ svg }: { svg: string }) {
+  const fit = (host: HTMLSpanElement | null) => {
+    const element = host?.querySelector("svg");
+
+    if (!element) {
+      return;
+    }
+
+    const box = element.getBBox();
+    const side = Math.max(box.width, box.height, THUMBNAIL_MIN_SIDE) * (1 + THUMBNAIL_PADDING * 2);
+    const x = box.x + box.width / 2 - side / 2;
+    const y = box.y + box.height / 2 - side / 2;
+    element.setAttribute("viewBox", `${x} ${y} ${side} ${side}`);
+  };
+
+  return (
+    <span
+      ref={fit}
+      className="size-full [&>svg]:size-full"
+      dangerouslySetInnerHTML={{ __html: svg }}
+    />
+  );
+}

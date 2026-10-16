@@ -86,10 +86,10 @@ export function composeAvatarSvg(
   }
 
   const hidden = new Set([...selected.values()].flatMap((part) => part.hides ?? []));
-  const half = library.size / 2;
   const layers = library.order.map((slot) => {
     if (slot === "background") {
-      return `<circle cx="${half}" cy="${half}" r="${half}" fill="${library.backgrounds[config.bg] ?? library.backgrounds[0]}"/>`;
+      // Full-bleed square: every surface clips avatars to its own theme shape.
+      return `<rect width="${library.size}" height="${library.size}" fill="${library.backgrounds[config.bg] ?? library.backgrounds[0]}"/>`;
     }
 
     if (slot === "face") {

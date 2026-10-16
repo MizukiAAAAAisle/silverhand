@@ -351,6 +351,10 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyC
     reason:
       "['attention','badges'] roll-up + ['attention','modes', wsId] tier batch (#task:1870) — both are server membership-filtered (each JOINs conversation_users) and neither is patchable here: the badge is an absolute per-workspace number this client cannot recompute, and the batch's rows are the server's tier resolution. Settled by invalidate-and-re-read on workspace_channels_changed / snapshot_required — a membership change deliberately emits NO attention_badge_updated frame",
   },
+  "avatar-design": {
+    verdicts: ["exempt"],
+    reason: "saved avatar-maker design per principal; no conversation axis",
+  },
   "backend-info": { verdicts: ["exempt"], reason: "backend build info; no conversation axis" },
   "channel-detail": { verdicts: ["swept"], reason: "['channel-detail', cid] → position 1" },
   channels: {

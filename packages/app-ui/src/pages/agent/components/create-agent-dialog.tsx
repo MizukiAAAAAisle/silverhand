@@ -31,7 +31,7 @@ import {
 } from "@/features/computers/hooks/hooks";
 import { isComputerAvailable } from "@/features/computers/model/host-display";
 import { ComputerPicker } from "@/features/computers/components/computer-picker";
-import { useCreateAgent } from "../../../features/agents/hooks/hooks";
+import { useCreateAgent, useGiveAgentDefaultAvatar } from "../../../features/agents/hooks/hooks";
 import {
   deriveRuntimePickerMode,
   runtimeChipDisabled,
@@ -120,6 +120,7 @@ export function CreateAgentDialog({
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const createAgent = useCreateAgent();
+  const giveDefaultAvatar = useGiveAgentDefaultAvatar();
   // onBlur name validation — format (shared ParticipantNameSchema) + uniqueness
   // (agents ∪ users, server probe). See features/identity/use-name-availability.
   const nameCheck = useNameAvailability("agent", name);
@@ -248,6 +249,7 @@ export function CreateAgentDialog({
         sessionScope,
       });
       const res = await createAgent.mutateAsync(input);
+      giveDefaultAvatar(res.agent.id);
       onCreated?.(res.agent.id);
       setName("");
       setRuntime("claude");

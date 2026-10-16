@@ -1,12 +1,10 @@
-import { useEffect, useId, useState, type FormEvent } from "react";
-import { SpinnerIcon, UserIcon } from "@/icons";
-import { validateAvatarFile } from "@silverhand/shared";
-import { AvatarPickerButton } from "@/components/avatar-picker-button";
-import { AVATAR_PX } from "@/components/avatar-scale";
+import { useId, useState, type FormEvent } from "react";
+import { SpinnerIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
-import { cn } from "@/lib/cn";
+import { DraftAvatarCard } from "@/features/avatar-maker/components/draft-avatar-card";
+import { useDraftAvatar } from "@/features/avatar-maker/hooks/use-draft-avatar";
 import { rejectDisplayName } from "@/features/identity/display-name";
 import { nameFormatMessage } from "@/features/identity/use-name-availability";
 
@@ -14,6 +12,8 @@ export interface ProfileSetupValues {
   displayName: string;
   username: string;
   avatar: File | null;
+  /** Set when `avatar` was composed in the avatar maker rather than uploaded. */
+  design: string | null;
 }
 
 export interface ProfileSetupFormProps {
@@ -32,23 +32,8 @@ export function ProfileSetupForm({
   const id = useId();
   const [displayName, setDisplayName] = useState("");
   const [username, setUsername] = useState("");
-  const [avatar, setAvatar] = useState<File | null>(null);
-  const [avatarUrl, setAvatarUrl] = useState<string | null>(null);
-  const [avatarError, setAvatarError] = useState<string | null>(null);
   const [submitted, setSubmitted] = useState(false);
-
-  useEffect(() => {
-    if (!avatar) {
-      setAvatarUrl(null);
-      return;
-    }
-    const url = URL.createObjectURL(avatar);
-    setAvatarUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [avatar]);
-
-  const previewName = displayName.trim();
-  const previewHandle = username.trim();
+  const draft = useDraftAvatar();
 
   const displayNameError = submitted ? rejectDisplayName(displayName.trim()) : null;
   const usernameError = submitted
@@ -57,7 +42,7 @@ export function ProfileSetupForm({
       : "Username is required."
     : null;
 
-  const submit = (event: FormEvent<HTMLFormElement>): void => {
+  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault();
     if (pending) {
       return;
@@ -70,73 +55,25 @@ export function ProfileSetupForm({
     ) {
       return;
     }
-    onSubmit({ displayName: displayName.trim(), username: username.trim(), avatar });
+    const upload = await draft.resolve();
+    onSubmit({
+      displayName: displayName.trim(),
+      username: username.trim(),
+      avatar: upload?.file ?? null,
+      design: upload?.design ?? null,
+    });
   };
 
   return (
     <AuthSplitLayout>
       <form
-        onSubmit={submit}
+        onSubmit={(event) => void submit(event)}
         data-auth-form
         className="flex w-full max-w-90 flex-col gap-4"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
-        <h1 className="mb-3 text-3xl font-semibold tracking-tight">Set up your profile</h1>
-        <div className="mb-3 flex items-center gap-3">
-          <AvatarPickerButton
-            size={AVATAR_PX["3xl"]}
-            label={avatar ? "Edit" : "Add"}
-            ariaLabel="Choose profile photo"
-            disabled={pending}
-            className="border border-border-subtle"
-            onPick={(file) => {
-              const validation = validateAvatarFile(file);
-              setAvatarError(validation?.message ?? null);
-              if (!validation) {
-                setAvatar(file);
-              }
-            }}
-          >
-            <span data-avatar-ground className="grid size-full place-items-center">
-              {avatarUrl ? (
-                <img src={avatarUrl} alt="Profile preview" className="size-full object-cover" />
-              ) : (
-                <UserIcon className="size-7 text-text-muted" />
-              )}
-            </span>
-          </AvatarPickerButton>
-          <div className="flex min-w-0 flex-col gap-0.5">
-            <p
-              className={cn(
-                "truncate text-base font-semibold leading-tight",
-                previewName ? "text-text-primary" : "text-text-muted",
-              )}
-            >
-              {previewName || "Your name"}
-            </p>
-            <p className="truncate font-mono text-xs text-text-muted">
-              @{previewHandle || "username"}
-            </p>
-            {avatar ? (
-              <button
-                type="button"
-                disabled={pending}
-                className="self-start text-xs text-text-secondary hover:text-text-primary focus-outline"
-                onClick={() => {
-                  setAvatar(null);
-                  setAvatarError(null);
-                }}
-              >
-                Remove photo
-              </button>
-            ) : null}
-          </div>
-        </div>
-        {avatarError ? (
-          <p role="alert" className="text-xs text-error">
-            {avatarError}
-          </p>
-        ) : null}
+        <h1 className="mb-2 text-3xl font-semibold tracking-tight">Set up your profile</h1>
+        <DraftAvatarCard draft={draft} disabled={pending} />
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-display-name`} required>
             Display name

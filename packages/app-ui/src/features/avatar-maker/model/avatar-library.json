@@ -4002,9 +4002,7 @@
                   "strokeLinecap": "round",
                   "strokeLinejoin": "round",
                   "strokeWidth": 1.4
-                },
-                { "t": "ellipse", "cx": 144, "cy": 50, "rx": 2.6, "ry": 1.6, "fill": "#ffb3b3" },
-                { "t": "ellipse", "cx": 164, "cy": 50, "rx": 2.6, "ry": 1.6, "fill": "#ffb3b3" }
+                }
               ]
             }
           ]
