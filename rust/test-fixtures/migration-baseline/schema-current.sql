@@ -86,7 +86,8 @@ CREATE TABLE users (
         avatar_storage_key  TEXT,
         avatar_content_type TEXT,
         created_at          INTEGER NOT NULL,
-        updated_at          INTEGER NOT NULL, email TEXT, last_seen_at INTEGER,
+        updated_at          INTEGER NOT NULL, email TEXT, last_seen_at INTEGER, avatar_design_id TEXT REFERENCES avatar_designs(id)
+        CHECK (avatar_design_id IS NULL OR avatar_storage_key IS NOT NULL),
         CHECK (
           (avatar_storage_key IS NULL AND avatar_content_type IS NULL)
           OR
@@ -178,7 +179,8 @@ CREATE TABLE agents (
           'pending_materialization', 'active', 'failed'
         )), materialization_failed_code TEXT, materialization_failed_at INTEGER, idempotency_key TEXT, runtime_transition_started_at INTEGER, deletion_started_at INTEGER, session_scope TEXT NOT NULL
         DEFAULT 'conversation'
-        CHECK (session_scope IN ('conversation', 'agent')), last_activity_at INTEGER, runtime_transition_target TEXT,
+        CHECK (session_scope IN ('conversation', 'agent')), last_activity_at INTEGER, runtime_transition_target TEXT, avatar_design_id TEXT REFERENCES avatar_designs(id)
+        CHECK (avatar_design_id IS NULL OR avatar_storage_key IS NOT NULL),
         CHECK (
           (avatar_storage_key IS NULL AND avatar_content_type IS NULL)
           OR
@@ -1351,3 +1353,42 @@ CREATE INDEX idx_auth_sessions_last_used_at
 CREATE INDEX idx_messages_product_activity_created_at
         ON messages(created_at)
         WHERE from_kind IN ('user','agent') AND cc_source_message_id IS NULL;
+
+CREATE TABLE avatar_designs (
+        id            TEXT PRIMARY KEY,
+        parts_version INTEGER NOT NULL CHECK (parts_version > 0),
+        config        TEXT NOT NULL CHECK (json_valid(config) AND json_type(config) = 'object'),
+        created_at    INTEGER NOT NULL
+      );
+
+CREATE UNIQUE INDEX idx_users_avatar_design ON users(avatar_design_id)
+        WHERE avatar_design_id IS NOT NULL;
+
+CREATE UNIQUE INDEX idx_agents_avatar_design ON agents(avatar_design_id)
+        WHERE avatar_design_id IS NOT NULL;
+
+CREATE TRIGGER users_avatar_design_follows_image BEFORE UPDATE OF avatar_storage_key ON users
+        WHEN OLD.avatar_design_id IS NOT NULL AND NEW.avatar_design_id IS OLD.avatar_design_id
+          AND NEW.avatar_storage_key IS NOT OLD.avatar_storage_key
+        BEGIN SELECT RAISE(ABORT, 'avatar design must change with its image'); END;
+
+CREATE TRIGGER agents_avatar_design_follows_image BEFORE UPDATE OF avatar_storage_key ON agents
+        WHEN OLD.avatar_design_id IS NOT NULL AND NEW.avatar_design_id IS OLD.avatar_design_id
+          AND NEW.avatar_storage_key IS NOT OLD.avatar_storage_key
+        BEGIN SELECT RAISE(ABORT, 'avatar design must change with its image'); END;
+
+CREATE TRIGGER users_avatar_design_release AFTER UPDATE OF avatar_design_id ON users
+        WHEN OLD.avatar_design_id IS NOT NULL AND NEW.avatar_design_id IS NOT OLD.avatar_design_id
+        BEGIN DELETE FROM avatar_designs WHERE id = OLD.avatar_design_id; END;
+
+CREATE TRIGGER agents_avatar_design_release AFTER UPDATE OF avatar_design_id ON agents
+        WHEN OLD.avatar_design_id IS NOT NULL AND NEW.avatar_design_id IS NOT OLD.avatar_design_id
+        BEGIN DELETE FROM avatar_designs WHERE id = OLD.avatar_design_id; END;
+
+CREATE TRIGGER users_avatar_design_delete AFTER DELETE ON users
+        WHEN OLD.avatar_design_id IS NOT NULL
+        BEGIN DELETE FROM avatar_designs WHERE id = OLD.avatar_design_id; END;
+
+CREATE TRIGGER agents_avatar_design_delete AFTER DELETE ON agents
+        WHEN OLD.avatar_design_id IS NOT NULL
+        BEGIN DELETE FROM avatar_designs WHERE id = OLD.avatar_design_id; END;

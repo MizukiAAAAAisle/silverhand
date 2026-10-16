@@ -34,6 +34,7 @@ pub mod agent_profile_write;
 pub mod agent_view_acl;
 pub mod agent_workspace_list;
 pub mod auth;
+pub mod avatar_design;
 pub mod credential;
 pub mod handle_namespace;
 pub mod human_registration;

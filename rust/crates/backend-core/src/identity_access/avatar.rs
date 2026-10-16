@@ -36,6 +36,7 @@ use thiserror::Error;
 use crate::{
     foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
+    identity_access::avatar_design::AvatarDesign,
     identity_access::user_identity::{
         UserChangedAnnounce, UserChangedSink, UserProfileRead, UserRecord,
     },
@@ -303,16 +304,18 @@ pub enum AvatarPointerWrite {
 /// re-read the row under the write lock, bump `updated_at` to `now_ms` when they
 /// change it, and return the committed row plus the before-image key.
 pub trait AvatarPointerWriteUnitOfWork: Clone + Send + Sync + 'static {
-    /// Point the row at `pointer` with `content_type`, bumping `updated_at`.
+    /// Point the row at `pointer` with `content_type`, bumping `updated_at`, and
+    /// replace the row's design with `design` (`None` clears it).
     fn set_avatar(
         &self,
         user_id: &UserId,
         pointer: &AvatarBlobPointer,
         content_type: AvatarContentType,
+        design: Option<&AvatarDesign>,
         now_ms: i64,
     ) -> impl Future<Output = Result<AvatarPointerWrite, PersistenceFailure>> + Send;
 
-    /// Clear the row's avatar. If the row is already clear the adapter skips the
+    /// Clear the row's avatar and design. If the row is already clear the adapter skips the
     /// UPDATE (no bump); `prior_key` is then `None`.
     fn clear_avatar(
         &self,
@@ -412,6 +415,9 @@ where
 pub struct CandidateAvatar {
     pub bytes: Vec<u8>,
     pub declared_content_type: String,
+    /// The avatar-maker design that rendered `bytes`; `None` for a manual upload,
+    /// which clears any previous design.
+    pub design: Option<AvatarDesign>,
 }
 
 /// Upload (or replace) the caller's avatar.
@@ -439,6 +445,7 @@ where
     let CandidateAvatar {
         bytes,
         declared_content_type,
+        design,
     } = candidate;
 
     // Existence pre-check: user_not_found precedes validation and any blob write.
@@ -459,7 +466,7 @@ where
     };
 
     match writes
-        .set_avatar(user_id, &pointer, content_type, now_ms)
+        .set_avatar(user_id, &pointer, content_type, design.as_ref(), now_ms)
         .await?
     {
         AvatarPointerWrite::NoSuchUser => {
@@ -731,6 +738,7 @@ mod tests {
             _id: &UserId,
             _pointer: &AvatarBlobPointer,
             _content_type: AvatarContentType,
+            _design: Option<&AvatarDesign>,
             _now_ms: i64,
         ) -> Result<AvatarPointerWrite, PersistenceFailure> {
             Ok(self.0.clone())
@@ -850,6 +858,7 @@ mod tests {
             CandidateAvatar {
                 bytes: vec![1],
                 declared_content_type: "image/png".to_owned(),
+                design: None,
             },
             NOW,
         )
@@ -888,6 +897,7 @@ mod tests {
             CandidateAvatar {
                 bytes: vec![1],
                 declared_content_type: "text/plain".to_owned(),
+                design: None,
             },
             NOW,
         )
@@ -918,6 +928,7 @@ mod tests {
             CandidateAvatar {
                 bytes: vec![1],
                 declared_content_type: "image/png".to_owned(),
+                design: None,
             },
             NOW,
         )
@@ -945,6 +956,7 @@ mod tests {
             CandidateAvatar {
                 bytes: vec![1],
                 declared_content_type: "image/png".to_owned(),
+                design: None,
             },
             NOW,
         )
@@ -990,6 +1002,7 @@ mod tests {
             CandidateAvatar {
                 bytes: vec![1],
                 declared_content_type: "image/png".to_owned(),
+                design: None,
             },
             NOW,
         )
@@ -1022,6 +1035,7 @@ mod tests {
             CandidateAvatar {
                 bytes: vec![1],
                 declared_content_type: "image/png".to_owned(),
+                design: None,
             },
             NOW,
         )
@@ -1056,6 +1070,7 @@ mod tests {
             CandidateAvatar {
                 bytes: vec![1],
                 declared_content_type: "image/png".to_owned(),
+                design: None,
             },
             NOW,
         )
@@ -1092,6 +1107,7 @@ mod tests {
             CandidateAvatar {
                 bytes: vec![1],
                 declared_content_type: "image/png".to_owned(),
+                design: None,
             },
             NOW,
         )

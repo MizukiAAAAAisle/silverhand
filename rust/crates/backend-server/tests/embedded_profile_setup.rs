@@ -55,7 +55,7 @@ impl Fixture {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.sqlite");
         let preparation = prepare_database(&path, true).await.unwrap();
-        assert_eq!((preparation.after_step, preparation.after_epoch), (99, 70));
+        assert_eq!((preparation.after_step, preparation.after_epoch), (100, 71));
         let bootstrap = SqliteEmbeddedBootstrap::open(&path).await.unwrap();
         let BootstrapChoice::Created { user } = bootstrap.choose_or_create(100).await.unwrap()
         else {
@@ -335,9 +335,10 @@ async fn failed_core_write_rolls_back_fields_and_completion_together() {
 #[tokio::test]
 async fn step98_upgrade_keeps_existing_identity_complete_and_preserves_other_fields() {
     // Build an isolated step98 database from the current plan by removing only
-    // the additive step99 field and its ledger entry; no historical fixture changes.
+    // the additive step99/100 changes and their ledger entries; no historical fixture changes.
     let fixture = Fixture::new().await;
     let mut db = fixture.db().await;
+    rollback_step100(&mut db).await;
     sqlx::query("ALTER TABLE users DROP COLUMN embedded_profile_pending")
         .execute(&mut db)
         .await
@@ -356,9 +357,9 @@ async fn step98_upgrade_keeps_existing_identity_complete_and_preserves_other_fie
             upgrade.before_epoch,
             upgrade.after_epoch
         ),
-        (98, 99, 69, 70)
+        (98, 100, 69, 71)
     );
-    assert_eq!(upgrade.applied_steps, vec![99]);
+    assert_eq!(upgrade.applied_steps, vec![99, 100]);
     assert!(
         prepare_database(&fixture.path, false)
             .await
@@ -459,4 +460,55 @@ async fn avatar_storage_failure_after_completion_does_not_reopen_setup() {
     assert_eq!(state["user"]["name"], "Alice");
     assert_eq!(state["user"]["avatar_url"], Value::Null);
     assert_eq!(fixture.changes.0.lock().unwrap().len(), 1);
+}
+
+/// Return a current database to step 99 by undoing only the additive step 100.
+async fn rollback_step100(db: &mut SqliteConnection) {
+    sqlx::raw_sql(
+        "DROP TRIGGER users_avatar_design_follows_image; DROP TRIGGER users_avatar_design_release;
+         DROP TRIGGER users_avatar_design_delete; DROP TRIGGER agents_avatar_design_follows_image;
+         DROP TRIGGER agents_avatar_design_release; DROP TRIGGER agents_avatar_design_delete;
+         DROP INDEX idx_users_avatar_design; DROP INDEX idx_agents_avatar_design;
+         ALTER TABLE users DROP COLUMN avatar_design_id; ALTER TABLE agents DROP COLUMN avatar_design_id;
+         DROP TABLE avatar_designs; DELETE FROM _migrations WHERE version = 100;",
+    )
+    .execute(&mut *db)
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn step99_upgrade_adds_avatar_designs_and_keeps_existing_avatars() {
+    let fixture = Fixture::new().await;
+    let mut db = fixture.db().await;
+    rollback_step100(&mut db).await;
+    sqlx::query(
+        "UPDATE users SET avatar_storage_key = 'k', avatar_content_type = 'image/png' WHERE id = ?",
+    )
+    .bind(fixture.user.as_str())
+    .execute(&mut db)
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+
+    let upgrade = prepare_database(&fixture.path, true).await.unwrap();
+    assert_eq!(
+        (
+            upgrade.before_step,
+            upgrade.after_step,
+            upgrade.before_epoch,
+            upgrade.after_epoch
+        ),
+        (99, 100, 70, 71)
+    );
+    assert_eq!(upgrade.applied_steps, vec![100]);
+    let mut db = fixture.db().await;
+    let row: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT avatar_storage_key, avatar_design_id FROM users WHERE id = ?")
+            .bind(fixture.user.as_str())
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    assert_eq!(row, (Some("k".to_owned()), None));
+    db.close().await.unwrap();
 }

@@ -49,6 +49,7 @@ pub(super) async fn compose_after_audit(
                 presence_cold_read: agent_presence_cold_read,
                 profile_write: agent_profile_write,
                 avatar_read: agent_avatar_read,
+                avatar_design_read,
                 profile_read: agent_profile_read,
                 audit_read: agent_audit_read,
             },
@@ -683,6 +684,11 @@ pub(super) async fn compose_after_audit(
             },
             sessions.clone(),
         );
+    let me_avatar_design_router = require_human_session(
+        avatar_design::me_router(avatar_design_read.clone()),
+        sessions.clone(),
+        PublicJsonUnauthorized,
+    );
     let users_router = users::router(
         UsersDeps {
             directory: user_store.clone(),
@@ -1076,6 +1082,10 @@ pub(super) async fn compose_after_audit(
                 agent_detail_cold_read.clone(),
                 agent_avatar_read,
                 agent_avatar_blobs.clone(),
+            ))
+            .merge(avatar_design::agent_router(
+                agent_detail_cold_read.clone(),
+                avatar_design_read.clone(),
             ))
             .merge(agent_avatar_write::router(
                 agent_detail_cold_read.clone(),
@@ -1527,6 +1537,7 @@ pub(super) async fn compose_after_audit(
             // any mounted route, and `/api/me/avatar` is a child path of `human_auth`'s
             // `/api/me`, never the same node.
             .merge(users_router)
+            .merge(me_avatar_design_router)
             .merge(agent_products)
             .merge(event_router)
             .merge(daemon_router)

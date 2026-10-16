@@ -62,8 +62,9 @@ use silverhand_backend_core::{
 };
 
 use crate::foundation::error;
-use crate::foundation::multipart_transport::{accumulate_capped, declared_content_type};
+use crate::foundation::multipart_transport::{accumulate_capped, declared_content_type, drain};
 use crate::identity_access::auth::{PublicJsonUnauthorized, require_human_session};
+use crate::identity_access::avatar_design::{DesignSlot, design_rejected};
 use crate::identity_access::human_auth::{UserDto, log_lost_announce};
 
 /// `apiPaths.users`.
@@ -201,13 +202,17 @@ where
         Ok(multipart) => multipart,
         Err(_) => return multipart_required(),
     };
-    let file = match first_file_field(&mut multipart).await {
-        Ok(Some(file)) => file,
+    let (file, design) = match first_file_field(&mut multipart).await {
+        Ok((Some(file), design)) => (file, design),
         // No part named `file`, or the first one is not a file (no filename) —
         // the product's `!(file instanceof File)` 400.
-        Ok(None) => return file_field_required(),
+        Ok((None, _)) => return file_field_required(),
         // A stream fault mid-parse folds to the same `formData()` throw → 400.
         Err(_) => return multipart_required(),
+    };
+    let design = match design.admit() {
+        Ok(design) => design,
+        Err(rejection) => return design_rejected(rejection),
     };
 
     let now_ms = deps.clock.now_unix_millis();
@@ -220,6 +225,7 @@ where
         CandidateAvatar {
             bytes: file.bytes,
             declared_content_type: file.content_type,
+            design,
         },
         now_ms,
     )
@@ -384,36 +390,41 @@ struct UploadedFile {
     content_type: String,
 }
 
-/// Find the FIRST multipart part named `file`, mirroring `form.get('file')`. The
-/// part must be a file (carry a filename) to be a `File` in the product's sense;
-/// a same-named non-file part yields `Ok(None)` (→ `file field required`). A
-/// stream/decoding fault yields `Err` (→ the `formData()` throw's 400).
+/// Find the FIRST multipart part named `file`, mirroring `form.get('file')`, and the
+/// optional `design` part in any position. The part must be a file (carry a
+/// filename); a same-named non-file part yields `None` (→ `file field required`).
+/// Every part is read to the end, so a stream/decoding fault anywhere is `Err`
+/// (→ the `formData()` throw's 400).
 async fn first_file_field(
     multipart: &mut Multipart,
-) -> Result<Option<UploadedFile>, MultipartError> {
+) -> Result<(Option<UploadedFile>, DesignSlot), MultipartError> {
+    let mut design = DesignSlot::default();
+    let mut claimed: Option<Option<UploadedFile>> = None;
     while let Some(mut field) = multipart.next_field().await? {
-        if field.name() != Some("file") {
+        if design.offer(&mut field).await? {
+            continue;
+        }
+        if claimed.is_some() || field.name() != Some("file") {
+            drain(&mut field).await?;
             continue;
         }
         if field.file_name().is_none() {
-            // The first `file` entry is a plain field, not a `File`.
-            return Ok(None);
+            drain(&mut field).await?;
+            claimed = Some(None);
+            continue;
         }
-        // `file.type || 'application/octet-stream'`: an absent OR empty part
-        // content type falls back to the octet-stream default (→ 415 later);
-        // the raw declared type flows to `AvatarContentType::parse` unfolded.
+        // `file.type || 'application/octet-stream'`; the raw declared type flows to
+        // `AvatarContentType::parse` unfolded. Retaining `AVATAR_MAX_BYTES + 1` lets
+        // `validate_avatar` tell an at-cap file from the exact `413`.
         let content_type = declared_content_type(&field);
-        // Retain at most `AVATAR_MAX_BYTES + 1`: the extra byte lets `validate_avatar`
-        // tell a `5 MiB` file (accept) from `5 MiB + 1` (the exact `413`). This face
-        // returns at the first `file` part, so the over-cap tail is left for the
-        // request to finish — there is no following part to reach.
         let bytes = accumulate_capped(&mut field, AVATAR_MAX_BYTES as usize + 1).await?;
-        return Ok(Some(UploadedFile {
+        drain(&mut field).await?;
+        claimed = Some(Some(UploadedFile {
             bytes,
             content_type,
         }));
     }
-    Ok(None)
+    Ok((claimed.flatten(), design))
 }
 
 // ===========================================================================

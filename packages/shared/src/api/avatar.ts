@@ -28,6 +28,23 @@ export function principalAvatarUrl(
 }
 
 export const AVATAR_MAX_BYTES = 5 * 1024 * 1024;
+
+/**
+ * The avatar-maker source of an avatar image. Sent as the optional multipart
+ * `design` part (JSON text) next to `file` on avatar upload; an upload without it
+ * clears the stored design. `config` is opaque to the server (JSON object, ≤ 4 KB).
+ */
+export interface AvatarDesign {
+  parts_version: number;
+  config: Record<string, unknown>;
+}
+
+export const AVATAR_DESIGN_FIELD = 'design';
+
+/** `GET …/avatar/design`; `null` when the current avatar is not a design. */
+export interface AvatarDesignResponse {
+  design: AvatarDesign | null;
+}
 export const AVATAR_MAX_SIZE_LABEL = '5 MB';
 
 export const AVATAR_ALLOWED_CONTENT_TYPES = [

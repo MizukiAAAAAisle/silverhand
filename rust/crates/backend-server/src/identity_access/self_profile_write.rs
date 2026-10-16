@@ -215,6 +215,7 @@ where
     let avatar = InternalAvatarEdit::Set {
         content_type: validated.content_type(),
         bytes: validated.bytes().to_vec(),
+        design: validated.design().cloned(),
     };
     run_avatar_edit(&state, &subject, avatar, "self-avatar upload", |dto| {
         Json(AvatarUploadResponse {
@@ -465,6 +466,7 @@ fn profile_edit_to_core(validated: ValidatedProfileEdit) -> InternalProfileEdit 
         AvatarAction::Set(validated) => InternalAvatarEdit::Set {
             content_type: validated.content_type(),
             bytes: validated.bytes().to_vec(),
+            design: None,
         },
     };
     InternalProfileEdit {

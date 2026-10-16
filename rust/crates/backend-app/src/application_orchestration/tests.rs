@@ -11174,6 +11174,8 @@ mod human_direct_pair_tests;
 
 #[path = "account_deletion_tests.rs"]
 mod account_deletion_tests;
+#[path = "avatar_design_tests.rs"]
+mod avatar_design_tests;
 #[path = "password_change_tests.rs"]
 mod password_change_tests;
 

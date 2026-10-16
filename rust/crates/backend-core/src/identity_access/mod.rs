@@ -21,6 +21,7 @@ pub mod agent_workspace_list;
 pub mod agents;
 pub mod auth;
 pub mod avatar;
+pub mod avatar_design;
 pub mod capability;
 pub mod credential;
 pub mod human_auth_flows;

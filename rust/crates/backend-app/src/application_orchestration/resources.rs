@@ -38,6 +38,7 @@ pub(super) struct AgentIdentityResources {
     pub(super) presence_cold_read: SqliteAgentPresenceColdRead,
     pub(super) profile_write: SqliteAgentProfileWrite,
     pub(super) avatar_read: SqliteAgentAvatarRead,
+    pub(super) avatar_design_read: SqliteAvatarDesignRead,
     pub(super) profile_read: SqliteAgentProfileRead,
     pub(super) audit_read: SqliteAgentAuditRead,
 }
@@ -215,6 +216,11 @@ impl PassiveResources {
             SqliteAgentAvatarRead::open(&config.database_path),
         )
         .await?;
+        let avatar_design_read = open(
+            "avatar design read",
+            SqliteAvatarDesignRead::open(&config.database_path),
+        )
+        .await?;
         let profile_read = open(
             "agent profile read",
             SqliteAgentProfileRead::open(&config.database_path),
@@ -354,6 +360,7 @@ impl PassiveResources {
                 presence_cold_read: agent_presence_cold_read,
                 profile_write,
                 avatar_read,
+                avatar_design_read,
                 profile_read,
                 audit_read: agent_audit_read,
             },

@@ -46,6 +46,7 @@ use crate::{
         RequiredEdit, admit_internal_profile_edit, seal_agent_row,
     },
     identity_access::avatar::{AvatarContentType, AvatarStorageFailure, BlobCleanup},
+    identity_access::avatar_design::AvatarDesign,
 };
 
 // ===========================================================================
@@ -73,6 +74,7 @@ pub enum InternalAvatarEdit {
     Set {
         content_type: AvatarContentType,
         bytes: Vec<u8>,
+        design: Option<AvatarDesign>,
     },
 }
 
@@ -185,6 +187,7 @@ where
         InternalAvatarEdit::Set {
             content_type,
             bytes,
+            design,
         } => {
             let pointer = match blobs.put(subject, content_type, bytes).await {
                 Ok(pointer) => pointer,
@@ -193,6 +196,7 @@ where
             let assignment = AgentAvatarAssignment {
                 pointer: pointer.clone(),
                 content_type,
+                design,
             };
             (AvatarPlan::Set(assignment), Some(pointer))
         }
@@ -604,6 +608,7 @@ mod tests {
         InternalAvatarEdit::Set {
             content_type: AvatarContentType::Png,
             bytes: vec![1, 2, 3],
+            design: None,
         }
     }
 

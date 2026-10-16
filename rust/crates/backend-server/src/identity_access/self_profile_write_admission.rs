@@ -45,8 +45,11 @@ use silverhand_backend_core::{
     identity_access::avatar::{
         AVATAR_MAX_BYTES, AvatarContentType, AvatarRejection, validate_avatar,
     },
+    identity_access::avatar_design::{AvatarDesign, AvatarDesignRejection},
     identity_access::user_identity::DisplayName,
 };
+
+use super::avatar_design::{DesignSlot, design_rejected};
 
 use crate::foundation::multipart_transport::{accumulate_capped, declared_content_type, drain};
 
@@ -86,6 +89,7 @@ impl ProfileDescription {
 pub struct ValidatedAvatar {
     bytes: Vec<u8>,
     content_type: AvatarContentType,
+    design: Option<AvatarDesign>,
 }
 
 impl ValidatedAvatar {
@@ -95,6 +99,10 @@ impl ValidatedAvatar {
 
     pub fn bytes(&self) -> &[u8] {
         &self.bytes
+    }
+
+    pub fn design(&self) -> Option<&AvatarDesign> {
+        self.design.as_ref()
     }
 }
 
@@ -163,6 +171,7 @@ pub enum ProfileAdmissionRefusal {
     FileFieldRequiredForSet,
     /// The avatar payload failed size/declared-MIME validation.
     Avatar(AvatarRejection),
+    Design(AvatarDesignRejection),
 }
 
 /// The `{ error }` refusal body (the transport/algebra string refusals).
@@ -189,6 +198,7 @@ impl IntoResponse for ProfileAdmissionRefusal {
             Self::FileFieldRequiredForSet => {
                 bad_request("file field required for avatar_action=set")
             }
+            Self::Design(rejection) => design_rejected(rejection),
             Self::Avatar(rejection) => {
                 let status = match rejection {
                     AvatarRejection::Empty => StatusCode::BAD_REQUEST,
@@ -239,12 +249,18 @@ pub async fn admit_avatar_upload(
     // `file`-named plain part (present but not a `File` → `file field required`, like
     // `form.get('file') instanceof File`); `None` = no `file` part seen yet.
     let mut file_slot: Option<Option<UploadedFile>> = None;
+    let mut design = DesignSlot::default();
     loop {
         let mut field = match multipart.next_field().await {
             Ok(Some(field)) => field,
             Ok(None) => break,
             Err(_) => return Err(ProfileAdmissionRefusal::MultipartRequired),
         };
+        match design.offer(&mut field).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(_) => return Err(ProfileAdmissionRefusal::MultipartRequired),
+        }
         // Snapshot the discriminators so the field can be moved into a consuming read
         // below without holding a borrow across the match.
         let name = field.name().map(str::to_owned);
@@ -278,10 +294,12 @@ pub async fn admit_avatar_upload(
         }
     }
 
-    match file_slot {
-        Some(Some(file)) => validate_candidate(file),
-        _ => Err(ProfileAdmissionRefusal::FileFieldRequired),
-    }
+    let mut validated = match file_slot {
+        Some(Some(file)) => validate_candidate(file)?,
+        _ => return Err(ProfileAdmissionRefusal::FileFieldRequired),
+    };
+    validated.design = design.admit().map_err(ProfileAdmissionRefusal::Design)?;
+    Ok(validated)
 }
 
 /// Admit a `POST /internal/agents/{aid}/profile`. One multipart carries the text
@@ -450,6 +468,7 @@ fn validate_candidate(file: UploadedFile) -> Result<ValidatedAvatar, ProfileAdmi
         Ok(content_type) => Ok(ValidatedAvatar {
             bytes: file.bytes,
             content_type,
+            design: None,
         }),
         Err(rejection) => Err(ProfileAdmissionRefusal::Avatar(rejection)),
     }
