@@ -49,6 +49,7 @@ import { useViewerUser } from "@/features/session/hooks";
 import { channelNodeBadge, directRowBadge } from "../model/sidebar-row-badges";
 import { orderRecentRows, recentPreviewText, recentTimeLabel } from "../model/recent-rows";
 import { ChannelRowMenuItems } from "./channel-row-menu-items";
+import { ProjectFilterStrip } from "./project-filter-strip";
 import type { WorkspaceItem } from "./workspaces-panel";
 
 type RecentListRow =
@@ -202,25 +203,13 @@ export function RecentList(props: {
         >
           <div className="flex items-center gap-1">
             {liveWorkspaces.length > 1 ? (
-              <div
-                role="radiogroup"
-                aria-label="Filter by project"
-                className="scrollbar-hide flex min-w-0 flex-1 gap-1 overflow-x-auto mask-[linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] pr-4"
-              >
-                <FilterChip
-                  label="All"
-                  selected={workspaceFilter === null}
-                  onSelect={() => setWorkspaceFilter(null)}
-                />
-                {liveWorkspaces.map((w) => (
-                  <FilterChip
-                    key={w.id}
-                    label={w.name}
-                    selected={workspaceFilter === w.id}
-                    onSelect={() => setWorkspaceFilter(w.id)}
-                  />
-                ))}
-              </div>
+              <ProjectFilterStrip
+                workspaces={liveWorkspaces}
+                value={workspaceFilter}
+                onChange={setWorkspaceFilter}
+                agentsById={props.agentsById}
+                ownerAgentAvatarUrls={props.ownerAgentAvatarUrls}
+              />
             ) : (
               <div className="flex-1" />
             )}
@@ -339,34 +328,6 @@ function ProjectBarButton(props: {
     >
       {props.children}
     </Button>
-  );
-}
-
-function FilterChip({
-  label,
-  selected,
-  onSelect,
-}: {
-  label: string;
-  selected: boolean;
-  onSelect: () => void;
-}): JSX.Element {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      data-filter-chip
-      onClick={onSelect}
-      className={cn(
-        "h-6 max-w-32 shrink-0 truncate rounded-(--chip-radius) border-(length:--control-border-width) px-2 text-xs font-medium transition-colors focus-outline",
-        selected
-          ? "border-(--border-row-selected) bg-(--bg-row-selected) text-text-on-selected"
-          : "border-border-subtle text-text-secondary hover:border-(--border-control-hover) hover:text-text-primary",
-      )}
-    >
-      {label}
-    </button>
   );
 }
 
