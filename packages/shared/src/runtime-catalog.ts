@@ -97,6 +97,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     // 5.6 remains exact-model gated. Shiki approved the GPT-6 family for
     // Max/Ultra; its family boundary must not match gpt-60 or proxy aliases.
     reasoningEffortOptionsByModel: {
+      'gpt-6.1-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
       'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
