@@ -7,11 +7,18 @@ import {
   type ReactNode,
 } from "react";
 import { useQueries } from "@tanstack/react-query";
-import type { ChannelAttentionModeRowDto, DirectPairCounterpart } from "@silverhand/shared";
+import type {
+  AgentDto,
+  ChannelAttentionModeRowDto,
+  DirectPairCounterpart,
+} from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { ChannelIcon } from "@/components/channel-icon";
-import { StarIcon, ThreadIcon } from "@/icons";
+import { PlusIcon, SettingsIcon, StarIcon, ThreadIcon } from "@/icons";
+import { Button } from "@/components/ui/button";
+import { WorkspaceIcon } from "@/components/workspace-icon";
+import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 import { MutedMarker, UnreadBadge } from "@/components/layout/sidebar-shared";
 import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import type { RowBadge } from "@/features/attention/attention-mode";
@@ -90,6 +97,10 @@ export function RecentList(props: {
   /** Icon actions held at the end of the filter row; null where a native bar
    *  carries them. */
   actions: ReactNode;
+  onCreateChannel: (workspaceId: string) => void;
+  onOpenWorkspaceSettings: (workspaceId: string) => void;
+  agentsById?: ReadonlyMap<string, AgentDto>;
+  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
 }): JSX.Element {
   const [workspaceFilter, setWorkspaceFilter] = useState<string | null>(null);
 
@@ -97,6 +108,9 @@ export function RecentList(props: {
     () => props.workspaces.filter((w) => !w.archived),
     [props.workspaces],
   );
+  const focusedWorkspace =
+    liveWorkspaces.find((w) => w.id === workspaceFilter) ??
+    (liveWorkspaces.length === 1 ? liveWorkspaces[0]! : null);
   const workspaceIds = useMemo(() => liveWorkspaces.map((w) => w.id), [liveWorkspaces]);
   const workspaceNames = useMemo(
     () => new Map(liveWorkspaces.map((w) => [w.id, w.name])),
@@ -181,35 +195,52 @@ export function RecentList(props: {
     <>
       {/* Pinned while the list scrolls: the filter and the entries beside it are
           how the list is steered, so they stay in reach. */}
-      {liveWorkspaces.length > 1 || props.actions ? (
+      {liveWorkspaces.length > 1 || props.actions || focusedWorkspace ? (
         <div
           data-recent-filter
-          className="sticky top-0 z-10 flex shrink-0 items-center gap-1 bg-(--pane-bg,var(--bg-base)) px-1 pb-2"
+          className="sticky top-0 z-10 shrink-0 bg-(--pane-bg,var(--bg-base)) px-1 pb-2"
         >
-          {liveWorkspaces.length > 1 ? (
-            <div
-              role="radiogroup"
-              aria-label="Filter by project"
-              className="scrollbar-hide flex min-w-0 flex-1 gap-1 overflow-x-auto mask-[linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] pr-4"
-            >
-              <FilterChip
-                label="All"
-                selected={workspaceFilter === null}
-                onSelect={() => setWorkspaceFilter(null)}
-              />
-              {liveWorkspaces.map((w) => (
+          <div className="flex items-center gap-1">
+            {liveWorkspaces.length > 1 ? (
+              <div
+                role="radiogroup"
+                aria-label="Filter by project"
+                className="scrollbar-hide flex min-w-0 flex-1 gap-1 overflow-x-auto mask-[linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] pr-4"
+              >
                 <FilterChip
-                  key={w.id}
-                  label={w.name}
-                  selected={workspaceFilter === w.id}
-                  onSelect={() => setWorkspaceFilter(w.id)}
+                  label="All"
+                  selected={workspaceFilter === null}
+                  onSelect={() => setWorkspaceFilter(null)}
                 />
-              ))}
-            </div>
-          ) : (
-            <div className="flex-1" />
-          )}
-          {props.actions}
+                {liveWorkspaces.map((w) => (
+                  <FilterChip
+                    key={w.id}
+                    label={w.name}
+                    selected={workspaceFilter === w.id}
+                    onSelect={() => setWorkspaceFilter(w.id)}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="flex-1" />
+            )}
+            {props.actions}
+          </div>
+          {/* The list has no project header, so the project in focus carries its
+              own entries here, where the filter put it. */}
+          {focusedWorkspace ? (
+            <ProjectBar
+              workspace={focusedWorkspace}
+              agentsById={props.agentsById}
+              ownerAgentAvatarUrls={props.ownerAgentAvatarUrls}
+              onCreateChannel={() => props.onCreateChannel(focusedWorkspace.id)}
+              onOpenSettings={
+                isAgentSpace(focusedWorkspace)
+                  ? undefined
+                  : () => props.onOpenWorkspaceSettings(focusedWorkspace.id)
+              }
+            />
+          ) : null}
         </div>
       ) : null}
 
@@ -255,6 +286,59 @@ export function RecentList(props: {
         ))}
       </ul>
     </>
+  );
+}
+
+/** The project in focus, named the way the tree's project row names it, with the
+ *  entries that row carries. */
+function ProjectBar(props: {
+  workspace: WorkspaceItem;
+  agentsById?: ReadonlyMap<string, AgentDto>;
+  ownerAgentAvatarUrls: ReadonlyMap<string, string | null>;
+  onCreateChannel: () => void;
+  onOpenSettings?: () => void;
+}): JSX.Element {
+  return (
+    <div className="mt-2 flex h-7 items-center gap-2 pl-2">
+      <WorkspaceIcon
+        ownerAgentId={props.workspace.owner_agent_id}
+        agentsById={props.agentsById}
+        ownerAgentAvatarUrls={props.ownerAgentAvatarUrls}
+      />
+      <span className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
+        {props.workspace.name}
+      </span>
+      <div className="flex shrink-0 items-center">
+        <ProjectBarButton label="New channel" onClick={props.onCreateChannel}>
+          <PlusIcon className="size-4" />
+        </ProjectBarButton>
+        {props.onOpenSettings ? (
+          <ProjectBarButton label="Project settings" onClick={props.onOpenSettings}>
+            <SettingsIcon className="size-4" />
+          </ProjectBarButton>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function ProjectBarButton(props: {
+  label: string;
+  onClick: () => void;
+  children: ReactNode;
+}): JSX.Element {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={props.label}
+      title={props.label}
+      onClick={props.onClick}
+      className="size-7 text-text-muted hover:text-text-primary"
+    >
+      {props.children}
+    </Button>
   );
 }
 

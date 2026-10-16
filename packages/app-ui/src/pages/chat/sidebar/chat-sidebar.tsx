@@ -222,6 +222,10 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                   onSelectChannel={props.onSelectChannel}
                   onSelectDirectPair={props.onSelectDirectPair}
                   onOpenThread={props.onOpenThread}
+                  onCreateChannel={props.onCreateChannel}
+                  onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
+                  agentsById={props.agentsById}
+                  ownerAgentAvatarUrls={ownerAgentAvatarUrls}
                   actions={
                     native.active ? null : (
                       <RecentActions
