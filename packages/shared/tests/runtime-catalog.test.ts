@@ -128,11 +128,11 @@ describe('runtime catalog (shared source of truth)', () => {
 
   it('exposes codex model suggestions as quick-picks (free text still accepted, no forced default)', () => {
     expect(runtimeCatalogEntry('codex').modelSuggestions).toEqual([
+      'gpt-6.1-sol',
       'gpt-6-astra',
       'gpt-5.6-sol',
       'gpt-5.6-terra',
       'gpt-5.6-luna',
-      'gpt-5.5',
     ]);
     // Suggestions only — codex must not force a create-time default.
     expect(runtimeDefaultModel('codex')).toBeNull();
