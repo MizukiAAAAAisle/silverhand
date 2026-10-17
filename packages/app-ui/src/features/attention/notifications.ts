@@ -120,8 +120,8 @@ export function useMarkNotificationsRead() {
 /**
  * Mount this once at the App root. Listens for WS viewer-scoped notification
  * events (replacing the previous 5 s poll) and fires:
- *  - an in-app toast (sonner) for every new notification
- *  - a system notification via IPC when the app is not in the foreground
+ *  - an in-app toast when the arrival needs surfacing
+ *  - a system notification, or sound alone in the focused desktop conversation
  *
  * Suppresses toasts for the currently active channel (user can already
  * see it) unless the kind is `agent_start_failed` (always shown — it's
@@ -137,7 +137,7 @@ export function useNotificationToasts(
   onJump?: (target: MessageJumpTarget) => void,
 ) {
   const qc = useQueryClient();
-  const { data } = useQuery<{ notifications: NotificationDto[] }>({
+  const { data, dataUpdatedAt } = useQuery<{ notifications: NotificationDto[] }>({
     queryKey: [...listKey, { toasts: true }],
     // Arrival alerts must survive a concurrent visible-read update. Read state
     // drives badges, not whether a new notification deserves an alert.
@@ -147,6 +147,9 @@ export function useNotificationToasts(
 
   const seenIds = useRef<Set<string>>(new Set());
   const initialized = useRef(false);
+  // A list refresh can include older, already-read rows after reconnect. Only
+  // a matching viewer event authorizes a new @me alert; read_at does not.
+  const incomingMentions = useRef(new Map<string, string>());
   // Live notification rows the user can click on. Toast `onClick` reads
   // straight from this map; native-notification clicks come back from
   // main as ids and look up here too. We keep it as a ref instead of
@@ -187,6 +190,18 @@ export function useNotificationToasts(
     const unsub = onWsFrame((frame) => {
       if (frame.type === "event" && isCurrentViewerScope(frame.scope)) {
         if (frame.kind === "notification") {
+          const payload = frame.payload as {
+            kind?: unknown;
+            message_id?: unknown;
+            conversation_id?: unknown;
+          } | null;
+          if (
+            payload?.kind === "mention_self" &&
+            typeof payload.message_id === "string" &&
+            typeof payload.conversation_id === "string"
+          ) {
+            incomingMentions.current.set(payload.message_id, payload.conversation_id);
+          }
           invalidateQueryDebounced(qc, toastKey);
         } else if (
           frame.kind === "unread_updated" &&
@@ -201,6 +216,7 @@ export function useNotificationToasts(
           }
         }
       } else if (frame.type === "snapshot_required" && isCurrentViewerScope(frame.scope)) {
+        incomingMentions.current.clear();
         invalidateQueryDebounced(qc, toastKey);
       }
     });
@@ -248,14 +264,26 @@ export function useNotificationToasts(
       // First load: mark all existing notifications as seen without
       // toasting — we only alert for genuinely new arrivals.
       for (const n of notifications) {
-        seenIds.current.add(n.id);
+        if (
+          !(
+            n.kind === "mention_self" &&
+            n.message_id &&
+            incomingMentions.current.get(n.message_id) === n.conversation_id
+          )
+        ) {
+          seenIds.current.add(n.id);
+        }
         if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
       }
       initialized.current = true;
-      return;
     }
 
     for (const n of notifications) {
+      if (n.kind === "mention_self") {
+        if (!n.message_id || incomingMentions.current.get(n.message_id) !== n.conversation_id)
+          continue;
+        incomingMentions.current.delete(n.message_id);
+      }
       if (seenIds.current.has(n.id)) continue;
       seenIds.current.add(n.id);
       if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
@@ -273,17 +301,31 @@ export function useNotificationToasts(
         continue;
       }
 
+      const desktopSounds = getPlatform().notificationSounds;
+      const currentConversation = !!(
+        isViewerMention &&
+        desktopSounds &&
+        n.conversation_id &&
+        n.conversation_id === activeChannelId
+      );
       if (isViewerMention) {
-        showMentionToast(
-          {
-            sender: n.sender ?? null,
-            fallbackName: payloadString(n, "trigger_name") ?? "Someone",
-            conversationTitle: payloadString(n, "conversation_title"),
-            excerpt: payloadString(n, "mention_excerpt"),
-          },
-          n.id,
-          () => handleClickById(n.id),
-        );
+        // Desktop sound is delivered independently below. Don't stack an in-app
+        // card over the conversation the user is reading, or queue one behind
+        // another app. Native/mobile banners retain their existing behavior.
+        if (
+          !desktopSounds ||
+          (!currentConversation && document.hasFocus() && document.visibilityState === "visible")
+        )
+          showMentionToast(
+            {
+              sender: n.sender ?? null,
+              fallbackName: payloadString(n, "trigger_name") ?? "Someone",
+              conversationTitle: payloadString(n, "conversation_title"),
+              excerpt: payloadString(n, "mention_excerpt"),
+            },
+            n.id,
+            () => handleClickById(n.id),
+          );
       } else {
         const label = buildToastLabel(n);
         // A plain toast has no whole-surface click, so a clickable kind gets a
@@ -304,11 +346,12 @@ export function useNotificationToasts(
         }
       }
 
-      // System notification — main process suppresses ordinary alerts when an
-      // Electron window is focused; direct human mentions opt out via `force`.
+      // Main verifies the sender window's focus: a direct mention in the
+      // displayed conversation uses sound alone only while that window is focused.
       void getPlatform().notifications?.showSystemNotification({
         ...systemNoticeOf(n, buildToastLabel(n)),
         force: isViewerMention,
+        currentConversation,
         notificationId: isClickableKind(n.kind) ? n.id : undefined,
       });
     }
@@ -321,7 +364,7 @@ export function useNotificationToasts(
     // read-state, so the notification correctly stays unread until an ACTIVE
     // eliminate path clears it: visible read advancing the cursor, clicking the
     // toast/notification to jump to source, or the Activity Mark-as-read ✓.
-  }, [data, activeChannelId, qc, handleClickById]);
+  }, [data, dataUpdatedAt, activeChannelId, qc, handleClickById]);
 }
 
 /**

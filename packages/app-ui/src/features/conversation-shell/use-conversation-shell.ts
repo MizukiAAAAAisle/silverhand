@@ -119,8 +119,11 @@ export function useConversationShell({
 
   const panes = useConversationPanes(read, jump, { compact });
 
-  useNotificationToasts(panes.focusedConversation?.id ?? null, (target) =>
-    handleJumpToMessage(target),
+  useNotificationToasts(
+    appSection === "chat" || appSection === "activity"
+      ? (panes.focusedConversation?.id ?? null)
+      : null,
+    (target) => handleJumpToMessage(target),
   );
 
   // Regular width defers a section's teardown past the click (`SectionLayer`).

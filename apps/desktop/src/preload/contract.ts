@@ -29,8 +29,10 @@ export interface DesktopBackendInfo extends ConnectionInfo, LocalHostInfo {}
 
 export interface DesktopBridge {
   notificationSounds: {
-    chooseFile(): Promise<import('@silverhand/client').NotificationSoundFile | null>;
-    preview(sound: import('@silverhand/client').NotificationSoundFile | null): Promise<string | null>;
+    chooseFile(): Promise<import("@silverhand/client").NotificationSoundFile | null>;
+    preview(
+      sound: import("@silverhand/client").NotificationSoundFile | null,
+    ): Promise<string | null>;
   };
   eventHooks: import("@silverhand/client").EventHooksCapability;
   getDesktopBuildConfig(): Promise<DesktopBuildConfig>;
@@ -84,6 +86,8 @@ export interface DesktopBridge {
     /** Stacks alerts that share it into one group (macOS, Windows). */
     groupId?: string;
     force?: boolean;
+    /** The target is the displayed conversation; a focused desktop window uses sound only. */
+    currentConversation?: boolean;
     notificationId?: string;
   }): Promise<string | undefined>;
   onNotificationClicked(handler: (notificationId: string) => void): () => void;

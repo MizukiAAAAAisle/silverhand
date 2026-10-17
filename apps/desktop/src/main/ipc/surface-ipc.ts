@@ -118,10 +118,18 @@ export function registerSurfaceIpcHandlers(
 
   ipc.handle("notification:show", (event, opts: unknown) => {
     if (!opts || typeof opts !== "object") return;
-    const { title, subtitle, body, groupId, force, notificationId } = opts as Partial<
-      Record<string, unknown>
-    >;
+    const { title, subtitle, body, groupId, force, currentConversation, notificationId } =
+      opts as Partial<Record<string, unknown>>;
     if (typeof title !== "string") return;
+    // The renderer owns conversation visibility; only this sender's native
+    // window can establish focus. A selected conversation in a background
+    // window still needs a banner.
+    if (currentConversation === true && BrowserWindow.fromWebContents(event.sender)?.isFocused()) {
+      if (!soundEnabled()) return;
+      const audio = customSound();
+      if (!audio) shell.beep();
+      return audio ?? undefined;
+    }
     // Fire ordinary system notifications only when no Electron window is
     // focused. Direct human mentions opt into `force` so an active-but-
     // different channel still produces an OS notification instead of only

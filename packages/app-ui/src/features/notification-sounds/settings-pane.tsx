@@ -1,17 +1,17 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState } from "react";
 import type {
   DesktopPreferencesSnapshot,
   NotificationSoundFile,
   NotificationSoundsCapability,
-} from '@silverhand/client';
-import { Button } from '@/components/ui/button';
-import { SettingToggle } from '@/components/ui/setting-toggle';
+} from "@silverhand/client";
+import { Button } from "@/components/ui/button";
+import { SettingToggle } from "@/components/ui/setting-toggle";
 
 export function NotificationSettingsPane({ api }: { api: NotificationSoundsCapability }) {
   const [prefs, setPrefs] = useState<DesktopPreferencesSnapshot>();
   const [busy, setBusy] = useState(false);
   const [playing, setPlaying] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState("");
   useEffect(() => {
     let active = true;
     void api
@@ -28,7 +28,7 @@ export function NotificationSettingsPane({ api }: { api: NotificationSoundsCapab
   }, [api]);
   const run = async (action: () => Promise<void>) => {
     setBusy(true);
-    setError('');
+    setError("");
     try {
       await action();
     } catch (e) {
@@ -89,7 +89,8 @@ export function NotificationSettingsPane({ api }: { api: NotificationSoundsCapab
               <div>
                 <p className="text-sm font-medium">Notification sounds</p>
                 <p className="mt-1 text-xs text-text-muted">
-                  Turn off sound without hiding notifications.
+                  New @mentions play a sound, even in the conversation you’re viewing. Turn off
+                  sound without hiding notifications.
                 </p>
               </div>
               <SettingToggle
@@ -115,7 +116,7 @@ export function NotificationSettingsPane({ api }: { api: NotificationSoundsCapab
                     })
                   }
                 >
-                  {playing ? 'Playing…' : 'Preview'}
+                  {playing ? "Playing…" : "Preview"}
                 </Button>
               </div>
               <div
@@ -131,35 +132,36 @@ export function NotificationSettingsPane({ api }: { api: NotificationSoundsCapab
                 >
                   <span
                     aria-hidden
-                    className={`flex size-4 shrink-0 items-center justify-center rounded-full border ${!sound ? 'border-accent' : 'border-border'}`}
+                    className={`flex size-4 shrink-0 items-center justify-center rounded-full border ${!sound ? "border-accent" : "border-border"}`}
                   >
                     {!sound && <span className="size-2 rounded-full bg-accent" />}
                   </span>
                   <span>
                     <span className="block text-sm font-medium">System default</span>
                     <span className="mt-0.5 block text-xs text-text-muted">
-                      Use your computer’s notification sound
+                      Use your computer’s notification sound; in the current conversation, play its
+                      alert sound
                     </span>
                   </span>
                 </button>
-                <div className={`p-4 ${sound ? 'bg-accent-soft' : ''}`}>
+                <div className={`p-4 ${sound ? "bg-accent-soft" : ""}`}>
                   <div className="flex items-center gap-3">
                     <span
                       aria-hidden="true"
-                      className={`flex size-4 shrink-0 items-center justify-center rounded-full border ${sound ? 'border-accent' : 'border-border'}`}
+                      className={`flex size-4 shrink-0 items-center justify-center rounded-full border ${sound ? "border-accent" : "border-border"}`}
                     >
                       {sound && <span className="size-2 rounded-full bg-accent" />}
                     </span>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium">Custom audio</p>
                       <p className="mt-0.5 truncate text-xs text-text-muted" title={sound?.name}>
-                        {sound?.name ?? 'Your own music, voice or sound effect'}
+                        {sound?.name ?? "Your own music, voice or sound effect"}
                       </p>
                     </div>
                   </div>
                   <div className="ml-7 mt-3">
                     <Button variant="outline" size="sm" disabled={disabled} onClick={choose}>
-                      {sound ? 'Change audio file' : 'Choose audio file'}
+                      {sound ? "Change audio file" : "Choose audio file"}
                     </Button>
                   </div>
                 </div>
@@ -172,9 +174,9 @@ export function NotificationSettingsPane({ api }: { api: NotificationSoundsCapab
             <p role="status" className="text-xs text-text-muted">
               {busy
                 ? playing
-                  ? 'Playing preview…'
-                  : 'Saving…'
-                : 'Saved automatically on this computer.'}
+                  ? "Playing preview…"
+                  : "Saving…"
+                : "Saved automatically on this computer."}
             </p>
           </>
         )}

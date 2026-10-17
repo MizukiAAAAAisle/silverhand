@@ -54,6 +54,8 @@ export interface NotificationCapability {
     /** Stacks alerts that share it into one group (macOS, Windows). */
     groupId?: string;
     force?: boolean;
+    /** The target is the displayed conversation; a focused desktop window uses sound only. */
+    currentConversation?: boolean;
     notificationId?: string;
   }): Promise<void>;
   onNotificationClicked(handler: (notificationId: string) => void): () => void;
@@ -123,13 +125,16 @@ export interface AvatarMakerCapability {
   /** Null when the person closes the editor without choosing. */
   edit(input: {
     config: { parts: Record<string, number>; bg: number };
-  }): Promise<{ config: { parts: Record<string, number>; bg: number }; pngBytes: Uint8Array<ArrayBuffer> } | null>;
+  }): Promise<{
+    config: { parts: Record<string, number>; bg: number };
+    pngBytes: Uint8Array<ArrayBuffer>;
+  } | null>;
 }
 
 /** Installed once by an application entry point, before mounting the UI. */
 export interface ClientPlatform {
   eventHooks?: EventHooksCapability;
-  notificationSounds?: import('./notification-sounds.js').NotificationSoundsCapability;
+  notificationSounds?: import("./notification-sounds.js").NotificationSoundsCapability;
   client: ClientAdapter;
   files: FileCapability;
   localHost?: LocalHostCapability;

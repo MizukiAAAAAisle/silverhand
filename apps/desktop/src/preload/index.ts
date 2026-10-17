@@ -74,8 +74,8 @@ function setPreviewPinchZoom(enabled: boolean): void {
 
 const api: DesktopBridge = {
   notificationSounds: {
-    chooseFile: () => ipcRenderer.invoke('sound:choose'),
-    preview: (sound) => ipcRenderer.invoke('sound:preview', sound),
+    chooseFile: () => ipcRenderer.invoke("sound:choose"),
+    preview: (sound) => ipcRenderer.invoke("sound:preview", sound),
   },
   eventHooks: {
     loadHooks: () => ipcRenderer.invoke("hooks:load"),
@@ -216,6 +216,8 @@ const api: DesktopBridge = {
     body?: string;
     groupId?: string;
     force?: boolean;
+    /** The target is the displayed conversation; a focused desktop window uses sound only. */
+    currentConversation?: boolean;
     /** Opaque id echoed back via `onNotificationClicked` so the renderer
      *  can route the click to the right navigation target. Fire-and-
      *  forget if omitted (the notification is just informational). */
