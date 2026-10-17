@@ -97,6 +97,7 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     // 5.6 remains exact-model gated. Shiki approved the GPT-6 family for
     // Max/Ultra; its family boundary must not match gpt-60 or proxy aliases.
     reasoningEffortOptionsByModel: {
+      'gpt-6.1-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       'gpt-5.6-sol': ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'],
       'gpt-5.6-terra': ['low', 'medium', 'high', 'xhigh', 'max'],
       'gpt-5.6-luna': ['low', 'medium', 'high', 'xhigh', 'max'],
@@ -109,7 +110,13 @@ const CATALOG: Record<RuntimeKind, RuntimeCatalogEntry> = {
     // Suggested model ids for the Model combobox. Free text still accepted;
     // these are quick-picks only (no `defaultModel` — codex has no forced
     // create-time default).
-    modelSuggestions: ['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
+    modelSuggestions: [
+      'gpt-6.1-sol',
+      'gpt-6-astra',
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+    ],
   },
   qoder: {
     kind: 'qoder',

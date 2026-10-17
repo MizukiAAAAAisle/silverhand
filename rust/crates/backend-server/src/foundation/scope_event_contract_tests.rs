@@ -2588,7 +2588,11 @@ async fn a_workspace_send_fans_out_across_ports_without_duplicate_or_widening() 
 
     // The seated reader who was named: one mention_self notice, then one unread+badge
     // co-emit — never the notice twice, never a badge without its unread.
-    let reader = scope_events(&hub, EventScope::Viewer(mentioned()));
+    let mut reader = scope_events(&hub, EventScope::Viewer(mentioned()));
+    assert!(matches!(
+        reader.pop(),
+        Some(ProductEvent::ConversationLatestChanged(_))
+    ));
     assert!(
         matches!(
             reader.as_slice(),
@@ -4470,6 +4474,7 @@ const SUPPORTED_EVENT_KINDS: &[&str] = &[
     "saved_changed",
     "message_reaction_changed",
     "attachment_changed",
+    "conversation_latest_changed",
 ];
 
 /// The wire `kind` a product event MUST serialize as. Exhaustive by construction: a new
@@ -4507,6 +4512,7 @@ fn wire_kind(event: &ProductEvent) -> &'static str {
         ProductEvent::SavedChanged(_) => "saved_changed",
         ProductEvent::MessageReactionChanged(_) => "message_reaction_changed",
         ProductEvent::AttachmentChanged(_) => "attachment_changed",
+        ProductEvent::ConversationLatestChanged(_) => "conversation_latest_changed",
         ProductEvent::Test { .. } => "test",
     }
 }
@@ -4624,6 +4630,7 @@ fn the_supported_wire_kinds_are_a_closed_named_set() {
         ProductEvent::AttachmentChanged(
             json!({ "attachment_id": "attachment-1", "content_revision": 2 }),
         ),
+        ProductEvent::ConversationLatestChanged(json!({ "conversation_id": "c-1" })),
     ];
     let mut produced = std::collections::BTreeSet::new();
     for event in &samples {
@@ -5401,7 +5408,7 @@ async fn assert_membership_hint_reaches_viewer(create_workspace: bool) {
         .into_iter()
         .filter(|id| !before_ids.contains(id))
         .collect();
-    assert_eq!(gained, [workspace_id.clone()]);
+    assert_eq!(gained, std::slice::from_ref(&workspace_id));
 
     // Idempotent re-enroll: a second identical POST still answers 201 but owes no
     // announce. The membership stays a single row and the viewer stream does NOT
@@ -5631,6 +5638,10 @@ async fn thread_reply_announces_unread_through_production_aftermath() {
             next_json(&mut socket).await["kind"],
             "attention_badge_updated"
         );
+        assert_eq!(
+            next_json(&mut socket).await["kind"],
+            "conversation_latest_changed"
+        );
         let probe = silverhand_backend_core::conversation_messaging::messaging::collaboration::conversation_unread::ConversationUnreadReadPort::read(&store.conversation_unread(), &user(), &channel()).await;
         assert!(probe.is_ok(), "read failure: {probe:?}");
         let mut request = axum::http::Request::builder()
@@ -5757,6 +5768,10 @@ async fn agent_dm_thread_unread_is_immediate_before_wait_or_mainline_send() {
         let frame = next_json(&mut socket).await;
         assert_eq!(frame["kind"], "direct_pairs_changed", "{frame}");
         assert_eq!(frame["scope"], "viewer:user-1");
+        assert_eq!(
+            next_json(&mut socket).await["kind"],
+            "conversation_latest_changed"
+        );
         assert_eq!(frame["payload"], json!({"conversation_id":pair.as_str()}));
         let immediate = read().await;
         assert_eq!(
@@ -5782,6 +5797,10 @@ async fn agent_dm_thread_unread_is_immediate_before_wait_or_mainline_send() {
             )
             .await;
             assert_eq!(next_json(&mut socket).await["kind"], "direct_pairs_changed");
+            assert_eq!(
+                next_json(&mut socket).await["kind"],
+                "conversation_latest_changed"
+            );
         } else {
             // A bounded idle comparison; no read/write/observe or synthetic refresh.
             tokio::time::sleep(Duration::from_millis(100)).await;
@@ -5809,6 +5828,10 @@ async fn agent_dm_thread_unread_is_immediate_before_wait_or_mainline_send() {
         )
         .await;
         assert_eq!(next_json(&mut socket).await["kind"], "direct_pairs_changed");
+        assert_eq!(
+            next_json(&mut socket).await["kind"],
+            "conversation_latest_changed"
+        );
         assert_eq!(read().await["threads"][root_id.as_str()]["unread_count"], 1);
         let other_root = store
             .send_message(
@@ -5844,6 +5867,10 @@ async fn agent_dm_thread_unread_is_immediate_before_wait_or_mainline_send() {
         )
         .await;
         assert_eq!(next_json(&mut socket).await["kind"], "direct_pairs_changed");
+        assert_eq!(
+            next_json(&mut socket).await["kind"],
+            "conversation_latest_changed"
+        );
         let two_threads = read().await;
         assert_eq!(two_threads["threads"][root_id.as_str()]["unread_count"], 1);
         assert_eq!(two_threads["threads"][other_id.as_str()]["unread_count"], 1);
@@ -5869,7 +5896,11 @@ async fn agent_dm_thread_unread_is_immediate_before_wait_or_mainline_send() {
         assert!(
             scope_events(&hub, EventScope::Viewer(user()))
                 .iter()
-                .all(|event| matches!(event, ProductEvent::DirectPairsChanged { .. }))
+                .all(|event| matches!(
+                    event,
+                    ProductEvent::DirectPairsChanged { .. }
+                        | ProductEvent::ConversationLatestChanged(_)
+                ))
         );
         socket.close(None).await.unwrap();
         wait_until_drained(&controller).await;

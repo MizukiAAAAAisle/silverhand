@@ -75,7 +75,7 @@ export function ChannelNotificationSettings({
           </Button>
         </div>
       ) : modes.data?.muted ? (
-        <p className="text-xs text-text-muted">Muted by workspace</p>
+        <p className="text-xs text-text-muted">Muted by project</p>
       ) : null}
     </section>
   );

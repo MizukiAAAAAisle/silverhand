@@ -1,6 +1,10 @@
 import type { ServerInfo } from "@silverhand/shared";
 import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type {
+  BannerEvent,
+  BannerNotice,
+  ComposerEvent,
+  ComposerState,
   TitlebarEvent,
   TitlebarState,
   PageBarEvent,
@@ -36,6 +40,18 @@ export interface NativeBridge {
    * PNG. A null state removes it. */
   pageBar(input: { state: PageBarState | null }): Promise<void>;
   pageBarBackProgress(input: { progress: number | null }): Promise<void>;
+  /** The compact composer; menu and picker icons are base64 PNG. */
+  composerSync(input: { state: ComposerState }): Promise<void>;
+  /** Removes the composer if it shows draft `key`; without a key, whatever it shows. */
+  composerRemove(input: { key?: string }): Promise<void>;
+  /** A notice over the bars; the icon is base64 PNG. */
+  bannerShow(input: BannerNotice): Promise<void>;
+  composerSetText(input: {
+    key: string;
+    text: string;
+    caret: number;
+    focus: boolean;
+  }): Promise<void>;
   addListener(
     event: "navigation",
     handler: (intent: NativeNavigationIntent) => void,
@@ -63,7 +79,12 @@ export interface NativeBridge {
   closeSocket(input: { id: string }): Promise<void>;
   saveAttachment(input: { filename: string; base64: string }): Promise<{ completed: boolean }>;
   sharePng(input: { base64: string }): Promise<{ completed: boolean }>;
+  /** The native avatar editor; both fields are absent when it was dismissed. */
+  avatarMakerEdit(input: {
+    config: { parts: Record<string, number>; bg: number };
+  }): Promise<{ config?: { parts: Record<string, number>; bg: number }; base64?: string }>;
   openExternal(input: { url: string }): Promise<void>;
+  appVersion(): Promise<{ version: string }>;
   addListener(
     event: "socket",
     handler: (event: NativeSocketEvent) => void,
@@ -81,6 +102,18 @@ export interface NativeBridge {
   addListener(
     event: "pageBar",
     handler: (event: PageBarEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    event: "composer",
+    handler: (event: ComposerEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    event: "banner",
+    handler: (event: BannerEvent) => void,
+  ): Promise<PluginListenerHandle>;
+  addListener(
+    event: "composerMetrics",
+    handler: (metrics: { rest: number; reserve: number; overlay: number; picker: number }) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "fold",

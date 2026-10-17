@@ -28,10 +28,10 @@ describe("parseAppearance", () => {
   });
 
   it("falls back to the current default theme when input is missing or bad", () => {
-    expect(parseAppearance(null)).toEqual({ theme: "poster" });
-    expect(parseAppearanceJson("{bad json")).toEqual({ theme: "poster" });
+    expect(parseAppearance(null)).toEqual({ theme: "studio-light" });
+    expect(parseAppearanceJson("{bad json")).toEqual({ theme: "studio-light" });
     expect(parseAppearance({ theme: "unknown" })).toEqual({
-      theme: "poster",
+      theme: "studio-light",
     });
   });
 

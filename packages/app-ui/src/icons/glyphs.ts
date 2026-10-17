@@ -33,6 +33,7 @@ import {
   CodeXml,
   CornerDownLeft,
   Cpu,
+  Dices,
   Download,
   Ellipsis,
   EllipsisVertical,
@@ -92,6 +93,7 @@ import {
   X,
   ZoomIn,
   ZoomOut,
+  Upload,
 } from "lucide";
 import { createIcon, type IconNode } from "./icon";
 
@@ -114,6 +116,7 @@ export const BellRingIcon = icon("bell-ring", BellRing);
 export const BellPlusIcon = icon("bell-plus", BellPlus);
 export const BotIcon = icon("bot", Bot);
 export const CameraIcon = icon("camera", Camera);
+export const UploadIcon = icon("upload", Upload);
 export const CancelledIcon = icon("cancelled", Ban);
 export const CheckIcon = icon("check", Check);
 export const ChevronDownIcon = icon("chevron-down", ChevronDown);
@@ -350,6 +353,7 @@ export const PowerIcon = icon("power", Power);
 export const ProfileCardIcon = icon("profile-card", IdCard);
 export const QuoteIcon = icon("quote", Quote);
 export const QuoteSelectionIcon = icon("quote-selection", TextQuote);
+export const RandomizeIcon = icon("randomize", Dices);
 export const RefreshIcon = icon("refresh", RefreshCw);
 export const ReloadIcon = icon("reload", RefreshCcw);
 export const RemoveMemberIcon = icon("remove-member", UserMinus);

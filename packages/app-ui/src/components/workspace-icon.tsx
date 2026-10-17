@@ -39,7 +39,7 @@ export function WorkspaceIcon({
       style={{ width: size, height: size }}
       className="inline-flex shrink-0 items-center justify-center font-serif text-base font-semibold leading-none"
     >
-      W
+      P
     </span>
   );
 }

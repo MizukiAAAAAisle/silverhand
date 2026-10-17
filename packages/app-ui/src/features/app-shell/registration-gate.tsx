@@ -7,7 +7,10 @@ import { Button } from "@/components/ui/button";
 import { nameFormatMessage } from "@/features/identity/use-name-availability";
 import { cn } from "@/lib/cn";
 import { AuthSplitLayout } from "@/components/brand/auth-split-layout";
-import { useLoginUser, useSignupUser } from "../session/hooks";
+import { ExternalLink, PRIVACY_POLICY_URL } from "@/features/legal/legal-links";
+import { DraftAvatarCard } from "@/features/avatar-maker/components/draft-avatar-card";
+import { useDraftAvatar } from "@/features/avatar-maker/hooks/use-draft-avatar";
+import { useLoginUser, useSignupUser, useUploadDraftViewerAvatar } from "../session/hooks";
 
 export interface RegistrationGateProps {
   signupEnabled: boolean;
@@ -54,6 +57,8 @@ export function RegistrationGate({
 }: RegistrationGateProps): JSX.Element {
   const signup = useSignupUser();
   const login = useLoginUser();
+  const uploadDraftAvatar = useUploadDraftViewerAvatar();
+  const draftAvatar = useDraftAvatar();
   const [mode, setMode] = useState<AuthMode>(signupEnabled && !preferLogin ? "signup" : "login");
   const [email, setEmail] = useState("");
   const [handle, setHandle] = useState("");
@@ -112,6 +117,7 @@ export function RegistrationGate({
           name: handleTrimmed,
           display_name: displayNameTrimmed.length > 0 ? displayNameTrimmed : undefined,
         });
+        uploadDraftAvatar(draftAvatar);
       } else {
         await login.mutateAsync({ email: emailTrimmed, password });
       }
@@ -151,6 +157,8 @@ export function RegistrationGate({
         </header>
 
         <div className="flex flex-col gap-4">
+          {isSignup ? <DraftAvatarCard draft={draftAvatar} disabled={submitting} /> : null}
+
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="auth-email">Email</Label>
             <Input
@@ -281,6 +289,15 @@ export function RegistrationGate({
             </p>
           ) : null}
         </footer>
+
+        <p className="mt-6 text-xs text-text-muted">
+          <ExternalLink
+            href={PRIVACY_POLICY_URL}
+            className="underline underline-offset-3 hover:text-text-secondary"
+          >
+            Privacy Policy
+          </ExternalLink>
+        </p>
 
         {showServerAddress && (
           <div className="mt-10 border-t border-border-subtle pt-4">

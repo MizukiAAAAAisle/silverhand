@@ -28,6 +28,10 @@ import {
 } from "@/features/messages/components/pending-attachment-tray";
 import type { CachedPendingAttachment } from "@/features/messages/composer-draft-cache";
 import { MAX_ATTACHMENTS } from "@/features/messages/model/oversize-paste";
+import {
+  useNativeComposer,
+  useNativeComposerPlatform,
+} from "@/features/messages/hooks/use-native-composer";
 import { EmptyConversation } from "@/features/conversation-shell/components/channel-view/empty-conversation";
 import {
   ConversationHeaderIdentity,
@@ -129,8 +133,9 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
     },
   );
 
-  const submit = (): void => {
-    if (sendDisabled) return;
+  const submit = (text: string = draft): void => {
+    const content = text.trim();
+    if (sending || (content.length === 0 && files.length === 0)) return;
     const userId = getCurrentUserId();
     if (!userId) return;
     if (
@@ -143,7 +148,7 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
     }
     void initiate
       .mutateAsync({
-        content: trimmed,
+        content,
         client_message_id: attemptRef.current.id,
         attachments: files.map((item) => ({ file: item.file!, label: item.label! })),
       })
@@ -161,6 +166,48 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
         // either is live.
       });
   };
+
+  const nativeComposer = useNativeComposerPlatform();
+  const [accessoryHeight, setAccessoryHeight] = useState(0);
+  const accessoryRef = useRef<HTMLDivElement>(null);
+  useNativeComposer({
+    shown: nativeComposer && counterpart !== null,
+    draftKey: `direct-draft:${target.kind}:${target.id}`,
+    conversationId: null,
+    placeholder: "Message…",
+    enabled: !sending,
+    canSend: !sendDisabled,
+    offersMentions: false,
+    offersChannels: false,
+    accessoryHeight,
+    picker: null,
+    agentAvatarUrls: NO_AVATARS,
+    humanAvatarUrls: NO_AVATARS,
+    activityAgentIds: null,
+    draft,
+    caret: draft.length,
+    onChange: (text) => {
+      attemptRef.current = undefined;
+      setDraft(text);
+    },
+    onSend: (text) => {
+      setDraft(text);
+      submit(text);
+    },
+    onPick: () => {},
+    onTrigger: () => {},
+    onFiles: (list) => addFiles(list),
+  });
+
+  useEffect(() => {
+    const node = accessoryRef.current;
+    if (!node) {
+      return;
+    }
+    const observer = new ResizeObserver(() => setAccessoryHeight(Math.ceil(node.offsetHeight)));
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [nativeComposer, counterpart]);
 
   const onSubmit = (e: FormEvent): void => {
     e.preventDefault();
@@ -231,6 +278,47 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
     submit();
   };
 
+  const sendError = initiate.isError ? (
+    <div className="mb-2 text-xs text-error" role="alert">
+      {friendlyInitiateError(initiate.error, title, files.length > 0)}
+    </div>
+  ) : null;
+  const tray = (
+    <AnimatePresence initial={false}>
+      {files.length > 0 ? (
+        <PendingAttachmentTray key="attachments">
+          <AnimatePresence initial={false} mode="popLayout" propagate>
+            {files.map((item) => (
+              <PendingAttachmentMotion key={item.key}>
+                <AttachmentChip
+                  item={item}
+                  onRemove={() => removeFile(item.key)}
+                  removeDisabled={sending}
+                  onInsertLabel={sending ? undefined : () => insertLabel(item.label!)}
+                  onPreview={
+                    item.previewUrl
+                      ? () => setPreviewing({ url: item.previewUrl!, alt: item.filename })
+                      : undefined
+                  }
+                />
+              </PendingAttachmentMotion>
+            ))}
+          </AnimatePresence>
+        </PendingAttachmentTray>
+      ) : null}
+    </AnimatePresence>
+  );
+  const lightbox = (
+    <Lightbox
+      open={previewing !== null}
+      onOpenChange={(open) => {
+        if (!open) setPreviewing(null);
+      }}
+      src={previewing?.url ?? ""}
+      alt={previewing?.alt ?? ""}
+    />
+  );
+
   if (targetQuery.isLoading) {
     return (
       <main data-panel="chat" className="flex h-full min-w-0 flex-1 flex-col" style={paneChrome}>
@@ -278,117 +366,97 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
         <EmptyConversation />
       </div>
 
-      <form
-        data-composer
-        onSubmit={onSubmit}
-        onDrop={onDrop}
-        onDragOver={onDragOver}
-        onDragLeave={onDragLeave}
-        className={
-          "shrink-0 border-t border-border-subtle bg-(--pane-bg,var(--bg-base)) px-3 py-3 " +
-          (dragOver ? "[outline:2px_solid_var(--border-focus)] -outline-offset-2" : "")
-        }
-      >
-        {initiate.isError ? (
-          <div className="mb-2 text-xs text-error" role="alert">
-            {friendlyInitiateError(initiate.error, title, files.length > 0)}
-          </div>
-        ) : null}
-        <AnimatePresence initial={false}>
-          {files.length > 0 ? (
-            <PendingAttachmentTray key="attachments">
-              <AnimatePresence initial={false} mode="popLayout" propagate>
-                {files.map((item) => (
-                  <PendingAttachmentMotion key={item.key}>
-                    <AttachmentChip
-                      item={item}
-                      onRemove={() => removeFile(item.key)}
-                      removeDisabled={sending}
-                      onInsertLabel={sending ? undefined : () => insertLabel(item.label!)}
-                      onPreview={
-                        item.previewUrl
-                          ? () => setPreviewing({ url: item.previewUrl!, alt: item.filename })
-                          : undefined
-                      }
-                    />
-                  </PendingAttachmentMotion>
-                ))}
-              </AnimatePresence>
-            </PendingAttachmentTray>
-          ) : null}
-        </AnimatePresence>
-        <div
-          data-composer-shell
-          className="flex flex-col overflow-hidden rounded-(--control-radius) border border-border-subtle bg-bg-floating focus-within:border-border-focus"
-        >
-          <div data-composer-editor>
-            <textarea
-              ref={textareaRef}
-              autoFocus
-              value={draft}
-              data-composer-input
-              disabled={sending}
-              onChange={(e) => {
-                attemptRef.current = undefined;
-                setDraft(e.target.value);
-              }}
-              onKeyDown={onKeyDown}
-              onPaste={onPaste}
-              onCompositionStart={() => setComposing(true)}
-              onCompositionEnd={() => setComposing(false)}
-              aria-label={`Message ${title}`}
-              placeholder="Message…"
-              className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-            />
-          </div>
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            className="hidden"
-            onChange={(e) => {
-              if (e.target.files) addFiles(e.target.files);
-              e.target.value = "";
-            }}
-          />
-          <div data-composer-toolbar className="flex items-center justify-between px-2 py-1.5">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={sending || files.length >= MAX_ATTACHMENTS}
-              title="Attach a file"
-              aria-label="Attach a file"
-              className={COMPOSER_TOOL_CLASS}
-            >
-              <AttachFileIcon className="size-4" />
-            </button>
-            <Button
-              type="submit"
-              variant="default"
-              size="sm"
-              disabled={sendDisabled}
-              title="Send (Enter)"
-              data-composer-action="send"
-              data-sticker
-              data-sticker-size="md"
-              className="h-7"
-            >
-              {sending ? "Sending…" : "Send"}
-            </Button>
+      {nativeComposer ? (
+        // The native composer floats over the page; this holds the controls
+        // that float above it.
+        <div data-native-composer>
+          <div ref={accessoryRef} data-native-composer-accessory>
+            {sendError}
+            {tray}
           </div>
         </div>
-      </form>
-      <Lightbox
-        open={previewing !== null}
-        onOpenChange={(open) => {
-          if (!open) setPreviewing(null);
-        }}
-        src={previewing?.url ?? ""}
-        alt={previewing?.alt ?? ""}
-      />
+      ) : (
+        <form
+          data-composer
+          onSubmit={onSubmit}
+          onDrop={onDrop}
+          onDragOver={onDragOver}
+          onDragLeave={onDragLeave}
+          className={
+            "shrink-0 border-t border-border-subtle bg-(--pane-bg,var(--bg-base)) px-3 py-3 " +
+            (dragOver ? "[outline:2px_solid_var(--border-focus)] -outline-offset-2" : "")
+          }
+        >
+          {sendError}
+          {tray}
+          <div
+            data-composer-shell
+            className="flex flex-col overflow-hidden rounded-(--control-radius) border border-border-subtle bg-bg-floating focus-within:border-border-focus"
+          >
+            <div data-composer-editor>
+              <textarea
+                ref={textareaRef}
+                autoFocus
+                value={draft}
+                data-composer-input
+                disabled={sending}
+                onChange={(e) => {
+                  attemptRef.current = undefined;
+                  setDraft(e.target.value);
+                }}
+                onKeyDown={onKeyDown}
+                onPaste={onPaste}
+                onCompositionStart={() => setComposing(true)}
+                onCompositionEnd={() => setComposing(false)}
+                aria-label={`Message ${title}`}
+                placeholder="Message…"
+                className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              />
+            </div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files) addFiles(e.target.files);
+                e.target.value = "";
+              }}
+            />
+            <div data-composer-toolbar className="flex items-center justify-between px-2 py-1.5">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={sending || files.length >= MAX_ATTACHMENTS}
+                title="Attach a file"
+                aria-label="Attach a file"
+                className={COMPOSER_TOOL_CLASS}
+              >
+                <AttachFileIcon className="size-4" />
+              </button>
+              <Button
+                type="submit"
+                variant="default"
+                size="sm"
+                disabled={sendDisabled}
+                title="Send (Enter)"
+                data-composer-action="send"
+                data-sticker
+                data-sticker-size="md"
+                className="h-7"
+              >
+                {sending ? "Sending…" : "Send"}
+              </Button>
+            </div>
+          </div>
+        </form>
+      )}
+      {lightbox}
     </main>
   );
 }
+
+const NO_AVATARS = new Map<string, string | null>();
 
 type DraftFile = CachedPendingAttachment & { file: File; label: string };
 

@@ -247,12 +247,6 @@ fn internal() -> Response {
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    include!("conversation_agent_activity_tests.rs");
-}
-
 /// Canonical detailed stream for immutable agent-scoped agents.
 pub fn agent_router<P>(port: P) -> Router
 where
@@ -305,4 +299,10 @@ async fn read_agent<P: AgentActivityReadPort>(
         Ok(None) => error(StatusCode::NOT_FOUND, "agent not found"),
         _ => internal(),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    include!("conversation_agent_activity_tests.rs");
 }

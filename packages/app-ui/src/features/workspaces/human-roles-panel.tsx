@@ -87,7 +87,7 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
   }
   if (humans.length === 0) {
     return (
-      <PanelEmpty icon={<EmptyIcon className="size-6" />}>No people in this workspace</PanelEmpty>
+      <PanelEmpty icon={<EmptyIcon className="size-6" />}>No people in this project</PanelEmpty>
     );
   }
 
@@ -195,8 +195,8 @@ function TransferOwnershipDialog({
           <DialogTitle>{`Transfer ownership to ${name}?`}</DialogTitle>
         </DialogHeader>
         <DialogDescription className="text-sm leading-relaxed text-text-muted">
-          {name} becomes the owner of this workspace. You stay as an admin and can no longer change
-          roles or delete the workspace.
+          {name} becomes the owner of this project. You stay as an admin and can no longer change
+          roles or delete the project.
         </DialogDescription>
         <DialogFooter>
           <Button variant="cancel" onClick={onCancel} disabled={pending}>

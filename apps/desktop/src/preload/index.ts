@@ -127,6 +127,7 @@ const api: DesktopBridge = {
     ipcRenderer.invoke("partialApply:retry"),
   pickDirectory: (options?: { defaultPath?: string }): Promise<string | null> =>
     ipcRenderer.invoke("dialog:pickDirectory", options),
+  getAppVersion: (): Promise<string> => ipcRenderer.invoke("app:getVersion"),
   openExternal: (url: string): Promise<void> => ipcRenderer.invoke("shell:openExternal", url),
   setPinchZoom: setPreviewPinchZoom,
   /** Materialize attachment bytes to ONE stable per-id scratch file and
@@ -211,7 +212,9 @@ const api: DesktopBridge = {
   },
   showSystemNotification: (opts: {
     title: string;
-    body: string;
+    subtitle?: string;
+    body?: string;
+    groupId?: string;
     force?: boolean;
     /** Opaque id echoed back via `onNotificationClicked` so the renderer
      *  can route the click to the right navigation target. Fire-and-

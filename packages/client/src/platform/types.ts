@@ -48,7 +48,11 @@ export interface ShellCapability {
 export interface NotificationCapability {
   showSystemNotification(opts: {
     title: string;
-    body: string;
+    /** macOS shows it under the title. */
+    subtitle?: string;
+    body?: string;
+    /** Stacks alerts that share it into one group (macOS, Windows). */
+    groupId?: string;
     force?: boolean;
     notificationId?: string;
   }): Promise<void>;
@@ -113,6 +117,15 @@ export interface AppUpdateCapability {
   onShowDialog(handler: () => void): () => void;
 }
 
+/** A native avatar editor over the shared part library. The UI owns storage: it
+ *  passes the starting config and uploads what comes back. */
+export interface AvatarMakerCapability {
+  /** Null when the person closes the editor without choosing. */
+  edit(input: {
+    config: { parts: Record<string, number>; bg: number };
+  }): Promise<{ config: { parts: Record<string, number>; bg: number }; pngBytes: Uint8Array<ArrayBuffer> } | null>;
+}
+
 /** Installed once by an application entry point, before mounting the UI. */
 export interface ClientPlatform {
   eventHooks?: EventHooksCapability;
@@ -125,8 +138,15 @@ export interface ClientPlatform {
   navigation?: NavigationCapability;
   titlebar?: TitlebarCapability;
   pageBar?: PageBarCapability;
+  composer?: ComposerCapability;
+  banner?: BannerCapability;
+  avatarMaker?: AvatarMakerCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
+  /** The store page this build is installed from, offered when the server requires a newer app. */
+  storeUrl?: string;
+  /** The running build's release version; omitted where the host has none. */
+  getAppVersion?(): Promise<string>;
 }
 
 /** Optional native presentation. Navigation history, the page stack and its
@@ -139,6 +159,8 @@ export interface NativeNavigationState {
   key: string;
   tab: "chat" | "activity" | "tasks" | "me";
   visible: boolean;
+  /** The theme is dark, so native chrome and the status bar take the dark appearance. */
+  dark: boolean;
 }
 export interface NativeNavigationIntent {
   modalVersion: number;
@@ -243,6 +265,102 @@ export interface PageBarCapability {
    * bar fades with it. Null ends the swipe, after any bar synced before it. */
   backProgress(progress: number | null): Promise<void>;
   subscribe(handler: (event: PageBarEvent) => void): Promise<() => void>;
+}
+/** An item of the composer's add menu. With `pick`, native runs that system
+ * picker and its files come back as a `files` event; without it the tap comes
+ * back as `add`. `icon` is SVG markup on a 24px grid. */
+export interface ComposerMenuItem {
+  id: string;
+  label: string;
+  icon: string;
+  pick?: "photos" | "files";
+}
+/** The compact layout's composer, drawn natively over the page. The shared
+ * UI keeps the draft, the send and every string; native edits the text and
+ * reports it. `key` names the draft: native starts a new one empty until
+ * `setText`. iOS decodes each field by name (`SilverhandClientPlugin.swift`). */
+export interface ComposerState {
+  key: string;
+  placeholder: string;
+  enabled: boolean;
+  canSend: boolean;
+  sendLabel: string;
+  addLabel: string;
+  add: ComposerMenuItem[];
+  /** The height of the controls the shared UI floats above the composer and
+   * its picker (the activity line, the attachments); a tap on them keeps the
+   * keyboard. */
+  accessoryHeight: number;
+  /** The `@` / `#` candidates native lists above the composer; a tap comes
+   * back as `pick`. Absent while no trigger is open. */
+  picker?: ComposerPicker;
+  /** The agents at work here, on a line above the composer; a tap comes back
+   * as `activity`. Absent while none runs. */
+  activity?: ComposerActivity;
+}
+/** One line for the agents running: up to three faces, the first agent's
+ * name and state, and how long it has run, which native counts from `since`
+ * (epoch ms). */
+export interface ComposerActivity {
+  /** The agent a tap opens. */
+  id: string;
+  faces: ComposerPickerIcon[];
+  title: string;
+  detail: string;
+  since: number;
+  label: string;
+}
+/** A candidate's face: a picture drawn as it is, or a glyph (SVG markup on a
+ * 24px grid) native tints, on a square ground when `ground`. */
+export type ComposerPickerIcon = { image: string } | { glyph: string; ground?: boolean };
+export interface ComposerPickerRow {
+  id: string;
+  title: string;
+  /** A handle, set in monospace. */
+  handle?: string;
+  detail?: string;
+  icon: ComposerPickerIcon;
+  /** A row outside the conversation, drawn quieter. */
+  dimmed?: boolean;
+  /** Starts a section with this header. */
+  section?: string;
+}
+export interface ComposerPicker {
+  rows: ComposerPickerRow[];
+  /** A note under the rows (more matches, loading). */
+  footer?: string;
+}
+export type ComposerEvent =
+  | { kind: "change"; key: string; text: string; caret: number; composing: boolean }
+  /** Carries the text sent, which a `change` may not have delivered yet. */
+  | { kind: "send"; key: string; text: string; caret: number }
+  | { kind: "add"; key: string; id: string }
+  | { kind: "pick"; key: string; id: string }
+  | { kind: "activity"; key: string; id: string }
+  | { kind: "files"; key: string; files: { name: string; type: string; base64: string }[] };
+export interface ComposerCapability {
+  /** Shows the composer for draft `state.key`. */
+  sync(state: ComposerState): Promise<void>;
+  /** Removes the composer, if it still shows draft `key`. */
+  remove(key: string): Promise<void>;
+  /** Replaces the text of draft `key`; `caret` counts UTF-16 units. */
+  setText(input: { key: string; text: string; caret: number; focus: boolean }): Promise<void>;
+  subscribe(handler: (event: ComposerEvent) => void): Promise<() => void>;
+}
+/** A notice native draws over its bars; a newer one replaces the one showing. */
+export interface BannerNotice {
+  id: string;
+  title: string;
+  /** Set after the title, quieter. */
+  subtitle?: string;
+  body?: string;
+  /** `image` is an image URL; `glyph` is SVG markup on a 24px grid. */
+  icon?: ComposerPickerIcon;
+}
+export type BannerEvent = { kind: "open"; id: string };
+export interface BannerCapability {
+  show(notice: BannerNotice): Promise<void>;
+  subscribe(handler: (event: BannerEvent) => void): Promise<() => void>;
 }
 export interface NavigationCapability {
   badges(input: {

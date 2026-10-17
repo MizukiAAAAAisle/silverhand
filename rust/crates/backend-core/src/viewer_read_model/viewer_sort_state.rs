@@ -335,6 +335,14 @@ pub trait ChannelHomeReadPort {
     ) -> impl Future<Output = Result<Option<ChannelHomeVerdict>, PersistenceFailure>> + Send;
 }
 
+/// Read the complete, authorized, server-ordered sidebar in one snapshot.
+pub trait ViewerSidebarRead {
+    fn sidebar_sort(
+        &self,
+        viewer: &UserId,
+    ) -> impl Future<Output = Result<ViewerSortStateProjection, PersistenceFailure>> + Send;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,12 +440,4 @@ mod tests {
     fn favorite_key_prefixes_the_conversation_id() {
         assert_eq!(favorite_key("conv-1"), "conversation:conv-1");
     }
-}
-
-/// Read the complete, authorized, server-ordered sidebar in one snapshot.
-pub trait ViewerSidebarRead {
-    fn sidebar_sort(
-        &self,
-        viewer: &UserId,
-    ) -> impl Future<Output = Result<ViewerSortStateProjection, PersistenceFailure>> + Send;
 }

@@ -78,6 +78,7 @@
   --nav-rail-indicator-display: none;
   --nav-rail-item-border-width: 2px;
   --row-radius: 6px;
+  --nav-row-radius: 10px;
   --sidebar-row-border-width: 2px;
   --text-nav-rail: var(--text-secondary);
   --text-nav-rail-hover: var(--text-primary);
@@ -141,7 +142,6 @@
   --chip-bg-hover: rgba(255, 255, 255, 0.12);
   --chip-radius: 4px;
   --workspace-icon-fg: var(--bg-base);
-  --workspace-icon-radius: 0;
   --message-bubble-radius: var(--card-radius);
   --message-framed-border: rgba(255, 255, 255, 0.26);
   --message-framed-bg: color-mix(in oklab, var(--accent) 10%, transparent);

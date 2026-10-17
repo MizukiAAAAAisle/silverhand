@@ -97,6 +97,13 @@ export class PageBarHub {
     }
   }
 
+  /** Removes the bar outside a flush. It is recorded as sent, so a later
+   * flush of the same page draws it again instead of taking it as current. */
+  clear(): void {
+    this.sent = "null";
+    this.synced = this.bar.sync(null).catch(() => {});
+  }
+
   dispatch(event: PageBarEvent): void {
     if (event.kind === "back") {
       this.navigation.back();
@@ -140,6 +147,9 @@ export function PageBarHost({ children }: { children: ReactNode }): JSX.Element 
     const listening = pageBar.subscribe((event) => hub.dispatch(event));
     return () => {
       void listening.then((remove) => remove());
+      // The shell leaves (a session lost to the sign-in gate) without a last
+      // flush, so the bar would keep the previous page.
+      hub.clear();
     };
   }, [pageBar, hub]);
 

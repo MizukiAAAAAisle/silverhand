@@ -36,7 +36,7 @@ async fn snapshot(
     db: &mut SqliteConnection,
     omit_retired_preferences: bool,
 ) -> Vec<(String, Vec<String>)> {
-    let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name!='_migrations' ORDER BY name").fetch_all(&mut *db).await.unwrap();
+    let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('_migrations','avatar_designs') ORDER BY name").fetch_all(&mut *db).await.unwrap();
     let mut result = vec![];
     for table in tables {
         let columns: Vec<String> =
@@ -50,11 +50,13 @@ async fn snapshot(
             .iter()
             // Compare pre-existing columns, not new fields introduced by later
             // migrations. Step92's correlation values are checked separately;
-            // step99's pending default belongs to profile setup migration tests.
+            // step99's pending default belongs to profile setup migration tests;
+            // step100's avatar design is empty on upgrade.
             .filter(|c| {
                 (table != "messages"
                     || !matches!(c.as_str(), "client_message_id" | "client_request_json"))
                     && (table != "users" || c.as_str() != "embedded_profile_pending")
+                    && c.as_str() != "avatar_design_id"
             })
             .map(|c| format!("quote({})", quoted(c)))
             .collect::<Vec<_>>()

@@ -13,6 +13,8 @@ import { onWsFrame, subscribeViewerScope, isCurrentViewerScope } from "@/lib/ws-
 import { conversationRefQueryOptions } from "@/features/conversations/conversation-ref-query";
 import { recordChannelWorkspace } from "@/features/channels/channel-workspace-index";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
+import { showMentionToast } from "./mention-toast";
+import { payloadString, systemNoticeOf } from "./system-notice";
 
 const unreadKey = ["notifications", "unread"] as const;
 const listKey = ["notifications", "list"] as const;
@@ -215,6 +217,29 @@ export function useNotificationToasts(
     return getPlatform().notifications?.onNotificationClicked(handleClickById);
   }, [handleClickById]);
 
+  // The native banner reports a tap by the notification's id.
+  useEffect(() => {
+    const banner = getPlatform().banner;
+    if (!banner) {
+      return;
+    }
+    let stop: (() => void) | null = null;
+    let live = true;
+    void banner
+      .subscribe((event) => handleClickById(event.id))
+      .then((unsubscribe) => {
+        if (live) {
+          stop = unsubscribe;
+        } else {
+          unsubscribe();
+        }
+      });
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }, [handleClickById]);
+
   useEffect(() => {
     if (!data) return;
     const notifications = data.notifications;
@@ -248,35 +273,41 @@ export function useNotificationToasts(
         continue;
       }
 
-      const label = buildToastLabel(n);
-      // Sonner's `ExternalToast` doesn't expose a whole-surface
-      // `onClick`; the idiomatic pattern is the `action` button. We
-      // surface "View" so a click on the toast's affordance jumps to
-      // the source message. The system-notification path (main process)
-      // still fires on full-surface click — that one is governed by
-      // the OS-level Notification semantics, not sonner.
-      const toastOptions = isClickableKind(n.kind)
-        ? {
-            action: {
-              label: "View",
-              onClick: () => handleClickById(n.id),
-            },
-          }
-        : undefined;
-
-      if (isAgentFailure) {
-        toast.error(label, toastOptions);
+      if (isViewerMention) {
+        showMentionToast(
+          {
+            sender: n.sender ?? null,
+            fallbackName: payloadString(n, "trigger_name") ?? "Someone",
+            conversationTitle: payloadString(n, "conversation_title"),
+            excerpt: payloadString(n, "mention_excerpt"),
+          },
+          n.id,
+          () => handleClickById(n.id),
+        );
       } else {
-        // Neutral notifications carry the shared "notification" icon so "new
-        // activity" reads at a glance; agent failures stay on the error level.
-        toast(label, { ...toastOptions, icon: toastIcon("notification") });
+        const label = buildToastLabel(n);
+        // A plain toast has no whole-surface click, so a clickable kind gets a
+        // "View" action instead.
+        const toastOptions = isClickableKind(n.kind)
+          ? {
+              action: {
+                label: "View",
+                onClick: () => handleClickById(n.id),
+              },
+            }
+          : undefined;
+
+        if (isAgentFailure) {
+          toast.error(label, toastOptions);
+        } else {
+          toast(label, { ...toastOptions, icon: toastIcon("notification") });
+        }
       }
 
       // System notification — main process suppresses ordinary alerts when an
       // Electron window is focused; direct human mentions opt out via `force`.
       void getPlatform().notifications?.showSystemNotification({
-        title: "Silverhand",
-        body: buildSystemNotificationBody(n),
+        ...systemNoticeOf(n, buildToastLabel(n)),
         force: isViewerMention,
         notificationId: isClickableKind(n.kind) ? n.id : undefined,
       });
@@ -461,20 +492,4 @@ function buildToastLabel(n: NotificationDto): string {
     return conversationTitle ? `You were mentioned in #${conversationTitle}` : "You were mentioned";
   }
   return "New notification";
-}
-
-function payloadString(n: NotificationDto, key: string): string | null {
-  const value = n.payload?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function buildSystemNotificationBody(n: NotificationDto): string {
-  if (n.kind === "mention_self") {
-    const triggerName = payloadString(n, "trigger_name") ?? "Someone";
-    const conversationTitle = payloadString(n, "conversation_title");
-    return conversationTitle
-      ? `${triggerName} mentioned you in #${conversationTitle}.`
-      : `${triggerName} mentioned you.`;
-  }
-  return buildToastLabel(n);
 }

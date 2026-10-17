@@ -17,6 +17,7 @@ import {
   ConversationVisibilitySchema,
   RuntimeKindSchema,
 } from '../db/schema.js';
+import { MessageAuthorDtoSchema } from './message-author.js';
 
 export const ConversationDtoSchema = z.object({
   id: z.string(),
@@ -741,3 +742,26 @@ export const AgentStreamActivityListResponseSchema = z.object({
   next_before_id: z.number().int().nullable(),
 });
 export type AgentStreamActivityListResponse = z.infer<typeof AgentStreamActivityListResponseSchema>;
+
+/** Latest human/agent message of one conversation (#task:2845). System messages never
+ *  count; thread replies do. Served by `GET /api/conversations/latest` and pushed as the
+ *  viewer-scoped `conversation_latest_changed` event with the same shape. */
+export const ConversationLatestDtoSchema = z.object({
+  conversation_id: z.string(),
+  message_id: z.string(),
+  seq: z.number().int().nonnegative(),
+  created_at: z.number().int(),
+  thread_root_id: z.string().nullable(),
+  sender: MessageAuthorDtoSchema,
+  /** Whitespace-collapsed, at most 140 UTF-16 units; null when the body is empty. */
+  preview: z.string().nullable(),
+  attachment_count: z.number().int().nonnegative(),
+});
+export type ConversationLatestDto = z.infer<typeof ConversationLatestDtoSchema>;
+
+export const ConversationLatestListResponseSchema = z.object({
+  items: z.array(ConversationLatestDtoSchema),
+});
+export type ConversationLatestListResponse = z.infer<typeof ConversationLatestListResponseSchema>;
+
+export const CONVERSATION_LATEST_CHANGED_EVENT = 'conversation_latest_changed';

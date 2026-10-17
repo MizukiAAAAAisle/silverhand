@@ -3,7 +3,7 @@ import { UserDtoSchema } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
 import { EmbeddedProfileSetup, type SetupDependencies } from "./embedded-profile-setup";
 
-const values = { username: "shiki", displayName: "Shiki", avatar: null };
+const values = { username: "shiki", displayName: "Shiki", avatar: null, design: null };
 function fixture() {
   const user = UserDtoSchema.parse({
     id: "viewer",
@@ -100,7 +100,7 @@ describe("embedded profile setup", () => {
     expect(model.state.error).toContain("Profile saved");
     await model.read();
     await model.retryAvatar();
-    expect(deps.upload).toHaveBeenNthCalledWith(2, avatar);
+    expect(deps.upload).toHaveBeenNthCalledWith(2, avatar, null);
     expect(deps.request).toHaveBeenCalledTimes(2);
     expect(model.state.phase).toBe("ready");
   });

@@ -1,4 +1,4 @@
-export type SettingsSection = "account" | "appearance" | "connection" | "hooks" | "notifications";
+export type SettingsSection = "account" | "appearance" | "connection" | "notifications" | "hooks" | "about";
 
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   "account",
@@ -6,6 +6,7 @@ export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   "connection",
   "notifications",
   "hooks",
+  "about",
 ];
 
 const DEFAULT_SECTION: SettingsSection = SETTINGS_SECTIONS[0]!;

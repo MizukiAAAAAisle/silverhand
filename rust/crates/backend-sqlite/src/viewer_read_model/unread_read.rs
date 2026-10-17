@@ -23,7 +23,9 @@ use std::{collections::HashMap, path::Path, time::Duration};
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
         MessageId, ThreadRootId,
-        unread::{LatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread},
+        unread::{
+            ConversationHumanAudience, LatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread,
+        },
     },
     foundation::identity::{ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
@@ -604,6 +606,24 @@ async fn latest_unread(
             .transpose()
             .map_err(|_| UnreadReadModelError::MalformedIdentity("messages.thread_root_id"))?,
     }))
+}
+
+impl ConversationHumanAudience for SqliteUnreadReadModel {
+    async fn human_participants(
+        &self,
+        conversation: &ConversationId,
+    ) -> Result<Vec<UserId>, PersistenceFailure> {
+        async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some(DEFERRED_READ_BEGIN))
+                    .await?;
+            let viewers = participants(&mut tx, conversation).await?;
+            tx.commit().await?;
+            Ok::<_, UnreadReadModelError>(viewers)
+        }
+        .await
+        .map_err(PersistenceFailure::from_source)
+    }
 }
 
 impl UnreadReadModel for SqliteUnreadReadModel {

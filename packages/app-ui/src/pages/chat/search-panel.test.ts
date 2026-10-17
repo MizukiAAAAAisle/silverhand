@@ -89,7 +89,7 @@ it("uses the server's filtered state rather than applying a second frontend filt
     humans: { results: [], total: 0, truncated: false },
     agents: { results: [], total: 0, truncated: false },
   };
-  expect(render()).toContain("Clear workspace, sender and time filters");
+  expect(render()).toContain("Clear project, sender and time filters");
 });
 it("does not turn query failure into empty identities or show retained identity data", () => {
   state.error = true;

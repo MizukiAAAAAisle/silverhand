@@ -23,6 +23,11 @@
 		A26631000000000000000005 /* SilverhandNative in Frameworks */ = {isa = PBXBuildFile; productRef = A26630000000000000000004 /* SilverhandNative */; };
 		A26720000000000000000001 /* SilverhandNavigationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26720000000000000000002 /* SilverhandNavigationController.swift */; };
 		A26720000000000000000013 /* SilverhandBars.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26720000000000000000014 /* SilverhandBars.swift */; };
+		A26960000000000000000001 /* SilverhandComposer.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26960000000000000000002 /* SilverhandComposer.swift */; };
+		A26970000000000000000001 /* SilverhandComposerPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26970000000000000000002 /* SilverhandComposerPicker.swift */; };
+		A26980000000000000000001 /* SilverhandBanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26980000000000000000002 /* SilverhandBanner.swift */; };
+		A28590000000000000000001 /* SilverhandAvatarMaker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A28590000000000000000002 /* SilverhandAvatarMaker.swift */; };
+		A26990000000000000000001 /* SilverhandComposerActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26990000000000000000002 /* SilverhandComposerActivity.swift */; };
 		A26950000000000000000001 /* AttachmentExportController.swift in Sources */ = {isa = PBXBuildFile; fileRef = A26950000000000000000002 /* AttachmentExportController.swift */; };
 /* End PBXBuildFile section */
 
@@ -54,6 +59,11 @@
 		A26631000000000000000004 /* NetworkAcceptanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = NetworkAcceptanceTests.swift; path = ../../native/Tests/SilverhandNativeTests/NetworkAcceptanceTests.swift; sourceTree = SOURCE_ROOT; };
 		A26720000000000000000002 /* SilverhandNavigationController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandNavigationController.swift; sourceTree = "<group>"; };
 		A26720000000000000000014 /* SilverhandBars.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandBars.swift; sourceTree = "<group>"; };
+		A26960000000000000000002 /* SilverhandComposer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandComposer.swift; sourceTree = "<group>"; };
+		A26970000000000000000002 /* SilverhandComposerPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandComposerPicker.swift; sourceTree = "<group>"; };
+		A26980000000000000000002 /* SilverhandBanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandBanner.swift; sourceTree = "<group>"; };
+		A28590000000000000000002 /* SilverhandAvatarMaker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandAvatarMaker.swift; sourceTree = "<group>"; };
+		A26990000000000000000002 /* SilverhandComposerActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SilverhandComposerActivity.swift; sourceTree = "<group>"; };
 		A26950000000000000000002 /* AttachmentExportController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttachmentExportController.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -105,6 +115,11 @@
 				504EC3071FED79650016851F /* AppDelegate.swift */,
 				A26720000000000000000002 /* SilverhandNavigationController.swift */,
 				A26720000000000000000014 /* SilverhandBars.swift */,
+				A26960000000000000000002 /* SilverhandComposer.swift */,
+				A26970000000000000000002 /* SilverhandComposerPicker.swift */,
+				A26990000000000000000002 /* SilverhandComposerActivity.swift */,
+				A26980000000000000000002 /* SilverhandBanner.swift */,
+				A28590000000000000000002 /* SilverhandAvatarMaker.swift */,
 				A26950000000000000000002 /* AttachmentExportController.swift */,
 				A26630000000000000000002 /* SilverhandClientPlugin.swift */,
 				504EC30B1FED79650016851F /* Main.storyboard */,
@@ -234,6 +249,11 @@
 				504EC3081FED79650016851F /* AppDelegate.swift in Sources */,
 				A26720000000000000000001 /* SilverhandNavigationController.swift in Sources */,
 				A26720000000000000000013 /* SilverhandBars.swift in Sources */,
+				A26960000000000000000001 /* SilverhandComposer.swift in Sources */,
+				A26970000000000000000001 /* SilverhandComposerPicker.swift in Sources */,
+				A26990000000000000000001 /* SilverhandComposerActivity.swift in Sources */,
+				A26980000000000000000001 /* SilverhandBanner.swift in Sources */,
+				A28590000000000000000001 /* SilverhandAvatarMaker.swift in Sources */,
 				A26950000000000000000001 /* AttachmentExportController.swift in Sources */,
 				A26630000000000000000001 /* SilverhandClientPlugin.swift in Sources */,
 				9582B6832FE993A70072D4E8 /* SceneDelegate.swift in Sources */,

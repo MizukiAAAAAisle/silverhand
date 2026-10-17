@@ -25,6 +25,8 @@ export function registerSurfaceIpcHandlers(
     return result.filePaths[0] ?? null;
   });
 
+  ipc.handle("app:getVersion", () => app.getVersion());
+
   ipc.handle("shell:openExternal", async (_event, url: string) => {
     if (typeof url !== "string") return;
     // Refuse anything that isn't an http(s) link — preload is a security
@@ -116,15 +118,23 @@ export function registerSurfaceIpcHandlers(
 
   ipc.handle("notification:show", (event, opts: unknown) => {
     if (!opts || typeof opts !== "object") return;
-    const { title, body, force, notificationId } = opts as Partial<Record<string, unknown>>;
-    if (typeof title !== "string" || typeof body !== "string") return;
+    const { title, subtitle, body, groupId, force, notificationId } = opts as Partial<
+      Record<string, unknown>
+    >;
+    if (typeof title !== "string") return;
     // Fire ordinary system notifications only when no Electron window is
     // focused. Direct human mentions opt into `force` so an active-but-
     // different channel still produces an OS notification instead of only
     // changing the unread dot.
     if (force !== true && BrowserWindow.getFocusedWindow() !== null) return;
     const audio = soundEnabled() ? customSound() : null;
-    const n = new Notification({ title, body, silent: !soundEnabled() || !!audio });
+    const n = new Notification({
+      title,
+      subtitle: optionalString(subtitle),
+      body: optionalString(body),
+      groupId: optionalString(groupId),
+      silent: !soundEnabled() || !!audio,
+    });
     // Click handler — only wired when the renderer attached a
     // `notificationId`. Bring a window forward (the user clicked, that's
     // the intent) and forward the id back so the renderer can navigate
@@ -178,4 +188,8 @@ export function registerSurfaceIpcHandlers(
       }
     }
   });
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
 }

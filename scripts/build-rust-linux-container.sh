@@ -4,6 +4,7 @@ set -euo pipefail
 [[ -d /cargo-target && -d /out && "$PWD" == /src/rust ]] || exit 2
 TARGET=x86_64-unknown-linux-gnu
 [[ "$(uname -m)" == x86_64 ]] || { echo 'Wrong container architecture' >&2; exit 1; }
+rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
 rustc --version
 getconf GNU_LIBC_VERSION
 # /src/.cargo/config.toml supplies the production SQLite build policy.
@@ -71,6 +72,6 @@ wait "$CHILD"
 CHILD=''
 HASH="$(cut -d' ' -f1 /out/SHA256SUMS)"
 LOCK_HASH="$(sha256sum /src/rust/Cargo.lock | cut -d' ' -f1)"
-printf '{"target":"%s","sha256":"%s","commit":"%s","tracked_dirty":%s,"image":"%s","cargo_lock_sha256":"%s","glibc_required":"%s","smoke":"ready200/info200/SIGTERM-exit0"}\n' \
-  "$TARGET" "$HASH" "$BUILD_COMMIT" "$BUILD_DIRTY" "$BUILD_IMAGE" "$LOCK_HASH" "$GLIBC_MAX" > /out/build.json
+printf '{"target":"%s","sha256":"%s","commit":"%s","tracked_dirty":%s,"image":"%s","toolchain":"%s","cargo_lock_sha256":"%s","glibc_required":"%s","smoke":"ready200/info200/SIGTERM-exit0"}\n' \
+  "$TARGET" "$HASH" "$BUILD_COMMIT" "$BUILD_DIRTY" "$BUILD_IMAGE" "$(rustc --version)" "$LOCK_HASH" "$GLIBC_MAX" > /out/build.json
 echo '[linux-server] ELF/ABI and real-process smoke PASS'

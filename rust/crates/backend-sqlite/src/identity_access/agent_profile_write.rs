@@ -117,6 +117,8 @@ enum ProfileWriteFailure {
     AvatarCorruption(#[from] AgentAvatarRowCorruption),
     #[error(transparent)]
     CorruptRuntime(#[from] CorruptStoredRuntime),
+    #[error(transparent)]
+    Design(#[from] super::avatar_design::DesignInsertFailure),
 }
 
 impl SqliteAgentProfileWrite {
@@ -215,6 +217,13 @@ impl SqliteAgentProfileWrite {
         // `Clear` writes a literal `NULL`; a `Set` binds the value. `updated_at` is
         // always appended, so the `SET` clause is never empty — a committed tuning
         // write always bumps the instant.
+        let design_id = match admitted.avatar() {
+            FieldEdit::Set(assignment) => {
+                super::avatar_design::insert_design(&mut tx, assignment.design.as_ref(), now_ms)
+                    .await?
+            }
+            _ => None,
+        };
         let mut builder = QueryBuilder::<Sqlite>::new("UPDATE agents SET ");
         let mut needs_comma = false;
 
@@ -256,7 +265,9 @@ impl SqliteAgentProfileWrite {
             FieldEdit::Leave => {}
             FieldEdit::Clear => {
                 separator(&mut builder, &mut needs_comma);
-                builder.push("avatar_storage_key = NULL, avatar_content_type = NULL");
+                builder.push(
+                    "avatar_storage_key = NULL, avatar_content_type = NULL, avatar_design_id = NULL",
+                );
             }
             FieldEdit::Set(assignment) => {
                 separator(&mut builder, &mut needs_comma);
@@ -264,6 +275,8 @@ impl SqliteAgentProfileWrite {
                 builder.push_bind(assignment.pointer.as_str());
                 builder.push(", avatar_content_type = ");
                 builder.push_bind(assignment.content_type.as_str());
+                builder.push(", avatar_design_id = ");
+                builder.push_bind(design_id);
             }
         }
 
@@ -698,6 +711,7 @@ INSERT INTO agents (id, name, display_name, runtime, avatar_storage_key, avatar_
         let assignment = AgentAvatarAssignment {
             pointer: AgentAvatarBlobPointer::parse("agent-avatars/agent-2/blob-0").unwrap(),
             content_type: AvatarContentType::Png,
+            design: None,
         };
         let expected = assignment.clone();
         let outcome = adapter

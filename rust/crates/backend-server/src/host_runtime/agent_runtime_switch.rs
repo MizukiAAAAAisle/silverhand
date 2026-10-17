@@ -965,7 +965,7 @@ mod tests {
             &self,
             _agent: &AgentId,
         ) -> Result<(), silverhand_backend_core::identity_access::agent_profile_write::AgentChangedAnnounceFailure>
-        {
+{
             // Every test here stops at the ladder, admission, or the saga PREFLIGHT — none reaches
             // a commit, and the `agent_changed` hint fires ONLY after a commit. So a consulted sink
             // would be a pre-commit-announce regression, caught loudly here rather than silently

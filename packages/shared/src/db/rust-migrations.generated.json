@@ -15,6 +15,12 @@
       "lastStep": 99,
       "released": true,
       "releasedIn": "ECS Rust deployment 2026-09-15, 5504ea577"
+    },
+    {
+      "epoch": 71,
+      "firstStep": 100,
+      "lastStep": 100,
+      "released": false
     }
   ],
   "inputs": {
@@ -23,8 +29,8 @@
     "packages/shared/src/conversation-title.ts": "74e08fa0290476e633508b05958d9be88a412c0ae468e29a9b60bebb9b43a3db",
     "packages/shared/src/db/baseline-schema.ts": "7e5b7e9a0aca9b79fa433dca341d68ef4f761c5a545069c6005a4519851130e6",
     "packages/shared/src/db/migration-contracts/task-title-v96.ts": "98b0881301cb959962489178aefca16aa4228c786f03b0b849a654d58504d583",
-    "packages/shared/src/db/migrations.ts": "94605bd2ae6b9e1d04950bef6e479bbf2d0c1f2803bab3d558800239ed1bec4c",
-    "packages/shared/src/db/schema-epochs.ts": "96037ea3491a2ddc82400e74c6b4334f9c9cd96ec41a5a9dc5b71ed446fb44ce",
+    "packages/shared/src/db/migrations.ts": "baa4c17db01fc588e5b52ead192e425af96b211cd4261a6c268c0db168df0250",
+    "packages/shared/src/db/schema-epochs.ts": "44ffb197ae55993b04005572e3b53547512b309f2df94fed066cd6dd6618c78c",
     "packages/shared/src/display-name-charset.ts": "13ad82b9e92e562014322c569df15476a8ef5d7863f541f79207a5403d542410",
     "packages/shared/src/unicode-case-fold.ts": "b5cb75d46582dc93b640434ad78fe8f0a741e5e1aa183adbb27368ce2aceb120",
     "packages/shared/src/unicode-name-charset.ts": "bbcda81d89d738fdfe6a9ff0dd4dad633a79a84cd8f82e203753910196967879",
@@ -421,6 +427,13 @@
       "version": 99,
       "name": "embedded_profile_setup",
       "up": "ALTER TABLE users ADD COLUMN embedded_profile_pending INTEGER NOT NULL DEFAULT 0\n      CHECK (embedded_profile_pending IN (0, 1));",
+      "foreignKeyEscape": false,
+      "precondition": false
+    },
+    {
+      "version": 100,
+      "name": "avatar_designs",
+      "up": "\n      CREATE TABLE avatar_designs (\n        id            TEXT PRIMARY KEY,\n        parts_version INTEGER NOT NULL CHECK (parts_version > 0),\n        config        TEXT NOT NULL CHECK (json_valid(config) AND json_type(config) = 'object'),\n        created_at    INTEGER NOT NULL\n      );\n      ALTER TABLE users ADD COLUMN avatar_design_id TEXT REFERENCES avatar_designs(id)\n        CHECK (avatar_design_id IS NULL OR avatar_storage_key IS NOT NULL);\n      ALTER TABLE agents ADD COLUMN avatar_design_id TEXT REFERENCES avatar_designs(id)\n        CHECK (avatar_design_id IS NULL OR avatar_storage_key IS NOT NULL);\n      CREATE UNIQUE INDEX idx_users_avatar_design ON users(avatar_design_id)\n        WHERE avatar_design_id IS NOT NULL;\n      CREATE UNIQUE INDEX idx_agents_avatar_design ON agents(avatar_design_id)\n        WHERE avatar_design_id IS NOT NULL;\n      CREATE TRIGGER users_avatar_design_follows_image BEFORE UPDATE OF avatar_storage_key ON users\n        WHEN OLD.avatar_design_id IS NOT NULL AND NEW.avatar_design_id IS OLD.avatar_design_id\n          AND NEW.avatar_storage_key IS NOT OLD.avatar_storage_key\n        BEGIN SELECT RAISE(ABORT, 'avatar design must change with its image'); END;\n      CREATE TRIGGER agents_avatar_design_follows_image BEFORE UPDATE OF avatar_storage_key ON agents\n        WHEN OLD.avatar_design_id IS NOT NULL AND NEW.avatar_design_id IS OLD.avatar_design_id\n          AND NEW.avatar_storage_key IS NOT OLD.avatar_storage_key\n        BEGIN SELECT RAISE(ABORT, 'avatar design must change with its image'); END;\n      CREATE TRIGGER users_avatar_design_release AFTER UPDATE OF avatar_design_id ON users\n        WHEN OLD.avatar_design_id IS NOT NULL AND NEW.avatar_design_id IS NOT OLD.avatar_design_id\n        BEGIN DELETE FROM avatar_designs WHERE id = OLD.avatar_design_id; END;\n      CREATE TRIGGER agents_avatar_design_release AFTER UPDATE OF avatar_design_id ON agents\n        WHEN OLD.avatar_design_id IS NOT NULL AND NEW.avatar_design_id IS NOT OLD.avatar_design_id\n        BEGIN DELETE FROM avatar_designs WHERE id = OLD.avatar_design_id; END;\n      CREATE TRIGGER users_avatar_design_delete AFTER DELETE ON users\n        WHEN OLD.avatar_design_id IS NOT NULL\n        BEGIN DELETE FROM avatar_designs WHERE id = OLD.avatar_design_id; END;\n      CREATE TRIGGER agents_avatar_design_delete AFTER DELETE ON agents\n        WHEN OLD.avatar_design_id IS NOT NULL\n        BEGIN DELETE FROM avatar_designs WHERE id = OLD.avatar_design_id; END;\n    ",
       "foreignKeyEscape": false,
       "precondition": false
     }

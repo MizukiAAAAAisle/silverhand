@@ -63,6 +63,7 @@ export interface DesktopBridge {
 
   retryPartialApply(): Promise<LocalHostPartialApplyRetryResult>;
   pickDirectory(options?: { defaultPath?: string }): Promise<string | null>;
+  getAppVersion(): Promise<string>;
   openExternal(url: string): Promise<void>;
   openAttachmentExternal(input: {
     attachmentId: string;
@@ -77,7 +78,11 @@ export interface DesktopBridge {
   >;
   showSystemNotification(opts: {
     title: string;
-    body: string;
+    /** macOS shows it under the title. */
+    subtitle?: string;
+    body?: string;
+    /** Stacks alerts that share it into one group (macOS, Windows). */
+    groupId?: string;
     force?: boolean;
     notificationId?: string;
   }): Promise<string | undefined>;

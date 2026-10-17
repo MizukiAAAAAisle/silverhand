@@ -249,7 +249,7 @@ function formatError(err: unknown): string {
         // `addConversationMember`. It survives only for a non-human principal
         // (the CLI), so the line states the rule rather than prescribing the
         // manual step the product does for you.
-        return "Only the person who created this agent can bring it into the workspace.";
+        return "Only the person who created this agent can bring it into the project.";
       case "agent_not_owned":
         // #task:1683 — the picker offers a plain member only their own agents,
         // so this is a backstop for a stale pool. Two targets land here and the
@@ -260,7 +260,7 @@ function formatError(err: unknown): string {
         // `addWorkspaceAgentMember`'s creator gate). Naming admin flatly would
         // send the user to someone who hits the same 403; the creator is the
         // one exit that holds in both cases, so it comes first.
-        return "You can only add agents you created. Someone else's needs its creator, or a workspace admin once it is in this workspace.";
+        return "You can only add agents you created. Someone else's needs its creator, or a project admin once it is in this project.";
       case "host_attach_pending":
         return "Its computer is not connected yet.";
       case "candidate_not_found":

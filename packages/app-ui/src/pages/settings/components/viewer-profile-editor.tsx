@@ -2,10 +2,13 @@ import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
 import { SpinnerIcon, UserIcon } from "@/icons";
 import { validateAvatarFile, type UserDto } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
+import { AvatarMakerGlyph } from "@/features/avatar-maker/components/avatar-maker-glyph";
 import { AvatarPickerButton } from "@/components/avatar-picker-button";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { AvatarMakerSheet } from "@/features/avatar-maker/components/avatar-maker-sheet";
+import { avatarDesignField } from "@/features/avatar-maker/model/avatar-design-wire";
 import { readDisplayNameDraft } from "@/features/identity/display-name";
 import {
   useUpdateProfile,
@@ -23,6 +26,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const [draftName, setDraftName] = useState<string | null>(null);
   const [avatarError, setAvatarError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [makerOpen, setMakerOpen] = useState(false);
 
   const nameValue = draftName ?? user.display_name;
 
@@ -77,8 +81,9 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
         <div className="flex items-center gap-3">
           <AvatarPickerButton
             size={AVATAR_PX["3xl"]}
-            label={hasAvatar ? "Edit" : "Add"}
             onPick={(file) => void onPickAvatar(file)}
+            onMake={() => setMakerOpen(true)}
+            makeIcon={<AvatarMakerGlyph />}
             disabled={upload.isPending}
             ariaLabel={hasAvatar ? "Change avatar" : "Add avatar"}
             className="border border-border-subtle"
@@ -99,6 +104,15 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
             <p className="truncate font-mono text-xs text-text-muted">@{user.name}</p>
           </div>
         </div>
+        <AvatarMakerSheet
+          subject="me"
+          open={makerOpen}
+          onOpenChange={setMakerOpen}
+          onSave={async ({ config, png }) => {
+            setAvatarError(null);
+            await upload.mutateAsync({ file: png, design: avatarDesignField(config) });
+          }}
+        />
         {avatarError ? (
           <p
             role="alert"

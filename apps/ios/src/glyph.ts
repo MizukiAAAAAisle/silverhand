@@ -35,7 +35,7 @@ async function rasterize(svg: SVGSVGElement): Promise<string> {
 const PICTURE_PX = 30;
 
 /** A declared picture (an image URL) as a square PNG, cropped to fill. */
-export async function rasterizeImage(url: string): Promise<string> {
+export async function rasterizeImage(url: string, size = PICTURE_PX): Promise<string> {
   const image = new Image();
   image.src = url;
   try {
@@ -43,7 +43,7 @@ export async function rasterizeImage(url: string): Promise<string> {
   } catch {
     return "";
   }
-  const px = PICTURE_PX * SCALE;
+  const px = size * SCALE;
   const side = Math.min(image.naturalWidth, image.naturalHeight);
   const canvas = document.createElement("canvas");
   canvas.width = px;

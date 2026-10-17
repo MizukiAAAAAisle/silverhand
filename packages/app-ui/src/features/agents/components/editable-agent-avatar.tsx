@@ -3,7 +3,10 @@ import { CameraIcon } from "@/icons";
 import { validateAvatarFile, type RuntimeKind } from "@silverhand/shared";
 import { ApiError } from "@/lib/api";
 import { AgentAvatar } from "@/components/agent-avatar";
+import { AvatarMakerGlyph } from "@/features/avatar-maker/components/avatar-maker-glyph";
 import { AvatarPickerButton } from "@/components/avatar-picker-button";
+import { AvatarMakerSheet } from "@/features/avatar-maker/components/avatar-maker-sheet";
+import { avatarDesignField } from "@/features/avatar-maker/model/avatar-design-wire";
 import { useUploadAgentAvatar } from "../hooks/hooks";
 
 interface EditableAgentAvatarProps {
@@ -51,6 +54,7 @@ export function EditableAgentAvatar({
 }: EditableAgentAvatarProps): JSX.Element {
   const upload = useUploadAgentAvatar(agentId);
   const [error, setError] = useState<string | null>(null);
+  const [makerOpen, setMakerOpen] = useState(false);
 
   // Clear the local error when the agent id changes — switching agents
   // shouldn't carry stale "Avatar must be PNG…" text from the previous
@@ -67,7 +71,7 @@ export function EditableAgentAvatar({
       return;
     }
     try {
-      await upload.mutateAsync(file);
+      await upload.mutateAsync({ file });
     } catch (err) {
       setError(formatAvatarMutationError(err));
     }
@@ -78,7 +82,6 @@ export function EditableAgentAvatar({
   // 56px frame clip. ariaLabel carries the verbose screen-reader
   // text. Cindy review #task:314: "Change photo" overflowed and was
   // cut horizontally even at 56px once uppercase tracking was applied.
-  const pickerLabel = hasAvatar ? "Edit" : "Add";
   const pickerAriaLabel = hasAvatar ? `Change avatar for @${alt}` : `Add avatar for @${alt}`;
 
   return (
@@ -86,8 +89,9 @@ export function EditableAgentAvatar({
       <div className="relative">
         <AvatarPickerButton
           size={size}
-          label={pickerLabel}
           onPick={(file) => void onPick(file)}
+          onMake={() => setMakerOpen(true)}
+          makeIcon={<AvatarMakerGlyph />}
           disabled={pending}
           ariaLabel={pickerAriaLabel}
         >
@@ -102,6 +106,15 @@ export function EditableAgentAvatar({
           </span>
         ) : null}
       </div>
+      <AvatarMakerSheet
+        subject={agentId}
+        open={makerOpen}
+        onOpenChange={setMakerOpen}
+        onSave={async ({ config, png }) => {
+          setError(null);
+          await upload.mutateAsync({ file: png, design: avatarDesignField(config) });
+        }}
+      />
       {error ? (
         <p
           role="alert"

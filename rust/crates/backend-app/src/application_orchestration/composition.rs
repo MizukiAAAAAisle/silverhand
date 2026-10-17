@@ -49,6 +49,7 @@ pub(super) async fn compose_after_audit(
                 presence_cold_read: agent_presence_cold_read,
                 profile_write: agent_profile_write,
                 avatar_read: agent_avatar_read,
+                avatar_design_read,
                 profile_read: agent_profile_read,
                 audit_read: agent_audit_read,
             },
@@ -197,6 +198,7 @@ pub(super) async fn compose_after_audit(
     // message-window GET shares its path with the send POST — see the merge below.
     let conversation_ref_read = messaging_store.conversation_refs();
     let conversation_unread_read = messaging_store.conversation_unread();
+    let conversation_latest_read = messaging_store.conversation_latest();
     let conversation_threads_read = messaging_store.conversation_threads();
     let conversation_message_window_read = messaging_store.conversation_message_window();
     let human_search_read = messaging_store.human_search();
@@ -682,6 +684,11 @@ pub(super) async fn compose_after_audit(
             },
             sessions.clone(),
         );
+    let me_avatar_design_router = require_human_session(
+        avatar_design::me_router(avatar_design_read.clone()),
+        sessions.clone(),
+        PublicJsonUnauthorized,
+    );
     let users_router = users::router(
         UsersDeps {
             directory: user_store.clone(),
@@ -1076,6 +1083,10 @@ pub(super) async fn compose_after_audit(
                 agent_avatar_read,
                 agent_avatar_blobs.clone(),
             ))
+            .merge(avatar_design::agent_router(
+                agent_detail_cold_read.clone(),
+                avatar_design_read.clone(),
+            ))
             .merge(agent_avatar_write::router(
                 agent_detail_cold_read.clone(),
                 agent_profile_write,
@@ -1152,6 +1163,7 @@ pub(super) async fn compose_after_audit(
             .merge(activity::router(activity_read_model))
             .merge(conversation_ref::router(conversation_ref_read))
             .merge(conversation_unread::router(conversation_unread_read))
+            .merge(conversation_latest::router(conversation_latest_read))
             .merge(conversation_threads::router(conversation_threads_read))
             // #2217: the two viewer-owned message-state lanes, mounted behind this same
             // authenticated human perimeter. Thread follow/unfollow rides its store and
@@ -1525,6 +1537,7 @@ pub(super) async fn compose_after_audit(
             // any mounted route, and `/api/me/avatar` is a child path of `human_auth`'s
             // `/api/me`, never the same node.
             .merge(users_router)
+            .merge(me_avatar_design_router)
             .merge(agent_products)
             .merge(event_router)
             .merge(daemon_router)

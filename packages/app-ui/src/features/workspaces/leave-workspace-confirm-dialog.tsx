@@ -53,7 +53,7 @@ export function LeaveWorkspaceConfirmDialog({
     setError(null);
     leaveWorkspace.mutate(workspaceId, {
       onSuccess: () => onOpenChange(false),
-      onError: () => setError("Could not leave this workspace. Try again."),
+      onError: () => setError("Could not leave this project. Try again."),
     });
   };
 
@@ -64,7 +64,7 @@ export function LeaveWorkspaceConfirmDialog({
           <DialogTitle>{`Leave ${workspaceName}?`}</DialogTitle>
         </DialogHeader>
         <DialogDescription className="text-sm leading-relaxed text-text-muted">
-          You leave this workspace and all its channels.
+          You leave this project and all its channels.
         </DialogDescription>
         {error ? (
           <p className="text-xs text-error" role="alert">
@@ -76,7 +76,7 @@ export function LeaveWorkspaceConfirmDialog({
             Cancel
           </Button>
           <Button variant="primary" onClick={onConfirm} disabled={pending}>
-            {pending ? "Leaving…" : "Leave workspace"}
+            {pending ? "Leaving…" : "Leave project"}
           </Button>
         </DialogFooter>
       </DialogContent>

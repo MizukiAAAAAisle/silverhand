@@ -61,6 +61,7 @@ use crate::{
     foundation::identity::AgentId,
     foundation::persistence::PersistenceFailure,
     identity_access::avatar::{AvatarBlobReadOutcome, AvatarContentType, AvatarStorageFailure},
+    identity_access::avatar_design::AvatarDesign,
 };
 
 /// The opaque pointer to an AGENT avatar blob (`agents.avatar_storage_key`).
@@ -174,6 +175,8 @@ pub trait AgentAvatarBlobStore: AgentAvatarBlobRead {
 pub struct AgentAvatarAssignment {
     pub pointer: AgentAvatarBlobPointer,
     pub content_type: AvatarContentType,
+    /// The design that rendered this image; `None` clears any previous design.
+    pub design: Option<AvatarDesign>,
 }
 
 /// The avatar coordinate held by an EXISTING agents row, decoded as one typed shape.

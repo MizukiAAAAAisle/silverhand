@@ -140,6 +140,7 @@ where
     let CandidateAvatar {
         bytes,
         declared_content_type,
+        design,
     } = candidate;
 
     // Validate BEFORE any blob write, reusing the single avatar validator: no second
@@ -157,6 +158,7 @@ where
     let assignment = AgentAvatarAssignment {
         pointer: pointer.clone(),
         content_type,
+        design,
     };
 
     // The decision ALWAYS assigns — an upload is never a legality refusal — so any fact
@@ -572,6 +574,7 @@ mod tests {
         CandidateAvatar {
             bytes: vec![1, 2, 3],
             declared_content_type: "image/png".to_owned(),
+            design: None,
         }
     }
 
@@ -585,6 +588,7 @@ mod tests {
         let empty = CandidateAvatar {
             bytes: vec![],
             declared_content_type: "image/png".to_owned(),
+            design: None,
         };
         let outcome = upload_agent_avatar(&writes, &blobs, &sink, &agent(), empty, NOW).await;
         assert!(matches!(

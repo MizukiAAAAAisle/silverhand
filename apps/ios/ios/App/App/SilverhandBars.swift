@@ -361,6 +361,7 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
   private var showsTabs = false
   private var tabIds: [String] = []
   private var closeLabels: [String: String] = [:]
+  private var glassStale = false
   let edgeInteraction: UIInteraction? = {
     if #available(iOS 26.0, *) {
       let interaction = UIScrollEdgeElementContainerInteraction()
@@ -391,6 +392,26 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
   /// The height it takes; zero when it carries nothing.
   var height: CGFloat {
     (showsTitle ? Self.titleHeight : 0) + (showsTabs ? Self.tabsHeight : 0)
+  }
+
+  /// Glass capsules show flat once they come back from off screen or from
+  /// a hidden layer, so they are rebuilt then.
+  @MainActor
+  func rebuildGlass() {
+    guard let shown else { return }
+    glassStale = true
+    updateTabs(shown.tabs, add: shown.add, enabled: shown.enabled)
+  }
+
+  /// An edge swipe hides the accessory behind an image of it.
+  @MainActor
+  func setSwipeHidden(_ hidden: Bool) {
+    layer.opacity = hidden ? 0 : 1
+    if hidden {
+      glassStale = true
+    } else if glassStale {
+      rebuildGlass()
+    }
   }
 
   /// The page scroller whose top edge this extends.
@@ -457,7 +478,10 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
   @MainActor
   private func updateTabs(_ tabs: [PageBarTab], add: PageBarAddMenu?, enabled: Bool) {
     // Rebuilding unchanged buttons would restart their glass animations.
-    if let shown, shown.tabs == tabs, shown.add == add, shown.enabled == enabled { return }
+    if !glassStale, let shown, shown.tabs == tabs, shown.add == add, shown.enabled == enabled {
+      return
+    }
+    glassStale = layer.opacity == 0
     let selectionMoved =
       shown?.tabs.firstIndex { $0.item.selected } != tabs.firstIndex { $0.item.selected }
     shown = (tabs, add, enabled)

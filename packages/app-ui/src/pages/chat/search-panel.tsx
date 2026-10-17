@@ -90,7 +90,7 @@ interface ResultGroup {
   results: SearchResultDto[];
 }
 
-/** Workspace glyph — a serif "W" matching the icon column width. Used
+/** Workspace glyph — a serif "P" matching the icon column width. Used
  *  wherever a people-owned workspace needs a marker; mirrors the
  *  WorkspacesPanel sidebar. Sizes line up with icon `size-3/3.5/4`. */
 export function SearchPanel({
@@ -226,7 +226,7 @@ export function SearchPanel({
 
           <FilterPanel disclosure={filterDisclosure} className="mt-3">
             <div className="flex flex-wrap items-end gap-3">
-              <FilterBlock label="Workspace" className="w-full sm:w-72">
+              <FilterBlock label="Project" className="w-full sm:w-72">
                 <WorkspaceFilterSelect
                   value={workspaceFilter}
                   workspaces={workspaces}
@@ -256,7 +256,7 @@ export function SearchPanel({
       <div className="search-list min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {hasIntent && identities?.status === "filtered" ? (
           <p className="mb-3 text-xs text-text-muted">
-            Clear workspace, sender and time filters to search people and agents.
+            Clear project, sender and time filters to search people and agents.
           </p>
         ) : null}
         {isError ? (
@@ -383,7 +383,7 @@ function WorkspaceFilterSelect({
 
   return (
     <Select.Root value={value} onValueChange={(v) => onChange(v as WorkspaceFilter)}>
-      <Select.Trigger aria-label="Workspace filter" className={SELECT_TRIGGER_CLASS}>
+      <Select.Trigger aria-label="Project filter" className={SELECT_TRIGGER_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
           {selected.icon}
           <span className="truncate">{selected.label}</span>
@@ -401,7 +401,7 @@ function WorkspaceFilterSelect({
         >
           <Select.Viewport className="p-1">
             <SelectItem value="all" icon={<SearchIcon className="size-3.5" />}>
-              All workspaces
+              All projects
             </SelectItem>
             {agentSpaces.length > 0 ? (
               <Select.Group>
@@ -428,7 +428,7 @@ function WorkspaceFilterSelect({
             {peopleOwned.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
-                  Workspaces
+                  Projects
                 </Select.Label>
                 {peopleOwned.map((workspace) => (
                   <SelectItem
@@ -616,7 +616,7 @@ function workspaceFilterLabel(
       };
     }
   }
-  return { label: "All workspaces", icon: <SearchIcon className="size-3.5" /> };
+  return { label: "All projects", icon: <SearchIcon className="size-3.5" /> };
 }
 
 const TIME_RANGE_OPTIONS: Array<{ value: TimeRange; label: string }> = [

@@ -24,6 +24,7 @@ use silverhand_backend_core::{
         AvatarBlobPointer, AvatarContentType, AvatarPointerWrite, AvatarPointerWriteUnitOfWork,
         AvatarStorageRef, AvatarStorageRefRead,
     },
+    identity_access::avatar_design::AvatarDesign,
     identity_access::user_identity::{
         CompleteEmbeddedProfileSetup, DisplayName, EmbeddedProfileSetup, EmbeddedProfileSetupStore,
         ParticipantHandle, RelatedUserDirectoryRead, UserDirectoryRead, UserEmailLookup,
@@ -61,11 +62,11 @@ SELECT id, name, display_name, email, avatar_storage_key, created_at, updated_at
 const SELECT_AVATAR_REF: &str =
     "SELECT avatar_storage_key, avatar_content_type FROM users WHERE id = ?";
 const SET_AVATAR: &str = "\
-UPDATE users SET avatar_storage_key = ?, avatar_content_type = ?, updated_at = ? \
+UPDATE users SET avatar_storage_key = ?, avatar_content_type = ?, avatar_design_id = ?, updated_at = ? \
  WHERE id = ? \
  RETURNING id, name, display_name, email, avatar_storage_key, created_at, updated_at";
 const CLEAR_AVATAR: &str = "\
-UPDATE users SET avatar_storage_key = NULL, avatar_content_type = NULL, updated_at = ? \
+UPDATE users SET avatar_storage_key = NULL, avatar_content_type = NULL, avatar_design_id = NULL, updated_at = ? \
  WHERE id = ? \
  RETURNING id, name, display_name, email, avatar_storage_key, created_at, updated_at";
 
@@ -107,6 +108,8 @@ enum ProfileWriteFailure {
     Sql(#[from] sqlx::Error),
     #[error(transparent)]
     Integrity(#[from] CorruptStoredUserId),
+    #[error(transparent)]
+    Design(#[from] super::avatar_design::DesignInsertFailure),
 }
 
 impl SqliteUserStore {
@@ -188,6 +191,7 @@ impl SqliteUserStore {
         user_id: &UserId,
         pointer: &AvatarBlobPointer,
         content_type: AvatarContentType,
+        design: Option<&AvatarDesign>,
         now_ms: i64,
     ) -> Result<AvatarPointerWrite, ProfileWriteFailure> {
         let mut tx = self.pool.begin_with(ROOT_WRITE_BEGIN).await?;
@@ -202,10 +206,12 @@ impl SqliteUserStore {
             return Ok(AvatarPointerWrite::NoSuchUser);
         };
         let prior_key = decode_prior_avatar_key(&current)?;
+        let design_id = super::avatar_design::insert_design(&mut tx, design, now_ms).await?;
 
         let committed = sqlx::query(SET_AVATAR)
             .bind(pointer.as_str())
             .bind(content_type.as_str())
+            .bind(design_id)
             .bind(now_ms)
             .bind(user_id.as_str())
             .fetch_one(&mut *tx)
@@ -426,9 +432,10 @@ impl AvatarPointerWriteUnitOfWork for SqliteUserStore {
         user_id: &UserId,
         pointer: &AvatarBlobPointer,
         content_type: AvatarContentType,
+        design: Option<&AvatarDesign>,
         now_ms: i64,
     ) -> Result<AvatarPointerWrite, PersistenceFailure> {
-        self.write_avatar_pointer(user_id, pointer, content_type, now_ms)
+        self.write_avatar_pointer(user_id, pointer, content_type, design, now_ms)
             .await
             .map_err(PersistenceFailure::from_source)
     }
@@ -776,7 +783,7 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
         let (_dir, store) = open_seeded().await;
         let pointer = AvatarBlobPointer::parse("avatars/alice.webp".to_string()).unwrap();
         let outcome = store
-            .set_avatar(&uid("user-1"), &pointer, AvatarContentType::Webp, 500)
+            .set_avatar(&uid("user-1"), &pointer, AvatarContentType::Webp, None, 500)
             .await
             .unwrap();
         let AvatarPointerWrite::Committed { user, prior_key } = outcome else {
@@ -796,7 +803,7 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
         let (_dir, store) = open_seeded().await;
         let pointer = AvatarBlobPointer::parse("avatars/carol-2.jpg".to_string()).unwrap();
         let outcome = store
-            .set_avatar(&uid("user-3"), &pointer, AvatarContentType::Jpeg, 600)
+            .set_avatar(&uid("user-3"), &pointer, AvatarContentType::Jpeg, None, 600)
             .await
             .unwrap();
         let AvatarPointerWrite::Committed { prior_key, .. } = outcome else {
@@ -814,7 +821,7 @@ INSERT INTO users (id, name, display_name, email, avatar_storage_key, avatar_con
         let (_dir, store) = open_seeded().await;
         let pointer = AvatarBlobPointer::parse("avatars/ghost.png".to_string()).unwrap();
         let outcome = store
-            .set_avatar(&uid("ghost"), &pointer, AvatarContentType::Png, 100)
+            .set_avatar(&uid("ghost"), &pointer, AvatarContentType::Png, None, 100)
             .await
             .unwrap();
         assert!(matches!(outcome, AvatarPointerWrite::NoSuchUser));

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { applyAppearanceOverrides } from "@/features/appearance/apply";
 import { parseAppearanceJson } from "@/features/appearance/parse";
 import {
@@ -62,16 +62,44 @@ export interface UseAppearance {
   resetMarkdownFontSize: () => void;
 }
 
+// One store for every caller: the shell reads the theme for native chrome
+// while Settings writes it, so a per-hook state would leave the shell stale.
+let current: AppearanceSettings | undefined;
+const listeners = new Set<() => void>();
+
+function snapshot(): AppearanceSettings {
+  current ??= read();
+  return current;
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => {
+    listeners.delete(listener);
+  };
+}
+
+function setAppearance(update: (prev: AppearanceSettings) => AppearanceSettings): void {
+  const next = update(snapshot());
+  current = next;
+  applyTheme(next.theme);
+  applyAppearanceOverrides(document.documentElement.style, next);
+  if (typeof localStorage !== "undefined") {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(pruneOverrides(next)));
+  }
+  for (const listener of listeners) {
+    listener();
+  }
+}
+
 export function useAppearance(): UseAppearance {
-  const [appearance, setAppearance] = useState<AppearanceSettings>(read);
+  const appearance = useSyncExternalStore(subscribe, snapshot, snapshot);
 
   useEffect(() => {
-    applyTheme(appearance.theme);
-    applyAppearanceOverrides(document.documentElement.style, appearance);
-    if (typeof localStorage !== "undefined") {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(pruneOverrides(appearance)));
-    }
-  }, [appearance]);
+    const stored = snapshot();
+    applyTheme(stored.theme);
+    applyAppearanceOverrides(document.documentElement.style, stored);
+  }, []);
 
   return {
     appearance,

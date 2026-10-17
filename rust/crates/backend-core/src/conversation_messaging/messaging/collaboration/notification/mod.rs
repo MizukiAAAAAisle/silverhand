@@ -10,4 +10,7 @@ pub use clear::{
     clear_notifications,
 };
 pub use model::{Notification, NotificationKind, NotificationTimestamp};
-pub use read::{NotificationListQuery, NotificationReadPort, NotificationSummary, UnreadAnchor};
+pub use read::{
+    ListedNotification, NotificationListQuery, NotificationReadPort, NotificationSummary,
+    UnreadAnchor,
+};

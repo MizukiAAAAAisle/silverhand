@@ -48,6 +48,7 @@ async function start(): Promise<void> {
   await Promise.all([
     nativeBridge.titlebar({ state: null }),
     nativeBridge.pageBar({ state: null }),
+    nativeBridge.composerRemove({}),
   ]);
   configurePlatform(createIOSPlatform(nativeBridge, resetApplication));
   await nativeBridge.getProfile();

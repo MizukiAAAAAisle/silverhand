@@ -17,7 +17,7 @@ import type {
   SwitchAgentRuntimeResponse,
   UpdateAgentInput,
 } from "@silverhand/shared";
-import { apiPaths } from "@silverhand/shared";
+import { AVATAR_DESIGN_FIELD, apiPaths } from "@silverhand/shared";
 import {
   AGENT_AVAILABILITY_CHANGED_EVENT,
   AgentAvailabilityChangedEventSchema,
@@ -25,6 +25,9 @@ import {
   AgentPresenceChangedEventSchema,
 } from "@silverhand/shared";
 import { api, apiUpload, ApiError } from "@/lib/api";
+import { avatarDesignKey } from "@/features/avatar-maker/hooks/use-avatar-design";
+import { randomAvatarConfig } from "@/features/avatar-maker/model/avatar-config";
+import { uploadComposedAvatar } from "@/features/avatar-maker/model/upload-composed-avatar";
 import { isCurrentViewerScope, onWsFrame, subscribeViewerScope } from "@/lib/ws-client";
 
 const agentsKey = ["agents"] as const;
@@ -690,9 +693,12 @@ export function useSwitchAgentRuntime(agentId: string | null) {
 export function useUploadAgentAvatar(agentId: string | null) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async ({ file, design }: { file: File; design?: string }) => {
       if (!agentId) throw new Error("no agent id");
       const form = new FormData();
+      if (design) {
+        form.set(AVATAR_DESIGN_FIELD, design);
+      }
       form.set("file", file);
       const res = await apiUpload<{ avatar_url: string; agent: AgentDto }>(
         apiPaths.agentAvatar(agentId),
@@ -704,8 +710,24 @@ export function useUploadAgentAvatar(agentId: string | null) {
       if (!agentId) return;
       qc.invalidateQueries({ queryKey: agentsKey });
       qc.invalidateQueries({ queryKey: agentKey(agentId) });
+      qc.removeQueries({ queryKey: avatarDesignKey(agentId) });
     },
   });
+}
+
+/** A new agent starts with a random composed face instead of the runtime mark.
+ *  Best effort: a failure leaves the runtime mark, which is still a valid avatar. */
+export function useGiveAgentDefaultAvatar() {
+  const qc = useQueryClient();
+
+  return (agentId: string) => {
+    void uploadComposedAvatar(apiPaths.agentAvatar(agentId), randomAvatarConfig())
+      .then(() => {
+        qc.invalidateQueries({ queryKey: agentsKey });
+        qc.invalidateQueries({ queryKey: agentKey(agentId) });
+      })
+      .catch(() => {});
+  };
 }
 
 /**
@@ -727,6 +749,7 @@ export function useClearAgentAvatar(agentId: string | null) {
       if (!agentId) return;
       qc.invalidateQueries({ queryKey: agentsKey });
       qc.invalidateQueries({ queryKey: agentKey(agentId) });
+      qc.removeQueries({ queryKey: avatarDesignKey(agentId) });
     },
   });
 }

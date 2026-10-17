@@ -4,7 +4,8 @@ import { iconMarkup, nativeActionBar, useNativeBar } from "@/components/layout/n
 import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMemo, type ReactNode } from "react";
-import { ArchiveIcon, BookmarkIcon, PlusIcon, SearchIcon } from "@/icons";
+import { ArchiveIcon, BookmarkIcon, MoreIcon, PlusIcon, SearchIcon } from "@/icons";
+import { AppDropdownMenu, AppDropdownMenuItem } from "@/components/menus/app-context-menu";
 import type { AgentDto } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
@@ -26,6 +27,8 @@ import {
   type SelectedConversation,
 } from "@/features/workspaces/home-grouping";
 import { Sidebar } from "../../../components/layout/sidebar";
+import { useSidebarStyle } from "@/features/conversation-shell/use-sidebar-style";
+import { RecentList } from "./recent-list";
 
 interface ChatSidebarProps {
   fill?: boolean;
@@ -77,6 +80,13 @@ interface ChatSidebarProps {
    *  on first paint (before the query resolves) so the badge stays
    *  hidden instead of flashing 0. */
   savedCount: number | undefined;
+  /** Open a reply inside its thread — the Recent list's rows can lead there. */
+  onOpenThread: (target: {
+    workspaceId: string | null;
+    conversationId: string;
+    threadRootId: string;
+    messageId: string;
+  }) => void;
 }
 
 export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
@@ -133,19 +143,57 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
   };
 
   const readingPosition = useListReadingPosition("chat-list");
-  // The compact list is the Chats root, titled like the other Tab roots.
+  const style = useSidebarStyle();
+  // The compact list is the Chats root, titled like the other Tab roots. In the
+  // Recent style the bar also takes the list's own entries: Search beside New
+  // workspace, Saved and Archived behind the bar's menu.
+  const recentEntries = style === "recent";
   const [chatsBar, chatsBarHandlers] = nativeActionBar(
-    { title: "Chats", titleAction: null, largeTitle: true, tabs: null, addTabs: null },
+    {
+      title: "Chats",
+      titleAction: null,
+      largeTitle: true,
+      tabs: null,
+      addTabs: null,
+      overflow: recentEntries ? { label: "More", icon: iconMarkup(MoreIcon) } : undefined,
+    },
     [
+      recentEntries
+        ? {
+            id: "search",
+            label: "Search",
+            icon: iconMarkup(SearchIcon),
+            primary: true,
+            run: props.onSelectSearch,
+          }
+        : null,
       {
         id: "create-workspace",
-        label: "New workspace",
+        label: "New project",
         icon: iconMarkup(PlusIcon),
+        primary: true,
         run: props.onCreateWorkspace,
       },
+      recentEntries
+        ? {
+            id: "saved",
+            label: "Saved",
+            icon: iconMarkup(BookmarkIcon),
+            run: props.onSelectSaved,
+          }
+        : null,
+      recentEntries
+        ? {
+            id: "archived",
+            label: "Archived",
+            icon: iconMarkup(ArchiveIcon),
+            run: props.onSelectArchived,
+          }
+        : null,
     ],
   );
   const native = useNativeBar(props.fill ? chatsBar : null, chatsBarHandlers);
+
   return (
     <Sidebar
       name="workspaces"
@@ -166,66 +214,102 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
             data-scroll-root
             className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto pb-1 pr-1"
           >
-            <div className="mb-3 space-y-1">
-              <SidebarNavigationButton onClick={props.onSelectSearch} active={props.searchActive}>
-                <SearchIcon className="size-4" />
-                <span>Search</span>
-              </SidebarNavigationButton>
-
-              <SidebarNavigationButton onClick={props.onSelectSaved} active={props.savedActive}>
-                <BookmarkIcon className={cn("size-4", props.savedActive ? "fill-current" : "")} />
-                <span>Saved</span>
-                {props.savedCount !== undefined && props.savedCount > 0 ? (
-                  <span
-                    data-sidebar-count
-                    className={cn(
-                      "text-[10px] tabular-nums",
-                      props.savedActive ? "text-text-nav-selected/70" : "text-text-muted",
-                    )}
+            {style === "recent" ? (
+              <>
+                <RecentList
+                  workspaces={props.workspaces}
+                  selectedConversationId={props.selectedChannelId}
+                  onSelectChannel={props.onSelectChannel}
+                  onSelectDirectPair={props.onSelectDirectPair}
+                  onOpenThread={props.onOpenThread}
+                  onCreateChannel={props.onCreateChannel}
+                  onOpenWorkspaceSettings={props.onOpenWorkspaceSettings}
+                  agentsById={props.agentsById}
+                  ownerAgentAvatarUrls={ownerAgentAvatarUrls}
+                  actions={
+                    native.active ? null : (
+                      <RecentActions
+                        searchActive={props.searchActive}
+                        onSelectSearch={props.onSelectSearch}
+                        savedActive={props.savedActive}
+                        onSelectSaved={props.onSelectSaved}
+                        savedCount={props.savedCount}
+                        archivedActive={props.archivedActive}
+                        onSelectArchived={props.onSelectArchived}
+                      />
+                    )
+                  }
+                />
+              </>
+            ) : (
+              <>
+                <div className="mb-3 space-y-1">
+                  <SidebarNavigationButton
+                    onClick={props.onSelectSearch}
+                    active={props.searchActive}
                   >
-                    {props.savedCount}
-                  </span>
+                    <SearchIcon className="size-4" />
+                    <span>Search</span>
+                  </SidebarNavigationButton>
+
+                  <SidebarNavigationButton onClick={props.onSelectSaved} active={props.savedActive}>
+                    <BookmarkIcon
+                      className={cn("size-4", props.savedActive ? "fill-current" : "")}
+                    />
+                    <span>Saved</span>
+                    {props.savedCount !== undefined && props.savedCount > 0 ? (
+                      <span
+                        data-sidebar-count
+                        className={cn(
+                          "text-[10px] tabular-nums",
+                          props.savedActive ? "text-text-nav-selected/70" : "text-text-muted",
+                        )}
+                      >
+                        {props.savedCount}
+                      </span>
+                    ) : null}
+                  </SidebarNavigationButton>
+
+                  <SidebarNavigationButton
+                    onClick={props.onSelectArchived}
+                    active={props.archivedActive}
+                  >
+                    <ArchiveIcon className="size-4" />
+                    <span>Archived</span>
+                  </SidebarNavigationButton>
+                </div>
+
+                <SortableGroup ids={branches.map((branch) => branch.id)} onReorder={reorder}>
+                  {branches.map((branch) => (
+                    <SortableSidebarBranch
+                      key={branch.id}
+                      id={branch.id}
+                      disabled={!ready || pending || branch.kind === "hidden"}
+                    >
+                      {branch.kind === "starred" ? (
+                        <FavoritesGroup
+                          selectedChannelId={props.selectedChannelId}
+                          watchWorkspaceIds={watchWorkspaceIds}
+                          onSelectConversation={props.onSelectConversation}
+                        />
+                      ) : branch.kind === "direct-messages" ? (
+                        <DirectMessagesGroup
+                          selectedChannelId={props.selectedChannelId}
+                          onSelectDirectPair={props.onSelectDirectPair}
+                          draftTarget={props.directDraftTarget}
+                          onSelectDirectDraft={props.onSelectDirectDraft}
+                        />
+                      ) : branch.kind === "workspace" ? (
+                        <WorkspaceBranch workspace={branch.workspace} ctx={workspaceContext} />
+                      ) : null}
+                    </SortableSidebarBranch>
+                  ))}
+                </SortableGroup>
+                {props.workspacesLoading && props.workspaces.length === 0 ? (
+                  <SidebarRowsSkeleton label="Loading projects" />
                 ) : null}
-              </SidebarNavigationButton>
-
-              <SidebarNavigationButton
-                onClick={props.onSelectArchived}
-                active={props.archivedActive}
-              >
-                <ArchiveIcon className="size-4" />
-                <span>Archived</span>
-              </SidebarNavigationButton>
-            </div>
-
-            <SortableGroup ids={branches.map((branch) => branch.id)} onReorder={reorder}>
-              {branches.map((branch) => (
-                <SortableSidebarBranch
-                  key={branch.id}
-                  id={branch.id}
-                  disabled={!ready || pending || branch.kind === "hidden"}
-                >
-                  {branch.kind === "starred" ? (
-                    <FavoritesGroup
-                      selectedChannelId={props.selectedChannelId}
-                      watchWorkspaceIds={watchWorkspaceIds}
-                      onSelectConversation={props.onSelectConversation}
-                    />
-                  ) : branch.kind === "direct-messages" ? (
-                    <DirectMessagesGroup
-                      selectedChannelId={props.selectedChannelId}
-                      onSelectDirectPair={props.onSelectDirectPair}
-                      draftTarget={props.directDraftTarget}
-                      onSelectDirectDraft={props.onSelectDirectDraft}
-                    />
-                  ) : branch.kind === "workspace" ? (
-                    <WorkspaceBranch workspace={branch.workspace} ctx={workspaceContext} />
-                  ) : null}
-                </SortableSidebarBranch>
-              ))}
-            </SortableGroup>
-            {props.workspacesLoading && props.workspaces.length === 0 ? (
-              <SidebarRowsSkeleton label="Loading workspaces" />
-            ) : null}
+              </>
+            )}
             {native.active ? null : (
               <div
                 data-sidebar-cta-slot
@@ -239,7 +323,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                   onClick={props.onCreateWorkspace}
                 >
                   <PlusIcon className="size-4" />
-                  <span>New workspace</span>
+                  <span>New project</span>
                 </Button>
               </div>
             )}
@@ -247,6 +331,70 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
         </>
       }
     />
+  );
+}
+
+/** Search opens a page rather than filtering in place, so it is an icon like
+ *  the menu beside it, not a field. Saved and Archived are rare and wait in the
+ *  menu. Both share the filter row, leaving the column to the conversations. */
+function RecentActions(props: {
+  searchActive: boolean;
+  onSelectSearch: () => void;
+  savedActive: boolean;
+  onSelectSaved: () => void;
+  savedCount: number | undefined;
+  archivedActive: boolean;
+  onSelectArchived: () => void;
+}): JSX.Element {
+  const elsewhere = props.savedActive || props.archivedActive;
+
+  return (
+    <div className="flex shrink-0 items-center">
+      <Button
+        type="button"
+        variant="ghost"
+        size="icon"
+        aria-label="Search"
+        title="Search"
+        aria-pressed={props.searchActive}
+        onClick={props.onSelectSearch}
+        className={cn(props.searchActive && "bg-bg-hover text-text-primary")}
+      >
+        <SearchIcon className="size-4" />
+      </Button>
+      <AppDropdownMenu
+        trigger={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            aria-label="More"
+            title="More"
+            className={cn(elsewhere && "bg-bg-hover text-text-primary")}
+          >
+            <MoreIcon className="size-4" />
+          </Button>
+        }
+      >
+        <AppDropdownMenuItem
+          icon={<BookmarkIcon className="size-3.5" />}
+          trailing={
+            props.savedCount !== undefined && props.savedCount > 0 ? (
+              <span className="tabular-nums text-text-muted">{props.savedCount}</span>
+            ) : undefined
+          }
+          onSelect={props.onSelectSaved}
+        >
+          Saved
+        </AppDropdownMenuItem>
+        <AppDropdownMenuItem
+          icon={<ArchiveIcon className="size-3.5" />}
+          onSelect={props.onSelectArchived}
+        >
+          Archived
+        </AppDropdownMenuItem>
+      </AppDropdownMenu>
+    </div>
   );
 }
 

@@ -219,7 +219,7 @@ function SearchItemBody({
 }
 
 function workspaceMeta(result: Extract<SearchResultDto, { type: "workspace" }>): string[] {
-  return [isAgentSpace(result.workspace) ? "Agent Space" : "Workspace"];
+  return [isAgentSpace(result.workspace) ? "Agent Space" : "Project"];
 }
 
 function conversationMeta(result: Extract<SearchResultDto, { type: "conversation" }>): string[] {

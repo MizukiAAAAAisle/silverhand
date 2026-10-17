@@ -307,7 +307,6 @@ export function useChannelUnreadCounts(workspaceId: string | null) {
  */
 export function useMessageUnreadCounts(workspaceId: string | null, workspaceResolved: boolean) {
   const qc = useQueryClient();
-  const queryKey = messageUnreadByConversationKey(workspaceId ?? "none");
 
   useEffect(() => {
     if (!workspaceId) return;
@@ -329,15 +328,20 @@ export function useMessageUnreadCounts(workspaceId: string | null, workspaceReso
   }, [qc, workspaceId]);
 
   return useQuery({
-    queryKey,
+    ...messageUnreadByConversationQuery(workspaceId ?? "none"),
     enabled: workspaceScopedQueryEnabled(workspaceId, workspaceResolved),
-    queryFn: async () => {
-      const res = await api<MessageUnreadByConversationDto>(
-        `/api/workspaces/${workspaceId}/message-unread`,
-      );
-      return res;
-    },
   });
+}
+
+/** Key and request for one workspace's `by_conversation` map, shared by the
+ *  single-workspace hook and the Recent sidebar's fan-out so both read one
+ *  cache entry. */
+export function messageUnreadByConversationQuery(workspaceId: string) {
+  return {
+    queryKey: messageUnreadByConversationKey(workspaceId),
+    queryFn: () =>
+      api<MessageUnreadByConversationDto>(`/api/workspaces/${workspaceId}/message-unread`),
+  };
 }
 
 /**

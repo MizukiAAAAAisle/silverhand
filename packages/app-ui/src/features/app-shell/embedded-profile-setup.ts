@@ -1,5 +1,6 @@
 import { getPlatform } from "@/platform";
 import {
+  AVATAR_DESIGN_FIELD,
   apiPaths,
   CompleteEmbeddedProfileSetupInputSchema,
   EmbeddedProfileSetupResponseSchema,
@@ -23,7 +24,7 @@ export interface SetupState {
 export interface SetupDependencies {
   mode: () => Promise<"embedded" | "remote">;
   request: (method: "GET" | "PUT", body?: string) => Promise<unknown>;
-  upload: (file: File) => Promise<UserDto>;
+  upload: (file: File, design: string | null) => Promise<UserDto>;
   applyUser: (user: UserDto) => void;
   isCurrent: () => boolean;
   changed: (state: SetupState) => void;
@@ -50,8 +51,11 @@ export const setupTransport = {
   },
   request: (method: "GET" | "PUT", body?: string) =>
     api(apiPaths.embeddedProfileSetup, { method, body }),
-  upload: async (file: File) => {
+  upload: async (file: File, design: string | null) => {
     const form = new FormData();
+    if (design) {
+      form.set(AVATAR_DESIGN_FIELD, design);
+    }
     form.set("file", file);
     const result = await apiUpload<{ user: UserDto }>(apiPaths.meAvatar, form);
     return result.user;
@@ -64,6 +68,7 @@ export class EmbeddedProfileSetup {
   private generation = 0;
   private busy = false;
   private avatar: File | null = null;
+  private design: string | null = null;
 
   constructor(private readonly deps: SetupDependencies) {}
 
@@ -142,6 +147,7 @@ export class EmbeddedProfileSetup {
     }
     this.busy = true;
     this.avatar = values.avatar;
+    this.design = values.design;
     const generation = ++this.generation;
     this.publish("saving");
     try {
@@ -185,7 +191,7 @@ export class EmbeddedProfileSetup {
     this.publish("uploading");
     if (this.avatar) {
       try {
-        const user = await this.deps.upload(this.avatar);
+        const user = await this.deps.upload(this.avatar, this.design);
         if (!this.current(generation)) {
           return;
         }

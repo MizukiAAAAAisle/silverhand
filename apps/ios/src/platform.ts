@@ -12,7 +12,10 @@ import { NativeEventSocket } from "./event-socket";
 import { createIOSNavigation } from "./navigation";
 import { createIOSTitlebar } from "./titlebar";
 import { createIOSPageBar } from "./page-bar";
+import { createIOSBanner } from "./banner";
+import { createIOSComposer } from "./composer";
 import { createIOSFiles, encodeBytes } from "./files";
+import { createIOSAvatarMaker } from "./avatar-maker";
 
 function parse(text?: string): unknown {
   try {
@@ -57,6 +60,9 @@ export function createIOSPlatform(
     navigation: createIOSNavigation(bridge),
     titlebar: createIOSTitlebar(bridge),
     pageBar: createIOSPageBar(bridge),
+    composer: createIOSComposer(bridge),
+    banner: createIOSBanner(bridge),
+    avatarMaker: createIOSAvatarMaker(bridge),
     client: {
       getConnectionPolicy: async () => ({ allow_insecure_remote: false }),
       getConnectionInfo: async () => {
@@ -181,5 +187,7 @@ export function createIOSPlatform(
       openEventSocket: (url) => new NativeEventSocket(bridge, url),
     },
     files: createIOSFiles(bridge),
+    storeUrl: "https://apps.apple.com/app/id6817665320",
+    getAppVersion: async () => (await bridge.appVersion()).version,
   };
 }

@@ -128,7 +128,7 @@ export function CreateWorkspaceDialog({
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError("Please enter a Workspace name");
+      setError("Please enter a project name");
       return;
     }
     // Final format pass — arms the inline hint even on a field never blurred.
@@ -159,7 +159,7 @@ export function CreateWorkspaceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>New Workspace</DialogTitle>
+          <DialogTitle>New Project</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
@@ -241,9 +241,9 @@ const WORKSPACE_CREATE_ERROR_MESSAGES: Record<string, string> = {
 
 function friendlyCreateWorkspaceError(err: unknown): string {
   return describeApiError(err, {
-    actionLabel: "Couldn't create the workspace",
+    actionLabel: "Couldn't create the project",
     backendUnreachableMessage: "Can't reach the backend. Check your connection and try again.",
-    fallbackMessage: "Couldn't create the workspace. Please try again.",
+    fallbackMessage: "Couldn't create the project. Please try again.",
     knownCodeMessages: WORKSPACE_CREATE_ERROR_MESSAGES,
   });
 }

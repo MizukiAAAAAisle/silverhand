@@ -77,7 +77,22 @@ export function hasActionableUpdate(s: AppUpdateState | null): boolean {
   );
 }
 
+/** One user intent: find the update if not yet known, then download it. */
+async function update(): Promise<void> {
+  const appUpdate = getPlatform().appUpdate;
+  if (!appUpdate) return;
+  const current = await appUpdate.getState();
+  if (current?.status === "idle" || (current?.status === "error" && current.version === null)) {
+    await appUpdate.check();
+  }
+  const next = await appUpdate.getState();
+  if (next?.status === "available" || (next?.status === "error" && next.version !== null)) {
+    await appUpdate.download();
+  }
+}
+
 export const appUpdateActions = {
+  update,
   check: () => getPlatform().appUpdate?.check(),
   download: () => getPlatform().appUpdate?.download(),
   install: (mode: AppUpdateInstallMode) => getPlatform().appUpdate?.install(mode),

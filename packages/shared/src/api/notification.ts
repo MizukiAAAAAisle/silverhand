@@ -2,6 +2,7 @@
 // Bounded context: notification. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import { NotificationKindSchema } from '../db/schema.js';
+import { MessageAuthorDtoSchema } from './message-author.js';
 
 //
 // Emitted kinds (v1):
@@ -47,6 +48,9 @@ export const NotificationDtoSchema = z.object({
   payload: z.record(z.unknown()).nullable(),
   read_at: z.number().nullable(),
   created_at: z.number(),
+  /** Live author of the anchor message (`mention_self` / `mention_external`);
+   *  null when there is none. Absent from older backends — read as `?? null`. */
+  sender: MessageAuthorDtoSchema.nullable().optional(),
 });
 export type NotificationDto = z.infer<typeof NotificationDtoSchema>;
 

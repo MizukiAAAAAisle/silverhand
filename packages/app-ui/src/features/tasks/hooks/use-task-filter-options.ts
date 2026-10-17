@@ -89,7 +89,7 @@ export function useTaskFilterOptions(): TaskFilterOptions {
   // Workspace filter offers BOTH people-owned workspaces and agent spaces — the
   // upstream cascade axis (shiki #task:1387 review: match the message-search
   // workspace filter, which lists them too). Each option carries `owner_agent_id`
-  // so the dropdown can render the canonical WorkspaceIcon (serif "W" when it is
+  // so the dropdown can render the canonical WorkspaceIcon (serif "P" when it is
   // null, the owning agent's avatar otherwise). The cascade matches
   // on `task.place.workspace_id`, so an agent space filters exactly like any other
   // workspace.

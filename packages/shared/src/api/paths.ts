@@ -208,6 +208,8 @@ export const apiPaths = {
    *  write gates (POST/DELETE) are creator-only via `canEditAgent`.
    *  Returns 404 when the agent has no avatar set. */
   agentAvatar: (id: string) => `/api/agents/${id}/avatar`,
+  /** GET `AvatarDesignResponse`; same gate as the avatar write. */
+  agentAvatarDesign: (id: string) => `/api/agents/${id}/avatar/design`,
   /** Per-agent schedule list for the user-facing Agent panel. Backed by
    *  `ScheduleService.list` — same data the agent sees via the MCP
    *  `list_schedules` tool, but reachable from the host UI without an
@@ -340,6 +342,8 @@ export const apiPaths = {
    *  ONLY by the viewer-scoped `unread_updated` WS signal — never inferred from
    *  message events (unread is server-scored). Human viewer-scoped. */
   conversationUnread: (id: string) => `/api/conversations/${id}/unread`,
+  /** Every participating conversation's latest message summary (#task:2845). */
+  conversationLatest: '/api/conversations/latest',
   /** Per-(viewer, channel) attention mode (#task:1227 / #task:1870,
    *  docs/activity-lifecycle-v1.md §9.3). **PUT only** — the stored mode's read
    *  face is `attentionModes`, which carries `mode` beside `effective_mode` for
@@ -474,6 +478,8 @@ export const apiPaths = {
   meDeletion: '/api/me/deletion',
   embeddedProfileSetup: '/api/me/embedded-profile-setup',
   meAvatar: '/api/me/avatar',
+  /** GET `AvatarDesignResponse` for the caller's own avatar. */
+  meAvatarDesign: '/api/me/avatar/design',
   /** Public avatar fetch for any user. Returns the blob bytes (auth
    *  via the standard principal header). The DTO's `avatar_url`
    *  points here; renderer resolves it via the same auth-headers

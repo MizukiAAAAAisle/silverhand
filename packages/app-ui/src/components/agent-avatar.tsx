@@ -161,6 +161,8 @@ export function agentAvatarImage(
   const hex = (token: string) => /#[0-9a-f]+/i.exec(token)?.[0] ?? "#000";
   const inner = runtime === "pi" ? 1 : 0.6;
   const mark = renderToStaticMarkup(createElement(Icon, {}));
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" style="color:${hex(tint.fg)}"><rect width="100" height="100" fill="${hex(tint.bg)}"/><svg x="${50 - inner * 50}" y="${50 - inner * 50}" width="${inner * 100}" height="${inner * 100}">${mark}</svg></svg>`;
+  // An explicit size: WebKit reports a viewBox-only SVG at a default size it
+  // does not draw at, so a canvas crop of it keeps only a corner.
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100" style="color:${hex(tint.fg)}"><rect width="100" height="100" fill="${hex(tint.bg)}"/><svg x="${50 - inner * 50}" y="${50 - inner * 50}" width="${inner * 100}" height="${inner * 100}">${mark}</svg></svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }

@@ -119,7 +119,7 @@ export function formatRemoveHumanError(err: unknown): string {
       return "Restore the channel before changing its members.";
     }
     if (code === "target_outranks_actor") {
-      return "This member holds a higher workspace role than you.";
+      return "This member holds a higher project role than you.";
     }
     if (code === "channel_owner") {
       return "The owner of a private channel can't be removed.";

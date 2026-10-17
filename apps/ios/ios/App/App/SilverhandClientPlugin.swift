@@ -10,9 +10,9 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   public let pluginMethods: [CAPPluginMethod] = [
     "getProfile", "saveProfile", "clearProfile", "authState", "authenticate", "logout", "request",
     "upload",
-    "openSocket", "sendSocket", "closeSocket", "openExternal",
+    "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "sharePng", "saveAttachment",
+    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "bannerShow", "sharePng", "saveAttachment", "avatarMakerEdit",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -84,6 +84,32 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
           call.resolve(["completed": completed])
         }
         host.present(picker, animated: true)
+      } catch { call.reject(error.localizedDescription) }
+    }
+  }
+
+  @objc func avatarMakerEdit(_ call: CAPPluginCall) {
+    let config = call.getObject("config") ?? [:]
+    let parts = (config["parts"] as? [String: Any] ?? [:]).compactMapValues { $0 as? Int }
+    let bg = config["bg"] as? Int ?? 0
+    Task { @MainActor in
+      guard let host = self.bridge?.viewController, host.view.window != nil,
+        host.presentedViewController == nil
+      else {
+        call.reject("Unable to present the avatar editor")
+        return
+      }
+      do {
+        try SilverhandAvatarMaker.present(from: host, parts: parts, bg: bg) { result in
+          guard let result else {
+            call.resolve([:])
+            return
+          }
+          call.resolve([
+            "config": ["parts": result.config.parts, "bg": result.config.bg],
+            "base64": result.png.base64EncodedString(),
+          ])
+        }
       } catch { call.reject(error.localizedDescription) }
     }
   }
@@ -248,6 +274,103 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
       call.resolve()
     }
   }
+  @objc public func composerSync(_ call: CAPPluginCall) {
+    guard let state = call.getObject("state"), let key = state["key"] as? String else {
+      call.reject("Missing composer state")
+      return
+    }
+    let next = ComposerState(
+      key: key,
+      placeholder: state["placeholder"] as? String ?? "",
+      enabled: state["enabled"] as? Bool ?? false,
+      canSend: state["canSend"] as? Bool ?? false,
+      sendLabel: state["sendLabel"] as? String ?? "",
+      addLabel: state["addLabel"] as? String ?? "",
+      accessoryHeight: CGFloat(state["accessoryHeight"] as? Double ?? 0),
+      add: (state["add"] as? JSArray ?? []).compactMap { value in
+        guard let item = value as? JSObject, let id = item["id"] as? String else { return nil }
+        return ComposerMenuItem(
+          id: id, label: item["label"] as? String ?? "", icon: item["icon"] as? String ?? "",
+          pick: item["pick"] as? String)
+      },
+      picker: (state["picker"] as? JSObject).map { picker in
+        ComposerPicker(
+          rows: (picker["rows"] as? JSArray ?? []).compactMap { value in
+            guard let row = value as? JSObject, let id = row["id"] as? String,
+              let icon = row["icon"] as? JSObject
+            else { return nil }
+            let face: ComposerPickerRow.Icon =
+              (icon["image"] as? String).map { .image($0) }
+              ?? .glyph(icon["glyph"] as? String ?? "", ground: icon["ground"] as? Bool ?? false)
+            return ComposerPickerRow(
+              id: id, title: row["title"] as? String ?? "", handle: row["handle"] as? String,
+              detail: row["detail"] as? String, section: row["section"] as? String, icon: face,
+              dimmed: row["dimmed"] as? Bool ?? false)
+          },
+          footer: picker["footer"] as? String)
+      },
+      activity: (state["activity"] as? JSObject).flatMap { activity in
+        guard let id = activity["id"] as? String else { return nil }
+        return ComposerActivity(
+          id: id,
+          faces: (activity["faces"] as? JSArray ?? []).compactMap { value in
+            guard let icon = value as? JSObject else { return nil }
+            return (icon["image"] as? String).map { .image($0) }
+              ?? .glyph(icon["glyph"] as? String ?? "", ground: icon["ground"] as? Bool ?? false)
+          },
+          title: activity["title"] as? String ?? "", detail: activity["detail"] as? String ?? "",
+          label: activity["label"] as? String ?? "", since: activity["since"] as? Double ?? 0)
+      })
+    Task { @MainActor [self] in
+      if let host = navigationHost {
+        host.composer.onEvent = { [weak self] event in self?.notifyListeners("composer", data: event) }
+        host.composer.onMetrics = { [weak self] metrics in
+          self?.publishState("composerMetrics", metrics)
+        }
+        host.showComposer(next)
+      }
+      call.resolve()
+    }
+  }
+  @objc public func bannerShow(_ call: CAPPluginCall) {
+    guard let id = call.getString("id"), let title = call.getString("title") else {
+      call.reject("A banner needs an id and a title")
+      return
+    }
+    let icon = call.getObject("icon").map { icon -> ComposerPickerRow.Icon in
+      (icon["image"] as? String).map { .image($0) }
+        ?? .glyph(icon["glyph"] as? String ?? "", ground: icon["ground"] as? Bool ?? false)
+    }
+    let notice = BannerNotice(
+      id: id, title: title, subtitle: call.getString("subtitle"), body: call.getString("body"),
+      icon: icon)
+    Task { @MainActor [self] in
+      if let host = navigationHost {
+        host.banner.onEvent = { [weak self] event in self?.notifyListeners("banner", data: event) }
+        host.showBanner(notice)
+      }
+      call.resolve()
+    }
+  }
+  @objc public func composerRemove(_ call: CAPPluginCall) {
+    let key = call.getString("key")
+    Task { @MainActor in
+      if let composer = navigationHost?.composer, key == nil || composer.state?.key == key {
+        composer.remove()
+      }
+      call.resolve()
+    }
+  }
+  @objc public func composerSetText(_ call: CAPPluginCall) {
+    let key = call.getString("key") ?? ""
+    let text = call.getString("text") ?? ""
+    let caret = call.getInt("caret") ?? (text as NSString).length
+    let focus = call.getBool("focus") ?? false
+    Task { @MainActor in
+      navigationHost?.composer.setText(key: key, text: text, caret: caret, focus: focus)
+      call.resolve()
+    }
+  }
   @objc public func pageBarBackProgress(_ call: CAPPluginCall) {
     let progress = call.getDouble("progress").map { CGFloat($0) }
     Task { @MainActor in
@@ -346,6 +469,10 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
       $0.closeSocket(id: call.getString("id") ?? "")
       return [:]
     }
+  }
+  @objc public func appVersion(_ call: CAPPluginCall) {
+    let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+    call.resolve(["version": version ?? ""])
   }
   @objc public func openExternal(_ call: CAPPluginCall) {
     Task { @MainActor in

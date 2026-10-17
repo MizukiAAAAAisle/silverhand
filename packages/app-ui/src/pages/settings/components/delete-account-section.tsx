@@ -45,7 +45,7 @@ function BlockerList({ blockers }: { blockers: Blockers }): JSX.Element {
   return (
     <div className="flex flex-col gap-3 text-xs text-text-muted">
       <p>Resolve the following before deleting:</p>
-      <BlockerGroup label="Workspaces to transfer or delete" items={blockers.workspaces} />
+      <BlockerGroup label="Projects to transfer or delete" items={blockers.workspaces} />
       <BlockerGroup
         label="Agents to delete"
         items={blockers.agents.map((a) => ({ id: a.id, name: `@${a.name}` }))}
@@ -135,7 +135,7 @@ function DeleteAccountDialog({
         try {
           setConflict((JSON.parse(err.body) as { blockers: Blockers }).blockers);
         } catch {
-          setError("Your account still owns workspaces or agents.");
+          setError("Your account still owns projects or agents.");
         }
       } else if (err instanceof ApiError && err.status === 403) {
         setError("Password or handle is incorrect.");

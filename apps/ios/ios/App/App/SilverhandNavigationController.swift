@@ -23,10 +23,14 @@ enum NavigationItemStyle {
 // When the page on screen changes, its bars cross-fade as the page beneath
 // them slides.
 @MainActor
-final class SilverhandNavigationController: UITabBarController, UITabBarControllerDelegate {
+final class SilverhandNavigationController: UITabBarController, UITabBarControllerDelegate,
+  UIGestureRecognizerDelegate
+{
   let content = SilverhandViewController()
   let titlebar = Titlebar()
   let pageBar = PageBar()
+  let composer = ComposerView()
+  let banner = BannerView()
   var onIntent: (([String: Any]) -> Void)?
 
   // Shared navigation state, as last synced from the page.
@@ -102,11 +106,17 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   @available(iOS 27.1, *)
   override var childForPreferredVerticalBarBehavior: UIViewController? { nil }
 
-  /// Whether the wide layout's window frame is dark.
-  private var darkFrame = false
+  /// The theme is dark (from the navigation state).
+  private var darkTheme = false
+  /// The applied appearance: the shell's (the theme's) and the navigation
+  /// bars' (also dark over the wide layout's dark window frame). Unset until
+  /// first applied, so a light theme pins light under a dark system.
+  private var appliedStyle: (shell: Bool, bars: Bool)?
 
   override var childForStatusBarStyle: UIViewController? { nil }
-  override var preferredStatusBarStyle: UIStatusBarStyle { darkFrame ? .lightContent : .default }
+  override var preferredStatusBarStyle: UIStatusBarStyle {
+    appliedStyle?.bars == true ? .lightContent : .darkContent
+  }
 
   override var keyCommands: [UIKeyCommand]? {
     guard let state = titlebar.state, !blocked else { return nil }
@@ -126,6 +136,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       if !session.isEmpty { hideBar(!visible || blocked, animated: false) }
     }
     applyBars()
+    composer.publishMetrics()
   }
 
   enum Bars: Equatable {
@@ -180,23 +191,14 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     if !fade { endSwipe() }
     swiping = []
     draw(next.bars, on: host)
-    // Only the bars: a dark trait on the web view would change how it draws
-    // the page.
-    var dark = false
-    if case .titlebar(let state) = next.bars { dark = state.dark }
-    if dark != darkFrame {
-      darkFrame = dark
-      for case let other as UINavigationController in viewControllers ?? [] {
-        other.navigationBar.overrideUserInterfaceStyle = dark ? .dark : .unspecified
-      }
-      setNeedsStatusBarAppearanceUpdate()
-    }
+    applyChromeStyle()
     // A web modal's backdrop cannot cover native chrome, so the bars leave
     // while one is open.
     stack.setNavigationBarHidden(next.bars == .none || blocked, animated: false)
     place(next.bars, in: host, stack: stack)
     guard fade else { return }
-    let arriving: [UIView] = [stack.navigationBar, pageBar.accessory]
+    pageBar.accessory.setSwipeHidden(false)
+    let arriving: [UIView] = [stack.navigationBar]
     for view in arriving { view.layer.opacity = 0 }
     UIView.animate(withDuration: 0.25, delay: 0, options: [.allowUserInteraction]) {
       for view in arriving { view.layer.opacity = 1 }
@@ -212,13 +214,15 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// the swipe with the bars back as they were.
   func setBackProgress(_ progress: CGFloat?) {
     guard let stack = selectedViewController as? UINavigationController else { return }
+    composer.setBackProgress(progress)
     guard let progress else {
       endSwipe()
       return
     }
     if swiping.isEmpty {
       swiping = images(of: stack)
-      for view in [stack.navigationBar, pageBar.accessory] { view.layer.opacity = 0 }
+      stack.navigationBar.layer.opacity = 0
+      pageBar.accessory.setSwipeHidden(true)
     }
     for image in swiping { image.alpha = 1 - min(1, max(0, progress)) }
   }
@@ -229,7 +233,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     for image in swiping { image.removeFromSuperview() }
     swiping = []
-    for view in [stack.navigationBar, pageBar.accessory] { view.layer.opacity = 1 }
+    stack.navigationBar.layer.opacity = 1
+    pageBar.accessory.setSwipeHidden(false)
   }
 
   /// Images of the bars on screen, laid over them in the controller's view.
@@ -265,7 +270,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     let top = view.safeAreaInsets.top
     let bottom: CGFloat
     if verticalBarEdge != nil {
-      bottom = top + 4 + PageAccessory.titleHeight
+      bottom = verticalBarTop + PageAccessory.titleHeight
     } else if !stack.isNavigationBarHidden {
       bottom = stack.navigationBar.frame.maxY
       navigationBarHeight = stack.navigationBar.frame.height
@@ -273,6 +278,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       bottom = top + navigationBarHeight
     }
     content.publishBarMetrics(bottom: bottom, tabs: PageAccessory.tabsHeight)
+    composer.topLimit = bottom + (pageBar.accessory.window == nil ? 0 : pageBar.accessory.height)
   }
 
   /// Draws `bars` into the page's navigation item. A page's bar keeps what
@@ -306,8 +312,11 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       accessory.removeFromSuperview()
       return
     }
-    if accessory.superview !== page.view { page.view.addSubview(accessory) }
-    let top = verticalBarEdge != nil ? view.safeAreaInsets.top + 4 : stack.navigationBar.frame.maxY
+    if accessory.superview !== page.view {
+      page.view.addSubview(accessory)
+      accessory.rebuildGlass()
+    }
+    let top = verticalBarEdge != nil ? verticalBarTop : stack.navigationBar.frame.maxY
     accessory.frame = CGRect(x: 0, y: top, width: page.view.bounds.width, height: accessory.height)
   }
 
@@ -328,6 +337,22 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     content.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     host.view.insertSubview(content.view, at: 0)
     content.didMove(toParent: host)
+  }
+
+  /// The theme sets the whole shell's appearance, not the system's: the glass
+  /// tab bar resolves its style above `tabBar`. The page paints itself from
+  /// the theme and declares no color scheme, so the web view draws the same.
+  /// The wide layout's dark window frame darkens the navigation bars alone.
+  private func applyChromeStyle() {
+    var dark = darkTheme
+    if case .titlebar(let state) = bars { dark = dark || state.dark }
+    if let applied = appliedStyle, applied == (darkTheme, dark) { return }
+    appliedStyle = (darkTheme, dark)
+    overrideUserInterfaceStyle = darkTheme ? .dark : .light
+    for case let other as UINavigationController in viewControllers ?? [] {
+      other.navigationBar.overrideUserInterfaceStyle = dark ? .dark : .unspecified
+    }
+    setNeedsStatusBarAppearanceUpdate()
   }
 
   private func hideBar(_ hidden: Bool, animated: Bool) {
@@ -354,7 +379,13 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     modalVersion = call.getInt("modalVersion") ?? 0
     blocked = call.getBool("blocked") ?? false
     requestedVisible = call.getBool("visible") ?? false
-    if blocked { presentedViewController?.dismiss(animated: false) }
+    darkTheme = call.getBool("dark") ?? false
+    applyChromeStyle()
+    if blocked {
+      presentedViewController?.dismiss(animated: false)
+      banner.dismiss()
+    }
+    composer.setBlocked(blocked)
     if let index = names.firstIndex(of: call.getString("tab") ?? ""), let host = page(index) {
       selectedIndex = index
       attachContent(to: host)
@@ -371,6 +402,17 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// iPhone Duo stands the tab bar on a side edge. The page's side safe-area
   /// inset already clears it there, so no bottom inset applies.
   var verticalBarEdge: NSDirectionalRectEdge? { traitCollection.tabBarEdge }
+
+  /// Where the page's own title starts beside the vertical bar. The top safe
+  /// area there is zero, so the corner-adapted one keeps the title off the
+  /// display's rounded corner.
+  private var verticalBarTop: CGFloat {
+    var top = view.safeAreaInsets.top
+    if #available(iOS 26.0, *) {
+      top = max(top, view.edgeInsets(for: .safeArea(cornerAdaptation: .vertical)).top)
+    }
+    return top + 4
+  }
 
   // WebKit backs each overflow scroller with its own UIScrollView. Handing the
   // page's main one to UIKit lets the glass tab bar minimize on scroll. WebKit
@@ -426,6 +468,11 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   func invalidate() {
     if !session.isEmpty { invalidatedSessions.insert(session) }
     reset(session: session)
+    // The page resets its bars whenever its layout changes, while the
+    // composer is a page's own and leaves with it; only a lost session takes
+    // it with the bars.
+    composer.remove()
+    banner.dismiss()
   }
 
   // MARK: Tab items
@@ -502,6 +549,60 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     blocked = false
     hideBar(true, animated: false)
     presentedViewController?.dismiss(animated: false)
+  }
+
+  // MARK: Composer
+
+  /// While the composer edits, a tap on the page only ends editing, as the
+  /// tap that lowers a keyboard does elsewhere in iOS.
+  private lazy var pageTap: UITapGestureRecognizer = {
+    let tap = UITapGestureRecognizer(target: self, action: #selector(pageTapped))
+    tap.delegate = self
+    return tap
+  }()
+
+  @objc private func pageTapped() { composer.endEditing() }
+
+  func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+    recognizer !== pageTap || composer.endsEditing(at: recognizer.location(in: view))
+  }
+
+  func gestureRecognizer(
+    _ gestureRecognizer: UIGestureRecognizer,
+    shouldRecognizeSimultaneouslyWith other: UIGestureRecognizer
+  ) -> Bool { true }
+
+  /// Follows each touch on the page from its start to its end.
+  private lazy var pageTouch: UILongPressGestureRecognizer = {
+    let touch = UILongPressGestureRecognizer(target: self, action: #selector(pageTouched(_:)))
+    touch.minimumPressDuration = 0
+    touch.cancelsTouchesInView = false
+    touch.delaysTouchesEnded = false
+    touch.delegate = self
+    return touch
+  }()
+
+  @objc private func pageTouched(_ touch: UILongPressGestureRecognizer) {
+    switch touch.state {
+    case .began: composer.holdFocus(true, at: touch.location(in: view))
+    case .ended, .cancelled, .failed: composer.holdFocus(false, at: .zero)
+    default: break
+    }
+  }
+
+  func showBanner(_ notice: BannerNotice) {
+    banner.show(notice, in: view)
+  }
+
+  func showComposer(_ state: ComposerState) {
+    if pageTap.view == nil, let web = content.webView {
+      web.addGestureRecognizer(pageTap)
+      web.addGestureRecognizer(pageTouch)
+    }
+    composer.presenter = self
+    composer.install(in: view)
+    composer.setBlocked(blocked)
+    composer.apply(state)
   }
 
   func tabBarController(

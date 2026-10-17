@@ -482,7 +482,7 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
         className="search-list scrollbar-hide max-h-[min(60vh,440px)] overflow-y-auto p-2"
       >
         {trimmed.length === 0 ? (
-          <SearchEmptyState text="Search across your workspace" />
+          <SearchEmptyState text="Search across your project" />
         ) : sections.length === 0 && !search.isFetching && !search.isError ? (
           <SearchEmptyState text="No results" />
         ) : (

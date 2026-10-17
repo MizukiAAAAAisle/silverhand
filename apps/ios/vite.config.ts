@@ -2,7 +2,7 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { resolve } from "node:path";
-import { writeFileSync } from "node:fs";
+import { copyFileSync, writeFileSync } from "node:fs";
 import admission from "../../packages/shared/src/backend-admission.json";
 import { apiPaths, authPaths } from "../../packages/shared/src/api/paths";
 
@@ -15,6 +15,14 @@ export default defineConfig({
     {
       name: "ios-native-boundary",
       buildStart() {
+        // The native avatar editor draws from the same part library as the web one.
+        copyFileSync(
+          resolve(
+            import.meta.dirname,
+            "../../packages/app-ui/src/features/avatar-maker/model/avatar-library.json",
+          ),
+          resolve(import.meta.dirname, "native/Sources/SilverhandNative/Resources/AvatarLibrary.json"),
+        );
         writeFileSync(
           resolve(import.meta.dirname, "native/Sources/SilverhandNative/Resources/Protocol.json"),
           JSON.stringify(

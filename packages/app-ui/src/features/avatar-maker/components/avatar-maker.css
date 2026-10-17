@@ -1,0 +1,133 @@
+/* Regular: preview | part tabs | part grid, one fixed height so switching tabs never resizes the dialog. */
+.avatar-maker-body {
+  display: grid;
+  grid-template-columns: 232px 112px minmax(0, 1fr);
+  height: 480px;
+  padding: 0 20px;
+  gap: 8px;
+}
+
+.avatar-maker-stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  justify-content: flex-start;
+  gap: 12px;
+  padding-top: 8px;
+}
+
+.avatar-maker-preview {
+  width: 200px;
+  height: 200px;
+  overflow: hidden;
+  position: relative;
+  border-radius: var(--control-radius);
+}
+
+/* Drawn over the SVG so a pale background colour still reads as a framed square. */
+.avatar-maker-preview::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 var(--control-border-width) var(--border-subtle);
+  pointer-events: none;
+}
+
+.avatar-maker-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 200px;
+}
+
+.avatar-maker-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 0 0 4px;
+  overflow-y: auto;
+}
+
+.avatar-maker-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  /* Square tiles clip their overflow, so their automatic minimum height is 0; in a
+     height-bound scroller auto rows would then shrink until the row gap disappears. */
+  grid-auto-rows: max-content;
+  align-content: start;
+  gap: 8px;
+  /* Room for the selection ring, which draws outside the tiles. */
+  padding: 4px;
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+
+/* The part art is black ink drawn for a light ground, so tiles keep a paper ground in
+   every theme; the selection ring sits outside the tile so it reads on light and dark. */
+.avatar-maker-tile {
+  background: color-mix(in oklab, #111 7%, white);
+}
+
+.avatar-maker-tile:hover {
+  background: color-mix(in oklab, #111 11%, white);
+}
+
+.avatar-maker-tile[aria-checked="true"] {
+  background: white;
+  outline: 2px solid var(--text-primary);
+  outline-offset: 2px;
+}
+
+.avatar-maker-tile-none {
+  color: #8a8a8a;
+}
+
+.avatar-maker-swatch {
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.12);
+}
+
+.avatar-maker-grid::-webkit-scrollbar,
+.avatar-maker-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+/* Compact: the sheet stacks preview, a horizontal tab strip, then the grid. */
+:where([data-layout="compact"]) [data-avatar-maker] {
+  padding: 0;
+}
+
+:where([data-layout="compact"]) .avatar-maker-body {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0 16px;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  height: min(640px, calc(var(--dialog-viewport-height, 100dvh) - 180px));
+}
+
+:where([data-layout="compact"]) .avatar-maker-stage {
+  flex-direction: row;
+  justify-content: center;
+  padding: 0 0 12px;
+}
+
+:where([data-layout="compact"]) .avatar-maker-actions {
+  width: 132px;
+}
+
+:where([data-layout="compact"]) .avatar-maker-preview {
+  width: 128px;
+  height: 128px;
+}
+
+:where([data-layout="compact"]) .avatar-maker-tabs {
+  flex-direction: row;
+  padding: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+
+:where([data-layout="compact"]) .avatar-maker-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}

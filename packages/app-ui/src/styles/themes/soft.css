@@ -11,7 +11,7 @@
   & [data-workspace-icon] {
     background-color: var(--text-secondary);
     color: var(--workspace-icon-fg, var(--text-on-structure));
-    border-radius: var(--workspace-icon-radius, var(--chip-radius));
+    border-radius: var(--chip-radius);
     font-size: 11px;
   }
 

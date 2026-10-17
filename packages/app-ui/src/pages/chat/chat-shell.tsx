@@ -12,6 +12,7 @@ import {
   SIDEBAR_PERFORMANCE_VARIANT,
 } from "@/pages/chat/sidebar-performance-experiment";
 import { useResizableWidth } from "@/hooks/use-resizable-width";
+import { useSidebarStyle } from "@/features/conversation-shell/use-sidebar-style";
 import { CreateWorkspaceDialog } from "@/features/workspaces/create-workspace-dialog";
 import { CreateChannelDialog } from "@/features/workspaces/create-channel-dialog";
 import { WorkspaceSettingsDialog } from "@/features/workspaces/workspace-settings-dialog";
@@ -82,9 +83,14 @@ export function ChatShell({
     setArchivedFilter,
   } = useChatBrowse();
 
+  // Recent rows carry a preview line, so that style keeps its own, wider width.
+  const sidebarStyle = useSidebarStyle();
   const sidebar = useResizableWidth({
-    storageKey: "silverhand.layout.sidebar-width",
-    defaultWidth: 240,
+    storageKey:
+      sidebarStyle === "recent"
+        ? "silverhand.layout.sidebar-width.recent"
+        : "silverhand.layout.sidebar-width",
+    defaultWidth: sidebarStyle === "recent" ? 320 : 240,
     min: 230,
     max: 400,
     cssVar: "--sidebar-width",
@@ -181,6 +187,14 @@ export function ChatShell({
                     searchActive={view === "search"}
                     onSelectSearch={() => nav.toChatSearch()}
                     savedCount={savedItems?.length}
+                    onOpenThread={(target) =>
+                      handleJumpToMessage({
+                        workspaceId: target.workspaceId ?? undefined,
+                        channelId: target.conversationId,
+                        threadRootId: target.threadRootId,
+                        messageId: target.messageId,
+                      })
+                    }
                   />
                 </div>
               </div>

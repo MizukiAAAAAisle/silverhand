@@ -97,7 +97,7 @@ export function ChannelAttentionMenuItems({
               checked row above. Not an action and not a second control — the
               suppressor is flipped on the workspace, which is where it applies. */}
           <AppContextMenuItem icon={null} disabled>
-            Muted by workspace
+            Muted by project
           </AppContextMenuItem>
         </>
       ) : null}

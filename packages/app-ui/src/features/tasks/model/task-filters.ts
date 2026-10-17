@@ -230,7 +230,7 @@ export function boardScopeGroups<W extends WorkspaceOwnership>(input: {
     container: Extract<TaskBoardContainerAxis, "workspace" | "agent_space">,
   ): readonly W[] => input.workspaces.filter((w) => workspaceBoardContainer(w) === container);
   const defs: Array<BoardScopeGroup<W>> = [
-    { key: "workspaces", label: "Workspaces", workspaces: inContainer("workspace") },
+    { key: "workspaces", label: "Projects", workspaces: inContainer("workspace") },
     { key: "agent-spaces", label: "Agent Spaces", workspaces: inContainer("agent_space") },
   ];
   return defs.filter((g) => g.workspaces.length > 0);

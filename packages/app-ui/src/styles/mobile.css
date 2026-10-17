@@ -745,9 +745,11 @@
   inset: 0 0 auto;
   z-index: 5;
   height: var(--native-bar-bottom, env(safe-area-inset-top, 0px));
+  /* The page colour, which compact panes take (`[data-panel]` above): a theme's
+     desktop pane paper here tints the top of a white page. */
   background: linear-gradient(
-    var(--pane-bg) 0%,
-    color-mix(in srgb, var(--pane-bg) 85%, transparent) 50%,
+    var(--bg-base) 0%,
+    color-mix(in srgb, var(--bg-base) 85%, transparent) 50%,
     transparent
   );
   pointer-events: none;
@@ -765,6 +767,11 @@
   top: 0;
   padding-top: var(--pane-chrome-height, 0px);
 }
+/* The Recent filter row is chrome, not content: held clear of the native bar's
+   edge fade, which would otherwise dissolve the chips pinned under it. */
+[data-layout="compact"] [data-recent-filter] {
+  padding-top: 12px;
+}
 /* A side panel's find bar sits under the native bar. */
 [data-native-bar-clearance] ~ [data-thread-find] {
   top: var(--native-bar-bottom, env(safe-area-inset-top, 0px));
@@ -775,4 +782,33 @@
 [data-page][aria-hidden] ::-webkit-scrollbar {
   width: 0;
   height: 0;
+}
+
+/* The native composer (iOS) floats over the page. The message scroller ends
+   in room for it at the height its text gives it; the controls that float
+   above it (activity, attachments) sit on its drawn top, above any picker
+   native lists there. Both
+   are measured from the bottom of the window, where a page showing it ends. */
+[data-native-composer-room] {
+  flex-shrink: 0;
+  height: var(--native-composer-reserve, 0px);
+}
+[data-native-composer] {
+  position: relative;
+  height: 0;
+}
+[data-native-composer-accessory] {
+  /* A selection would take the keyboard from the native composer. */
+  -webkit-user-select: none;
+  user-select: none;
+  position: absolute;
+  inset-inline: 12px;
+  bottom: calc(var(--native-composer-overlay, 0px) + var(--native-composer-picker, 0px) + 8px);
+  z-index: var(--z-sticky);
+}
+[data-layout="compact"] [data-scroll-bottom] {
+  bottom: max(
+    16px,
+    calc(var(--native-composer-overlay, 0px) + var(--native-composer-picker, 0px) + 12px)
+  );
 }

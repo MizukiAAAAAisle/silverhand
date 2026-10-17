@@ -22,7 +22,8 @@
           "source_message_id": null,
           "payload": { "code": "missing-runtime" },
           "read_at": null,
-          "created_at": 100
+          "created_at": 100,
+          "sender": null
         }
       ]
     }

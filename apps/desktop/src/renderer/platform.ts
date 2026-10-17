@@ -74,6 +74,7 @@ export function createDesktopPlatform(
       onContextualClose: (handler) => bridge.onContextualClose(handler),
       respondContextualClose: (id, outcome) => bridge.respondContextualClose(id, outcome),
     },
+    getAppVersion: () => bridge.getAppVersion(),
     appUpdate: {
       getState: () => bridge.getAppUpdateState(),
       subscribe: (handler) => bridge.onAppUpdateState(handler),

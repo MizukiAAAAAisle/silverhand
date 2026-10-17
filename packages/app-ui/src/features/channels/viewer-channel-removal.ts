@@ -322,6 +322,11 @@ export interface ChannelKeyClassification {
  * query-definition chokepoint; the renderer has no such chokepoint today.
  */
 export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyClassification> = {
+  "account-deletion": {
+    verdicts: ["exempt"],
+    reason:
+      "the viewer's own account-deletion preflight (blocking workspaces and agents); no conversation axis",
+  },
   activity: {
     verdicts: ["cleaned"],
     reason: "global list; every item carries conversation_id → registry `activity`",
@@ -346,6 +351,10 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyC
     reason:
       "['attention','badges'] roll-up + ['attention','modes', wsId] tier batch (#task:1870) — both are server membership-filtered (each JOINs conversation_users) and neither is patchable here: the badge is an absolute per-workspace number this client cannot recompute, and the batch's rows are the server's tier resolution. Settled by invalidate-and-re-read on workspace_channels_changed / snapshot_required — a membership change deliberately emits NO attention_badge_updated frame",
   },
+  "avatar-design": {
+    verdicts: ["exempt"],
+    reason: "saved avatar-maker design per principal; no conversation axis",
+  },
   "backend-info": { verdicts: ["exempt"], reason: "backend build info; no conversation axis" },
   "channel-detail": { verdicts: ["swept"], reason: "['channel-detail', cid] → position 1" },
   channels: {
@@ -362,6 +371,11 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyC
     reason: "['conversation-members', cid] → position 1",
   },
   "conversation-ref": { verdicts: ["swept"], reason: "['conversation-ref', cid] → position 1" },
+  "conversation-latest": {
+    verdicts: ["retained"],
+    reason:
+      "previews for the Recent sidebar, whose rows come from the channel and direct-pair lists; an entry for a lost conversation is never rendered and the next snapshot drops it",
+  },
   conversations: {
     verdicts: ["swept"],
     reason: "['conversations', cid, 'agent-activity', agentId] → position 1",

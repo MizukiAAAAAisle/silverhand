@@ -309,6 +309,48 @@ async fn read_candidate_arm(
     Ok(pairs)
 }
 
+/// The canonical active-agent audience, narrowed only by immutable agent scope.
+/// Used inside HTTP snapshots and immediately before WS delivery/replay.
+pub(crate) async fn may_read_agent_stream(
+    connection: &mut SqliteConnection,
+    viewer: &UserId,
+    agent: &AgentId,
+) -> Result<bool, sqlx::Error> {
+    use silverhand_backend_core::identity_access::{
+        agent_lifecycle::MaterializationStatus,
+        capability::agent_view::{AgentViewerArms, AgentVisibility, agent_viewer_user_ids},
+    };
+    let row = sqlx::query("SELECT created_by_user_id, materialization_status FROM agents WHERE id=? AND session_scope='agent'")
+        .bind(agent.as_str()).fetch_optional(&mut *connection).await?;
+    let Some(row) = row else {
+        return Ok(false);
+    };
+    let creator = row
+        .try_get::<Option<String>, _>("created_by_user_id")?
+        .map(UserId::parse)
+        .transpose()
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let status = MaterializationStatus::parse(&row.try_get::<String, _>("materialization_status")?)
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+    let audience = read_agent_audience(connection, agent)
+        .await
+        .map_err(|e| match e {
+            AgentViewAclError::Sql(e) => e,
+            AgentViewAclError::MalformedIdentity { column } => {
+                sqlx::Error::Protocol(format!("invalid agent audience {column}"))
+            }
+        })?;
+    Ok(agent_viewer_user_ids(Some(&AgentVisibility {
+        viewers: AgentViewerArms::new(
+            creator,
+            audience.direct_pair_human_endpoints,
+            audience.shared_workspace_members,
+        ),
+        materialization_status: status,
+    }))
+    .contains(viewer))
+}
+
 #[cfg(test)]
 mod tests {
     use std::{collections::BTreeSet, path::Path};
@@ -496,46 +538,4 @@ mod tests {
             "the schema must reject a human-first direct_pair row"
         );
     }
-}
-
-/// The canonical active-agent audience, narrowed only by immutable agent scope.
-/// Used inside HTTP snapshots and immediately before WS delivery/replay.
-pub(crate) async fn may_read_agent_stream(
-    connection: &mut SqliteConnection,
-    viewer: &UserId,
-    agent: &AgentId,
-) -> Result<bool, sqlx::Error> {
-    use silverhand_backend_core::identity_access::{
-        agent_lifecycle::MaterializationStatus,
-        capability::agent_view::{AgentViewerArms, AgentVisibility, agent_viewer_user_ids},
-    };
-    let row = sqlx::query("SELECT created_by_user_id, materialization_status FROM agents WHERE id=? AND session_scope='agent'")
-        .bind(agent.as_str()).fetch_optional(&mut *connection).await?;
-    let Some(row) = row else {
-        return Ok(false);
-    };
-    let creator = row
-        .try_get::<Option<String>, _>("created_by_user_id")?
-        .map(UserId::parse)
-        .transpose()
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    let status = MaterializationStatus::parse(&row.try_get::<String, _>("materialization_status")?)
-        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
-    let audience = read_agent_audience(connection, agent)
-        .await
-        .map_err(|e| match e {
-            AgentViewAclError::Sql(e) => e,
-            AgentViewAclError::MalformedIdentity { column } => {
-                sqlx::Error::Protocol(format!("invalid agent audience {column}"))
-            }
-        })?;
-    Ok(agent_viewer_user_ids(Some(&AgentVisibility {
-        viewers: AgentViewerArms::new(
-            creator,
-            audience.direct_pair_human_endpoints,
-            audience.shared_workspace_members,
-        ),
-        materialization_status: status,
-    }))
-    .contains(viewer))
 }

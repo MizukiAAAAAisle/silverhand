@@ -1169,7 +1169,7 @@ mod tests {
 
         // The file is named for this boot's UTC stamp.
         let expected_name = "cli-2023-11-14T22-15-23-123Z.log";
-        let path = dir.path().join(&expected_name);
+        let path = dir.path().join(expected_name);
         let contents = tokio::fs::read_to_string(&path).await.unwrap();
         let lines: Vec<serde_json::Value> = contents
             .lines()
@@ -1295,7 +1295,7 @@ mod tests {
         sink.close().await;
 
         let expected_name = "agent-audit-2023-11-14T22-15-23-123Z.log";
-        let path = dir.path().join(&expected_name);
+        let path = dir.path().join(expected_name);
         let contents = tokio::fs::read_to_string(&path).await.unwrap();
         let lines: Vec<serde_json::Value> = contents
             .lines()

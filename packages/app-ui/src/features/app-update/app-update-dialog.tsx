@@ -1,5 +1,4 @@
 import type { JSX } from "react";
-import type { AppUpdateState } from "@silverhand/client";
 import { Button } from "@/components/ui/button";
 import { SpinnerIcon } from "@/icons";
 import {
@@ -16,40 +15,12 @@ import {
   useAppUpdateDialogOpen,
   useAppUpdateState,
 } from "./app-update-store";
-
-function describe(state: AppUpdateState): string {
-  switch (state.status) {
-    case "idle":
-      return state.lastCheckedAt === null
-        ? `Silverhand ${state.currentVersion} has not checked for updates yet.`
-        : `Silverhand ${state.currentVersion} is the latest version.`;
-    case "checking":
-      return "Checking for updates…";
-    case "available":
-      return `Silverhand ${state.version} is available.`;
-    case "downloading":
-      return `Downloading Silverhand ${state.version}…`;
-    case "downloaded":
-      return `Silverhand ${state.version} is ready to install. Restart now, or install it the next time you quit.`;
-    case "installing":
-      return `Preparing Silverhand ${state.version}…`;
-    case "scheduled":
-      return `Silverhand ${state.version} will be installed when you quit.`;
-    case "error":
-      return state.message;
-  }
-}
-
-function progressPercent(state: Extract<AppUpdateState, { status: "downloading" }>): number | null {
-  if (!state.total) return null;
-  return Math.min(100, Math.round((state.transferred / state.total) * 100));
-}
+import { AppUpdateProgress, describeAppUpdate } from "./app-update-parts";
 
 export function AppUpdateDialog(): JSX.Element | null {
   const state = useAppUpdateState();
   const open = useAppUpdateDialogOpen();
   if (!state) return null;
-  const percent = state.status === "downloading" ? progressPercent(state) : null;
   return (
     <Dialog open={open} onOpenChange={(next) => !next && closeAppUpdateDialog()}>
       <DialogContent className="max-w-md">
@@ -59,23 +30,10 @@ export function AppUpdateDialog(): JSX.Element | null {
             {state.status === "checking" ? (
               <SpinnerIcon aria-hidden className="size-3.5 shrink-0 motion-safe:animate-spin" />
             ) : null}
-            <span>{describe(state)}</span>
+            <span>{describeAppUpdate(state)}</span>
           </DialogDescription>
         </DialogHeader>
-        {state.status === "downloading" ? (
-          <div
-            role="progressbar"
-            aria-valuemin={0}
-            aria-valuemax={100}
-            aria-valuenow={percent ?? undefined}
-            className="h-1.5 w-full overflow-hidden rounded-full bg-bg-hover"
-          >
-            <div
-              className="h-full bg-(--accent) transition-[width]"
-              style={{ width: `${percent ?? 0}%` }}
-            />
-          </div>
-        ) : null}
+        {state.status === "downloading" ? <AppUpdateProgress state={state} /> : null}
         <DialogFooter>
           {state.status === "downloaded" ? (
             <>

@@ -6,6 +6,7 @@ use silverhand_backend_core::{
         CommittedMessageView, DirectPairOpenedFact, DirectPairOpenedPort, PrincipalIdentity,
         collaboration::{
             attachment::{AttachmentChangedFact, AttachmentChangedPublisher},
+            conversation_latest::ConversationLatest,
             notification::{
                 CommittedNotificationClear, NotificationAftermath, NotificationClearFailure,
             },
@@ -21,10 +22,13 @@ use silverhand_backend_core::{
         mention_cc::CommittedMentionCopy,
         post_commit::{
             CommittedMentionRow, CommittedMessagePublication, CopyNotification,
-            DirectLineInvalidation, EffectFailure, MessagePublication, UnreadPublication,
-            ViewerNotification,
+            DirectLineInvalidation, EffectFailure, LatestPublication, MessagePublication,
+            UnreadPublication, ViewerNotification,
         },
-        unread::{LatestUnread as CoreLatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread},
+        unread::{
+            ConversationHumanAudience, LatestUnread as CoreLatestUnread, UnreadAudience,
+            UnreadReadModel, ViewerUnread,
+        },
     },
     foundation::identity::{AgentId, ConversationId, UserId, WorkspaceId},
     foundation::scope_event::EventScope,
@@ -35,7 +39,7 @@ use crate::{
         aftermath::MessagingAftermath,
         collaboration::{
             attachment::changed_event as attachment_changed_payload,
-            reaction::changed_event as reaction_changed_payload,
+            conversation_latest::latest_dto, reaction::changed_event as reaction_changed_payload,
             saved::changed_event as saved_changed_payload,
         },
         message_wire::{copy_dto, message_event_payload, rename_dto},
@@ -627,6 +631,28 @@ impl<R: UnreadReadModel + Send + Sync> UnreadPublication for HubUnreadPublisher<
             }
         }
         Ok(())
+    }
+}
+
+impl<R: ConversationHumanAudience + Send + Sync> LatestPublication for HubUnreadPublisher<R> {
+    async fn publish_latest(&self, latest: &ConversationLatest) -> Result<(), EffectFailure> {
+        let viewers = self
+            .read_model
+            .human_participants(&latest.conversation)
+            .await
+            .map_err(EffectFailure::from_source)?;
+        let payload = latest_dto(latest);
+        let mut first_failure = None;
+        for viewer in viewers {
+            if let Err(cause) = self.hub.publish(
+                EventScope::Viewer(viewer),
+                ProductEvent::ConversationLatestChanged(payload.clone()),
+            ) && first_failure.is_none()
+            {
+                first_failure = Some(EffectFailure::from_source(cause));
+            }
+        }
+        first_failure.map_or(Ok(()), Err)
     }
 }
 

@@ -71,7 +71,9 @@ fn per_model_reasoning_effort_options(
             {
                 Some(&["low", "medium", "high", "xhigh", "max", "ultra"])
             }
-            "gpt-5.6-sol" => Some(&["low", "medium", "high", "xhigh", "max", "ultra"]),
+            "gpt-6.1-sol" | "gpt-5.6-sol" => {
+                Some(&["low", "medium", "high", "xhigh", "max", "ultra"])
+            }
             "gpt-5.6-terra" | "gpt-5.6-luna" => Some(&["low", "medium", "high", "xhigh", "max"]),
             _ => None,
         },
@@ -251,6 +253,13 @@ mod tests {
             Some("ultra"),
             Some("gpt-5.6-sol")
         ));
+        for effort in ["max", "ultra"] {
+            assert!(reasoning_effort_valid_for_runtime(
+                RuntimeKind::Codex,
+                Some(effort),
+                Some("gpt-6.1-sol")
+            ));
+        }
         assert!(reasoning_effort_valid_for_runtime(
             RuntimeKind::Codex,
             Some("max"),

@@ -812,7 +812,7 @@ struct ConnectionEvent {
 }
 
 enum QueuedScopeEvent {
-    Event(ScopedEvent),
+    Event(Box<ScopedEvent>),
     Snapshot { current_seq: TransportSeq },
     Failure(Box<dyn Error + Send + Sync>),
 }
@@ -1001,7 +1001,7 @@ async fn connection<A, S>(
                 }
                 match queued.event {
                     QueuedScopeEvent::Event(event) => {
-                        if send_json(&mut socket, &event).await.is_err() { break; }
+                        if send_json(&mut socket, &*event).await.is_err() { break; }
                     }
                     QueuedScopeEvent::Snapshot { current_seq } => {
                         cancel_subscription(&mut subscriptions, &queued.scope);
@@ -1187,7 +1187,7 @@ fn relay(
     let task = tokio::spawn(async move {
         loop {
             let (event, terminal) = match subscription.receiver.recv().await {
-                Ok(event) => (QueuedScopeEvent::Event(event), false),
+                Ok(event) => (QueuedScopeEvent::Event(Box::new(event)), false),
                 Err(broadcast::error::RecvError::Lagged(_)) => (
                     match hub.current_seq(&scope) {
                         Ok(current_seq) => QueuedScopeEvent::Snapshot { current_seq },

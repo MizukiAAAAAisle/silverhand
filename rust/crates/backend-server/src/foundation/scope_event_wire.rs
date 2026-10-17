@@ -78,6 +78,7 @@ pub(crate) enum ProductEvent {
     SavedChanged(Value),
     MessageReactionChanged(Value),
     AttachmentChanged(Value),
+    ConversationLatestChanged(Value),
     #[cfg(test)]
     Test {
         value: String,

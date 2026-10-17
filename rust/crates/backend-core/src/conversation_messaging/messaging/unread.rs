@@ -73,3 +73,12 @@ pub trait UnreadReadModel {
         conversation: &ConversationId,
     ) -> impl Future<Output = Result<Option<UnreadAudience>, PersistenceFailure>> + Send;
 }
+
+/// The conversation's live human participants, from the same authority as
+/// [`UnreadReadModel`]'s audience.
+pub trait ConversationHumanAudience {
+    fn human_participants(
+        &self,
+        conversation: &ConversationId,
+    ) -> impl Future<Output = Result<Vec<UserId>, PersistenceFailure>> + Send;
+}

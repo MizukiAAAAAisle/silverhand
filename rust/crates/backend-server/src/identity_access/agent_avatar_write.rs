@@ -79,6 +79,7 @@ use crate::foundation::error;
 use super::agent_avatar::AGENT_AVATAR_PATH;
 use crate::foundation::multipart_transport::{accumulate_capped, declared_content_type, drain};
 use crate::identity_access::agent_wire::{AgentDto, reproject_committed_agent};
+use crate::identity_access::avatar_design::{DesignSlot, design_rejected};
 
 /// The anti-enumeration refusal string, pinned to the TypeScript handler.
 const AGENT_NOT_FOUND: &str = "agent not found";
@@ -141,7 +142,7 @@ where
     let Ok(agent) = AgentId::parse(agent_id) else {
         return agent_not_found();
     };
-    if let Some(refusal) = gate(&state.reads, &principal, &agent).await {
+    if let Some(refusal) = gate_avatar_edit(&state.reads, &principal, &agent).await {
         return refusal;
     }
 
@@ -150,10 +151,14 @@ where
         Ok(multipart) => multipart,
         Err(_) => return multipart_required(),
     };
-    let file = match first_file_field(&mut multipart).await {
-        Ok(Some(file)) => file,
-        Ok(None) => return file_field_required(),
+    let (file, design) = match first_file_field(&mut multipart).await {
+        Ok((Some(file), design)) => (file, design),
+        Ok((None, _)) => return file_field_required(),
         Err(_) => return multipart_required(),
+    };
+    let design = match design.admit() {
+        Ok(design) => design,
+        Err(rejection) => return design_rejected(rejection),
     };
 
     let now_ms = state.clock.now_unix_millis();
@@ -165,6 +170,7 @@ where
         CandidateAvatar {
             bytes: file.bytes,
             declared_content_type: file.content_type,
+            design,
         },
         now_ms,
     )
@@ -250,7 +256,7 @@ where
     let Ok(agent) = AgentId::parse(agent_id) else {
         return agent_not_found();
     };
-    if let Some(refusal) = gate(&state.reads, &principal, &agent).await {
+    if let Some(refusal) = gate_avatar_edit(&state.reads, &principal, &agent).await {
         return refusal;
     }
 
@@ -310,7 +316,11 @@ fn principal(viewer: Option<Extension<UserId>>, route: &str) -> Option<Principal
 /// The shared visibility + authority ladder both verbs run before touching the payload
 /// or the write. Returns `Some(refusal)` — the early `Response` — on any failure; `None`
 /// means the caller may mutate this agent's avatar.
-async fn gate<R>(reads: &R, principal: &Principal, agent: &AgentId) -> Option<Response>
+pub(crate) async fn gate_avatar_edit<R>(
+    reads: &R,
+    principal: &Principal,
+    agent: &AgentId,
+) -> Option<Response>
 where
     R: AgentDetailReadModel,
 {
@@ -407,12 +417,16 @@ struct UploadedFile {
 /// `formData()` throw's `400`.
 async fn first_file_field(
     multipart: &mut Multipart,
-) -> Result<Option<UploadedFile>, MultipartError> {
+) -> Result<(Option<UploadedFile>, DesignSlot), MultipartError> {
+    let mut design = DesignSlot::default();
     // Outer `Some` = the first `file`-named slot has been claimed; inner `Option` = it was a
     // file (`Some`) or a same-named non-file (`None`). The claim is made on the first match
     // but the loop runs to the end regardless, so `?` still surfaces a later part's fault.
     let mut claimed: Option<Option<UploadedFile>> = None;
     while let Some(mut field) = multipart.next_field().await? {
+        if design.offer(&mut field).await? {
+            continue;
+        }
         if claimed.is_none() && field.name() == Some("file") {
             if field.file_name().is_none() {
                 // A non-file `file` slot is `file field required`, but only AFTER the whole
@@ -440,7 +454,7 @@ async fn first_file_field(
             drain(&mut field).await?;
         }
     }
-    Ok(claimed.flatten())
+    Ok((claimed.flatten(), design))
 }
 
 // ===========================================================================
@@ -475,7 +489,7 @@ struct ErrorCodeBody {
     code: &'static str,
 }
 
-fn agent_not_found() -> Response {
+pub(crate) fn agent_not_found() -> Response {
     (
         StatusCode::NOT_FOUND,
         Json(ErrorBody {

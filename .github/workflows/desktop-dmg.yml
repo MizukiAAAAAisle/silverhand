@@ -54,8 +54,8 @@ jobs:
       - name: Install embedded Rust toolchain
         if: matrix.variant == 'embedded'
         run: |
-          rustup toolchain install 1.94.0 --profile minimal --target aarch64-apple-darwin
-          echo 'RUSTUP_TOOLCHAIN=1.94.0' >> "$GITHUB_ENV"
+          rustup toolchain install 1.99.0 --profile minimal --target aarch64-apple-darwin
+          echo 'RUSTUP_TOOLCHAIN=1.99.0' >> "$GITHUB_ENV"
       - name: Cache Rust compilation
         if: matrix.variant == 'embedded'
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -64,7 +64,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             rust/target
-          key: desktop-rust-macos15-arm64-1.94.0-${{ hashFiles('rust/Cargo.lock', '.cargo/config.toml') }}
+          key: desktop-rust-macos15-arm64-1.99.0-${{ hashFiles('rust/Cargo.lock', '.cargo/config.toml') }}
       - name: Import Developer ID certificate
         env:
           MAC_CERT_P12_BASE64: ${{ secrets.MAC_CERT_P12_BASE64 }}

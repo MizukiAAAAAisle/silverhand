@@ -250,13 +250,6 @@
   --panel-border-width: 1px;
 }
 
-/* Hooks: Application frame */
-
-[data-theme="glass"] [data-panel="sidebar"] {
-  --pane-bg: var(--glass-tint);
-  --pane-shadow: var(--glass-shadow);
-}
-
 /* Hooks: Floating surfaces and actions */
 
 [data-theme="glass"] :is([data-radix-menu-content], [data-popover-frame], [role="listbox"]) {
@@ -301,6 +294,11 @@
     [data-panel-tabs],
     [data-panel-tabs] button
   ) {
+  border-radius: 9999px;
+}
+
+/* iOS draws a conversation list's pictures as circles. */
+[data-theme="glass"][data-layout="compact"] [data-recent-avatar] > * {
   border-radius: 9999px;
 }
 

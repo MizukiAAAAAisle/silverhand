@@ -203,21 +203,19 @@ where
                     .await
                     .map_err(persistence)?;
             let current = read_valid_session(&mut *transaction, &token_hash, validation).await?;
-            if let Some((_, last_used)) = &current {
-                if renewal_due(*last_used, validation.now_ms()) {
-                    crate::foundation::statement_metrics::statement(
-                        "auth.touch",
-                        "run",
-                        sqlx::query(
-                            "UPDATE auth_sessions SET last_used_at = ? WHERE token_hash = ?",
-                        )
+            if let Some((_, last_used)) = &current
+                && renewal_due(*last_used, validation.now_ms())
+            {
+                crate::foundation::statement_metrics::statement(
+                    "auth.touch",
+                    "run",
+                    sqlx::query("UPDATE auth_sessions SET last_used_at = ? WHERE token_hash = ?")
                         .bind(validation.now_ms())
                         .bind(token_hash.as_str())
                         .execute(&mut *transaction),
-                    )
-                    .await
-                    .map_err(persistence)?;
-                }
+                )
+                .await
+                .map_err(persistence)?;
             }
             crate::foundation::statement_metrics::statement(
                 "auth.commit",

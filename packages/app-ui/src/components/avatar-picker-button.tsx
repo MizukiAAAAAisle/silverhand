@@ -1,4 +1,6 @@
-import { useId, type ReactNode } from "react";
+import { useRef, type ReactNode } from "react";
+import { CameraIcon, EditIcon, UploadIcon } from "@/icons";
+import { AppDropdownMenu, AppDropdownMenuItem } from "@/components/menus/app-context-menu";
 import { cn } from "@/lib/cn";
 
 export interface AvatarPickerButtonProps {
@@ -12,18 +14,9 @@ export interface AvatarPickerButtonProps {
   children: ReactNode;
   /**
    * Pixel size of the avatar square. Used to constrain the click target
-   * and to scale the hover bottom strip.
+   * and to scale the hover veil's icon.
    */
   size: number;
-  /**
-   * Hover/focus overlay label. The strip is clipped to the avatar's
-   * frame (`overflow-hidden`), so this MUST stay very short — a single
-   * verb like `'Edit'` or `'Add'`. The smallest call site is the 40px
-   * registration-gate avatar; even uppercase 10px text gets trimmed
-   * past ~5 characters there. Use `ariaLabel` for the verbose
-   * screen-reader text (e.g. `'Change avatar'`).
-   */
-  label: string;
   /**
    * Called with the picked `File`. Caller handles validation (we keep
    * the picker presentational so the same component fits both
@@ -31,72 +24,89 @@ export interface AvatarPickerButtonProps {
    * upload on submit" flow).
    */
   onPick: (file: File) => void;
+  /** Opens the avatar maker as a menu item beside Upload photo. Without it the
+   *  avatar opens the file picker directly, for surfaces that show the maker elsewhere. */
+  onMake?: () => void;
+  /** Leading glyph of the Make avatar item, supplied by the avatar-maker feature. */
+  makeIcon?: ReactNode;
   /**
    * Disables click and dims the surface — typically wired to an
    * upload mutation's `isPending`.
    */
   disabled?: boolean;
-  /**
-   * Override for the accessible name read by screen readers. The visible
-   * `label` is forced to a short verb to fit inside the avatar frame's
-   * clip, which makes for a poor SR announcement on its own — pass a
-   * verbose value here (e.g. `'Change avatar'` / `'Add avatar for @alice'`).
-   * Defaults to `label`.
-   */
-  ariaLabel?: string;
-  /** Extra classes applied to the outer label/frame. */
+  /** Accessible name of the avatar button, e.g. `'Change avatar'` / `'Add avatar for @alice'`. */
+  ariaLabel: string;
+  /** Extra classes applied to the avatar button frame. */
   className?: string;
 }
 
 /**
- * Click-the-avatar avatar picker.
+ * Click-the-avatar avatar editor.
  *
- * The whole square is the click target — we wrap the avatar visual in a
- * `<label>` containing a hidden `<input type="file">`. On hover or
- * keyboard focus a thin bottom strip slides in with a single short verb
- * (`'Edit'` / `'Add'`); clicking anywhere on the avatar opens the OS
- * file picker. Designed to replace the previous Choose…/Change… button
- * pattern so the affordance lives on the avatar itself, not in a
- * neighboring control.
+ * The whole square is the one entry: clicking it opens a menu anchored on the
+ * avatar with the two equal ways to change it, Make avatar and Upload photo, or
+ * the file picker directly when no `onMake` is given.
+ * On hover or keyboard focus a veil covers the avatar with the action's icon:
+ * edit when it opens the menu, upload when it opens the file picker.
  *
  * Removal is intentionally *not* part of this widget: callers render a
- * small "Remove" link beside the picker when an avatar is set. Keeping
- * the destructive action outside the click target avoids misclicks
- * (a mistargeted "Change → click" while aiming for an X icon would
- * silently re-open the picker in a confusing way).
+ * small "Remove" link beside the picker when an avatar is set, keeping the
+ * destructive action outside the click target.
  *
- * Presentational by design — `onPick` is just the picked `File`. The
- * caller does its own client-side validation and mutation wiring.
+ * Presentational by design — `onPick` is just the picked `File` and `onMake`
+ * just a request to open the maker. The caller owns validation and mutations.
  */
 export function AvatarPickerButton({
   children,
   size,
-  label,
   onPick,
+  onMake,
+  makeIcon,
   disabled = false,
   ariaLabel,
   className,
 }: AvatarPickerButtonProps): JSX.Element {
-  const inputId = useId();
-  return (
-    <label
-      htmlFor={inputId}
+  const inputRef = useRef<HTMLInputElement | null>(null);
+
+  const VeilIcon = onMake ? EditIcon : UploadIcon;
+  const veilIconPx = Math.max(14, Math.min(22, Math.round(size * 0.28)));
+
+  const trigger = (
+    <button
+      type="button"
+      disabled={disabled}
+      aria-label={ariaLabel}
       className={cn(
-        "group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none",
-        // Focus outline lives on the wrapper so keyboard users get a clear
-        // outline when the hidden input gains focus via Tab.
-        "focus-outline-within",
+        "group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none focus-outline",
         disabled ? "pointer-events-none opacity-50" : "cursor-pointer",
         className,
       )}
       style={{ width: size, height: size }}
-      aria-label={ariaLabel ?? label}
+      onClick={onMake ? undefined : () => inputRef.current?.click()}
     >
+      {children}
+      <span
+        className={cn(
+          "pointer-events-none absolute inset-0 grid place-items-center bg-black/45 text-white",
+          "opacity-0 transition-opacity duration-100 ease-out",
+          "group-hover:opacity-100 group-focus-visible:opacity-100 group-data-[state=open]:opacity-100",
+        )}
+        aria-hidden
+      >
+        <VeilIcon style={{ width: veilIconPx, height: veilIconPx }} />
+      </span>
+    </button>
+  );
+
+  return (
+    <>
       <input
-        id={inputId}
+        ref={inputRef}
         type="file"
         accept="image/png,image/jpeg,image/gif,image/webp"
         className="sr-only"
+        tabIndex={-1}
+        aria-hidden
         disabled={disabled}
         onChange={(e) => {
           const file = e.target.files?.[0] ?? null;
@@ -105,29 +115,21 @@ export function AvatarPickerButton({
           if (file) onPick(file);
         }}
       />
-      {children}
-      <span
-        className={cn(
-          "pointer-events-none absolute inset-x-0 bottom-0 grid place-items-center",
-          "bg-black/60 text-white",
-          // Tight letter-spacing + a short label is mandatory: the strip
-          // sits inside the square `overflow-hidden` clip, so anything
-          // wider than the available width gets cut. Callers pass single
-          // verbs; `ariaLabel` carries the verbose text.
-          "text-(length:--text-badge) font-semibold uppercase tracking-normal",
-          "opacity-0 transition-opacity duration-100 ease-out",
-          "group-hover:opacity-100 group-focus-within:opacity-100",
-        )}
-        style={{
-          // Bottom third reads as a label band without dominating the
-          // avatar; clamp so we don't get a sliver on tiny avatars or
-          // an overwhelming bar on the 56–72px profile sizes.
-          height: Math.max(14, Math.min(20, Math.round(size * 0.32))),
-        }}
-        aria-hidden
-      >
-        {label}
-      </span>
-    </label>
+      {onMake ? (
+        <AppDropdownMenu align="start" contentClassName="min-w-[160px]" trigger={trigger}>
+          <AppDropdownMenuItem icon={makeIcon} onSelect={onMake}>
+            Make avatar
+          </AppDropdownMenuItem>
+          <AppDropdownMenuItem
+            icon={<CameraIcon className="size-3.5" />}
+            onSelect={() => inputRef.current?.click()}
+          >
+            Upload photo
+          </AppDropdownMenuItem>
+        </AppDropdownMenu>
+      ) : (
+        trigger
+      )}
+    </>
   );
 }
