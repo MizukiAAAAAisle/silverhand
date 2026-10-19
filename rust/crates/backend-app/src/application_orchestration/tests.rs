@@ -11178,6 +11178,8 @@ mod account_deletion_tests;
 mod avatar_design_tests;
 #[path = "password_change_tests.rs"]
 mod password_change_tests;
+#[path = "task_content_length_tests.rs"]
+mod task_content_length_tests;
 
 #[path = "host_activation_tests.rs"]
 mod host_activation_tests;

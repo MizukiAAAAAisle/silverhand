@@ -198,10 +198,10 @@ impl TaskTitle {
     }
 }
 
-/// A task body. Stored verbatim — no trim, no whitespace collapse; only its
-/// UTF-16 length is bounded, and the empty string is legal (the `content`
-/// column defaults to `''`). Matches the wire `TaskBodySchema`
-/// (`z.string().max(10000)`).
+/// A task body. Stored verbatim — no trim, no whitespace collapse; the empty
+/// string is legal (the `content` column defaults to `''`). The UTF-16 bound
+/// (wire `TaskBodySchema`) applies to body input via `parse` only; reads use
+/// `from_persisted` and accept any length.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct TaskContent(String);
 
@@ -216,6 +216,11 @@ impl TaskContent {
             return Err(ContentTooLong);
         }
         Ok(Self(raw))
+    }
+
+    /// A stored body. Never length-checked: the bound is an input contract.
+    pub fn from_persisted(raw: impl Into<String>) -> Self {
+        Self(raw.into())
     }
 
     /// The default body: an empty string (the column's `DEFAULT ''`).

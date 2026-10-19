@@ -195,8 +195,6 @@ pub enum TaskRowCorruption {
     /// a non-canonical stored value is rejected, not normalized.
     #[error("stored tasks.title is not in canonical (trimmed/collapsed) form")]
     TitleNotCanonical,
-    #[error("stored tasks.content exceeds the length contract")]
-    Content,
     #[error(
         "stored tasks board_key / workspace_id violate the row-local board arc \
          (namespace vs workspace_id null-ness / ws-suffix derivation)"
@@ -482,7 +480,7 @@ impl TaskAggregate {
         if title.as_str() != row.title {
             return Err(E::TitleNotCanonical);
         }
-        let content = TaskContent::parse(row.content).map_err(|_| E::Content)?;
+        let content = TaskContent::from_persisted(row.content);
 
         let status = TaskStatus::parse(&row.status).map_err(|_| E::Status)?;
         // Every task timestamp crosses a JSON-number boundary. Reject persisted
