@@ -8,6 +8,7 @@ import {
   AuthorAvatarView,
   DeletedActorMarker,
 } from "@/features/messages/components/author-avatar-view";
+import { cn } from "@/lib/cn";
 import { useNav } from "@/router";
 import { focusAgentSideSection } from "@/features/agents/components/agent-view";
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
@@ -56,8 +57,11 @@ export function ConversationHeaderIdentity({
   if (identity === "counterpart" && counterpart) {
     return <CounterpartIdentity title={title} counterpart={counterpart} />;
   }
+  // A flex row, not inline flow: the 30px `#` box on a text line grows the line
+  // box past the box itself (middle-aligned against the serif strut), so the title
+  // would stand taller than the header's identity edge and sit off its centre.
   return (
-    <span data-conversation-title className={TITLE_CLASS}>
+    <span data-conversation-title className={cn(TITLE_CLASS, "flex items-center")}>
       {identity === "channel_hash" ? (
         <span
           data-conversation-hash-icon
@@ -68,7 +72,7 @@ export function ConversationHeaderIdentity({
           <HashIcon size={HEADER_IDENTITY_GLYPH_PX} />
         </span>
       ) : null}
-      {title}
+      <span className="min-w-0 truncate">{title}</span>
     </span>
   );
 }
