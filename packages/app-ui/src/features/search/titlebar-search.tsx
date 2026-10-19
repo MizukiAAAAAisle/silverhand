@@ -4,6 +4,7 @@ import {
   ArrowDownIcon,
   ArrowRightToLineIcon,
   ArrowUpIcon,
+  ClockIcon,
   EnterIcon,
   HashIcon,
   MembersIcon,
@@ -13,7 +14,21 @@ import {
 import type { TitlebarCapability } from "@silverhand/client";
 import type { AgentDto, SearchIdentity, SearchResultDto } from "@silverhand/shared";
 
+import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
+import { CollectionItemCard } from "@/components/layout/collection-item-card";
+import { ChannelAvatar } from "@/features/conversations/components/channel-avatar";
+import { recentTimeLabel } from "@/features/conversations/latest/recent-rows";
+import {
+  useRecentConversations,
+  type RecentConversation,
+} from "@/features/conversations/latest/use-recent-conversations";
+import {
+  collectCounterpartAvatarSources,
+  presentCounterpart,
+} from "@/features/direct-pairs/counterpart-presentation";
+import { AuthorAvatarView } from "@/features/messages/components/author-avatar-view";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
 import { cn } from "@/lib/cn";
 import { useAgents } from "@/features/agents/hooks/hooks";
@@ -38,6 +53,7 @@ export interface TitlebarSearchNav {
 }
 
 type FlatRow =
+  | { kind: "recent"; key: string; conversation: RecentConversation }
   | { kind: "channel"; key: string; result: Extract<SearchResultDto, { type: "conversation" }> }
   | { kind: "workspace"; key: string; result: Extract<SearchResultDto, { type: "workspace" }> }
   | { kind: "identity"; key: string; candidate: SearchIdentity }
@@ -285,11 +301,28 @@ function useTitlebarSearchModel(nav: TitlebarSearchNav, onDone: () => void) {
   const messageAuthors = useMemo(() => messages.map((m) => m.message.author), [messages]);
   const { agentAvatarUrls, humanAvatarUrls } = useAuthorAvatarObjectUrls(messageAuthors);
 
+  // Before a query the field lists where the viewer was last, so a known
+  // conversation is one arrow and Enter away in every sidebar mode.
+  const allRecent = useRecentConversations();
+  const recent = useMemo(() => allRecent.slice(0, RECENT_LIMIT), [allRecent]);
+  const recentSources = useMemo(
+    () =>
+      collectCounterpartAvatarSources(
+        recent.flatMap((row) => (row.kind === "direct" ? [row] : [])),
+      ),
+    [recent],
+  );
+  const recentAgentAvatars = useAgentAvatarObjectUrls(recentSources.agents);
+  const recentHumanAvatars = useUserAvatarObjectUrls(recentSources.users);
+
   // One flat ordered list drives both the sections and the arrow-key cursor, so
   // the highlighted row and the row Enter opens can never disagree.
   const sections = useMemo(
-    () => buildSections(filter, channels, workspaces, identityRows, messages),
-    [filter, channels, workspaces, identityRows, messages],
+    () =>
+      trimmed.length === 0
+        ? recentSection(recent)
+        : buildSections(filter, channels, workspaces, identityRows, messages),
+    [trimmed.length, recent, filter, channels, workspaces, identityRows, messages],
   );
   const flatRows = useMemo(() => sections.flatMap((section) => section.rows), [sections]);
 
@@ -309,7 +342,14 @@ function useTitlebarSearchModel(nav: TitlebarSearchNav, onDone: () => void) {
   };
 
   const runRow = (row: FlatRow): void => {
-    if (row.kind === "message") {
+    if (row.kind === "recent") {
+      const conversation = row.conversation;
+      if (conversation.kind === "channel") {
+        nav.onOpenConversation(conversation.workspaceId, conversation.id);
+      } else {
+        nav.onOpenDirectPair(conversation.id);
+      }
+    } else if (row.kind === "message") {
       const place = row.result.conversation;
       if (place.placement_kind === "workspace") {
         nav.onJumpMessage({
@@ -414,6 +454,8 @@ function useTitlebarSearchModel(nav: TitlebarSearchNav, onDone: () => void) {
     openAdvanced,
     press,
     avatars: {
+      recentAgentAvatars,
+      recentHumanAvatars,
       agentsById,
       ownerAgentAvatars,
       agentAvatarUrls,
@@ -481,7 +523,7 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
         ref={listRef}
         className="search-list scrollbar-hide max-h-[min(60vh,440px)] overflow-y-auto p-2"
       >
-        {trimmed.length === 0 ? (
+        {trimmed.length === 0 && sections.length === 0 ? (
           <SearchEmptyState text="Search across your project" />
         ) : sections.length === 0 && !search.isFetching && !search.isError ? (
           <SearchEmptyState text="No results" />
@@ -498,14 +540,25 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
                   const index = flatRows.indexOf(row);
                   return (
                     <li key={row.key}>
-                      <TitlebarSearchRow
-                        row={row}
-                        query={search.deferredQuery}
-                        active={index === activeIndex}
-                        {...search.avatars}
-                        onMouseEnter={() => search.setActiveIndex(index)}
-                        onClick={() => search.runRow(row)}
-                      />
+                      {row.kind === "recent" ? (
+                        <RecentConversationRow
+                          conversation={row.conversation}
+                          active={index === activeIndex}
+                          agentAvatarUrls={search.avatars.recentAgentAvatars}
+                          humanAvatarUrls={search.avatars.recentHumanAvatars}
+                          onMouseEnter={() => search.setActiveIndex(index)}
+                          onClick={() => search.runRow(row)}
+                        />
+                      ) : (
+                        <TitlebarSearchRow
+                          row={row}
+                          query={search.deferredQuery}
+                          active={index === activeIndex}
+                          {...search.avatars}
+                          onMouseEnter={() => search.setActiveIndex(index)}
+                          onClick={() => search.runRow(row)}
+                        />
+                      )}
                     </li>
                   );
                 })}
@@ -541,6 +594,88 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
         </Button>
       </div>
     </>
+  );
+}
+
+const RECENT_LIMIT = 8;
+
+function recentSection(recent: readonly RecentConversation[]): Section[] {
+  if (recent.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      key: "recent",
+      label: "Recent",
+      icon: <ClockIcon className="size-3" />,
+      rows: recent.map((conversation): FlatRow => ({
+        kind: "recent",
+        key: `recent:${conversation.id}`,
+        conversation,
+      })),
+    },
+  ];
+}
+
+/** A conversation the viewer was last in: its face, its name, where it lives and
+ *  when it last moved; one line, so the list stays short enough to scan. */
+function RecentConversationRow({
+  conversation,
+  active,
+  agentAvatarUrls,
+  humanAvatarUrls,
+  onMouseEnter,
+  onClick,
+}: {
+  conversation: RecentConversation;
+  active: boolean;
+  agentAvatarUrls: ReadonlyMap<string, string | null>;
+  humanAvatarUrls: ReadonlyMap<string, string | null>;
+  onMouseEnter: () => void;
+  onClick: () => void;
+}): JSX.Element {
+  const counterpart =
+    conversation.kind === "direct" ? presentCounterpart(conversation.counterpart) : null;
+  const title = conversation.kind === "channel" ? conversation.title : counterpart!.label;
+  const at = conversation.latest?.created_at ?? null;
+
+  return (
+    <CollectionItemCard
+      as="button"
+      type="button"
+      onMouseEnter={onMouseEnter}
+      onClick={onClick}
+      data-active={active ? "" : undefined}
+      className="flex w-full min-w-0 items-center gap-2.5 px-3 py-2 text-left"
+    >
+      <span data-recent-avatar className="flex shrink-0">
+        {counterpart ? (
+          <AuthorAvatarView
+            avatar={counterpart.avatar}
+            size={AVATAR_PX.md}
+            label={counterpart.label}
+            agentAvatarUrls={agentAvatarUrls}
+            humanAvatarUrls={humanAvatarUrls}
+          />
+        ) : (
+          <ChannelAvatar id={conversation.id} title={title} size={AVATAR_PX.md} />
+        )}
+      </span>
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span className="min-w-0 truncate text-sm font-medium text-text-primary">{title}</span>
+        {conversation.kind === "channel" ? (
+          <span className="min-w-0 shrink-[999] truncate text-xs text-text-muted">
+            {conversation.workspaceName}
+          </span>
+        ) : null}
+      </span>
+      {at !== null ? (
+        <span className="shrink-0 text-xs tabular-nums text-text-muted">
+          {recentTimeLabel(at, Date.now())}
+        </span>
+      ) : null}
+    </CollectionItemCard>
   );
 }
 
@@ -651,7 +786,7 @@ function TitlebarSearchRow({
   onMouseEnter,
   onClick,
 }: {
-  row: FlatRow;
+  row: Exclude<FlatRow, { kind: "recent" }>;
   query: string;
   active: boolean;
   agentsById: ReadonlyMap<string, AgentDto>;

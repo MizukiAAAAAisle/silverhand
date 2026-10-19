@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ConversationLatest } from "@/features/conversations/latest/use-conversation-latest";
+import type { ConversationLatest } from "./use-conversation-latest";
 import {
   orderRecentRows,
   plainPreview,

@@ -1,4 +1,4 @@
-import type { ConversationLatest } from "@/features/conversations/latest/use-conversation-latest";
+import type { ConversationLatest } from "./use-conversation-latest";
 
 /** What ordering needs from a Recent row. Rows come from the conversation lists
  *  the tree already reads; `latest` only adds the preview and the order. */

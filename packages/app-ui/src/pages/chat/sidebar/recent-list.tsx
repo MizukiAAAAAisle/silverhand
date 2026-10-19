@@ -36,6 +36,7 @@ import {
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { AuthorAvatarView } from "@/features/messages/components/author-avatar-view";
+import { ChannelAvatar } from "@/features/conversations/components/channel-avatar";
 import { presentAuthor } from "@/features/messages/model/author-presentation";
 import {
   useArchiveChannel,
@@ -46,7 +47,11 @@ import { AppContextMenu } from "@/components/menus/app-context-menu";
 import { useFavoritesList } from "@/features/workspaces/favorites";
 import { useViewerUser } from "@/features/session/hooks";
 import { channelNodeBadge, directRowBadge } from "../model/sidebar-row-badges";
-import { orderRecentRows, recentPreviewText, recentTimeLabel } from "../model/recent-rows";
+import {
+  orderRecentRows,
+  recentPreviewText,
+  recentTimeLabel,
+} from "@/features/conversations/latest/recent-rows";
 import { ChannelRowMenuItems } from "./channel-row-menu-items";
 import { ProjectFilterStrip } from "./project-filter-strip";
 import type { WorkspaceItem } from "./workspaces-panel";
@@ -472,40 +477,6 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
     </button>
   );
 });
-
-/** Telegram's seven name tones. The hue is keyed on the conversation id, so a
- *  rename keeps a channel's colour. */
-const CHANNEL_TONES = [
-  "#e17076",
-  "#faa774",
-  "#a695e7",
-  "#7bc862",
-  "#6ec9cb",
-  "#65aadd",
-  "#ee7aae",
-] as const;
-
-function channelTone(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i += 1) {
-    hash = (hash * 31 + id.charCodeAt(i)) | 0;
-  }
-
-  return CHANNEL_TONES[Math.abs(hash) % CHANNEL_TONES.length]!;
-}
-
-function ChannelAvatar(props: { id: string; title: string }): JSX.Element {
-  const initial = Array.from(props.title.trim())[0]?.toUpperCase() ?? "#";
-
-  return (
-    <span
-      className="flex shrink-0 items-center justify-center text-[15px] font-semibold text-white"
-      style={{ width: AVATAR_PX.lg, height: AVATAR_PX.lg, backgroundColor: channelTone(props.id) }}
-    >
-      {initial}
-    </span>
-  );
-}
 
 /** The tree's channel menu (star, notifications, archive, copy name) on the same
  *  channel here. DM rows have no menu in the tree either. */

@@ -34,6 +34,10 @@ vi.mock("@/features/search/hooks", () => ({
 }));
 vi.mock("@/features/agents/hooks/hooks", () => ({ useAgents: () => ({ data: [] }) }));
 vi.mock("@/features/direct-pairs/hooks", () => ({ useDirectPairs: () => [] }));
+vi.mock("@/features/conversations/latest/use-recent-conversations", () => ({
+  useRecentConversations: () => [],
+}));
+vi.mock("@/features/users/avatar-hooks", () => ({ useUserAvatarObjectUrls: () => new Map() }));
 vi.mock("@/features/agents/hooks/avatar-hooks", () => ({
   useAgentAvatarObjectUrls: () => new Map(),
 }));
