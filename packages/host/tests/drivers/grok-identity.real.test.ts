@@ -93,7 +93,6 @@ async function runTurn(root: string, model: string | null, sessionId: string | n
     initialPrompt: '',
   };
   const driver = new GrokDriver();
-  driver.bindRuntimeVersion('1.0.24');
   const child = spawn(binary!, driver.buildArgs(context), {
     cwd: context.workspacePath,
     env: { PATH: process.env.PATH, HOME: root, GROK_HOME: join(root, 'home'), NO_COLOR: '1' },

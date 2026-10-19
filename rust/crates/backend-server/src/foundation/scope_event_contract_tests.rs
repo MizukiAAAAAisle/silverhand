@@ -4575,8 +4575,8 @@ fn the_supported_wire_kinds_are_a_closed_named_set() {
         ProductEvent::TaskChanged(json!({ "task_id": "task-1" })),
         ProductEvent::Notification(NotificationEvent {
             kind: NotificationKind::MentionSelf,
-            conversation_id: "c-1".to_owned(),
-            message_id: "m-1".to_owned(),
+            conversation_id: Some("c-1".to_owned()),
+            message_id: Some("m-1".to_owned()),
         }),
         ProductEvent::UnreadUpdated(UnreadUpdated {
             conversation_id: "c-1".to_owned(),
@@ -4702,8 +4702,8 @@ async fn each_authenticated_scope_receives_only_its_own_frames_as_exact_json() {
         EventScope::Viewer(user()),
         ProductEvent::Notification(NotificationEvent {
             kind: NotificationKind::MentionSelf,
-            conversation_id: "pair-1".to_owned(),
-            message_id: "m-1".to_owned(),
+            conversation_id: Some("pair-1".to_owned()),
+            message_id: Some("m-1".to_owned()),
         }),
     )
     .unwrap();

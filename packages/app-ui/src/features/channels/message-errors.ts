@@ -38,7 +38,10 @@ function parseApiErrorBody(err: ApiError): Record<string, unknown> | null {
  *    NOT paraphrase it — it stays a plain internal error.
  *
  * `detail` is dropped from all three: it carries host-local paths and internal
- * taxonomy, which is exactly what these lines must not surface.
+ * taxonomy, which is exactly what these lines must not surface. The runtime
+ * codes (`runtime_binary_missing` / `runtime_version_unsupported`) are the
+ * exception: their text is a daemon template naming only the runtime and
+ * versions, and it is the actionable part.
  */
 export function formatStartAgentError(err: unknown): string {
   if (err instanceof ApiError) {
@@ -58,6 +61,10 @@ export function formatStartAgentError(err: unknown): string {
     }
     if (code === "registry_unavailable") {
       return "Can't start the agent: its computer hasn't finished registering with the server. Try again in a moment.";
+    }
+    if (code === "runtime_binary_missing" || code === "runtime_version_unsupported") {
+      // The daemon composes this text from a fixed template (runtime and versions only).
+      return `Can't start the agent: ${detail}`;
     }
     if (code === "workspace_not_provisioned") {
       return "Can't start the agent: its computer reported an internal error. Try again, and report it if it keeps happening.";

@@ -3544,7 +3544,8 @@ mod tests {
         let families: [(CapabilityRefusalAdmission, &[&str]); 9] = [
             (command::rejects_every_capability_refusal, &[]),
             (crate::host_runtime::runtime_control::admits_runtime_refusal,
-                &["agent_deleting", "workspace_not_provisioned", "workspace_bundle_missing", "registry_unavailable"]),
+                &["agent_deleting", "workspace_not_provisioned", "workspace_bundle_missing", "registry_unavailable",
+                  "runtime_binary_missing", "runtime_version_unsupported"]),
             (crate::host_runtime::agent_materialize::admits_agent_materialize_refusal,
                 &["agent_deleting", "fs_quota_exceeded", "fs_unavailable", "agent_dir_collision", "unsupported_template", "unsupported_runtime"]),
             (crate::identity_access::agent_profile_mcp_data_plane::admits_profile_mcp_read_refusal,

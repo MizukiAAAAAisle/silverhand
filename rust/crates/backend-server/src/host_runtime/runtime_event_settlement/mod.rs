@@ -144,6 +144,8 @@ pub(crate) trait RuntimeStatusProjectionPort: Send + Sync {
     ) -> Result<(), LiveProjectionFailure>;
 
     fn publish(&self, fact: RuntimeStatusProjectionFact) -> Result<(), LiveProjectionFailure>;
+
+    fn publish_start_failure(&self, owner: &UserId) -> Result<(), LiveProjectionFailure>;
 }
 
 #[derive(Debug)]
@@ -206,6 +208,15 @@ impl<P> RuntimeEventSettlement<P> {
             state: Arc::clone(&self.state),
             conversation_projection: Arc::clone(&self.conversation_projection),
         }
+    }
+
+    pub(crate) fn publish_start_failure(
+        &self,
+        owner: &UserId,
+    ) -> Result<(), DaemonRuntimeEventError> {
+        self.status_projection
+            .publish_start_failure(owner)
+            .map_err(DaemonRuntimeEventError::from)
     }
 
     pub(crate) fn publish_host_connection_changed(

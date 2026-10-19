@@ -41,6 +41,8 @@ import type { DeliveryOwnerContext } from '../src/daemon/supervisor-contract.js'
 import { CodexDriver } from '../src/drivers/codex.js';
 import type { Driver, DriverSpawnContext, ParsedEvent } from '../src/drivers/index.js';
 import { QoderDriver } from '../src/drivers/qoder.js';
+import { PiDriver } from '../src/drivers/pi.js';
+import { GrokDriver } from '../src/drivers/grok.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
 import type {
   EventFrame,
@@ -850,17 +852,63 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     ).rejects.toThrow();
   });
 
-  it('start throws when the binary resolver returns null', async () => {
-    const spy = makeEmitSpy();
+  it('start refuses a missing binary with a typed code', async () => {
     const supervisor = new Supervisor({
-      emit: spy.emit,
+      emit: makeEmitSpy().emit,
       logger: silentLogger(),
       driverFor: () => makeFakeDriver(),
       resolveRuntime: async () => null,
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     });
-    await expect(supervisor.start(baseStartParams)).rejects.toThrow(/not found on PATH/);
+    await expect(supervisor.start(baseStartParams)).rejects.toMatchObject({
+      code: 'runtime_binary_missing',
+      message: 'Claude Code is not installed on this computer.',
+    });
+  });
+
+  // The gate is the supervisor's, driven only by each driver's declared floor.
+  describe.each([
+    ['pi', new PiDriver().minimumVersion, '0.99.0'],
+    ['grok', new GrokDriver().minimumVersion, '1.0.23'],
+  ] as const)('version gate for %s (floor %s)', (_kind, minimum, below) => {
+    const startWith = async (version: string | null) => {
+      let spawned = false;
+      const supervisor = new Supervisor({
+        emit: makeEmitSpy().emit,
+        logger: silentLogger(),
+        driverFor: () => ({
+          ...makeFakeDriver(),
+          minimumVersion: minimum,
+          buildArgs: () => {
+            spawned = true;
+            throw new Error('spawn reached');
+          },
+        }),
+        resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version }),
+        runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+        controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
+      });
+      const error = await supervisor.start(baseStartParams).catch((err: unknown) => err);
+      return { error, spawned };
+    };
+
+    it('refuses a parsed version below the floor', async () => {
+      const { error, spawned } = await startWith(`${below} (build 7)`);
+      expect(spawned).toBe(false);
+      expect(error).toMatchObject({
+        code: 'runtime_version_unsupported',
+        message: `Claude Code ${below} is not supported. Update to ${minimum} or newer.`,
+      });
+    });
+
+    it.each([null, 'garbage', ''])('lets an unknown version (%j) through to spawn', async (version) => {
+      expect((await startWith(version)).spawned).toBe(true);
+    });
+
+    it('lets the floor itself through', async () => {
+      expect((await startWith(minimum)).spawned).toBe(true);
+    });
   });
 });
 

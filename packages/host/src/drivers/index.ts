@@ -210,6 +210,10 @@ export interface Driver {
    */
   bindRuntimeVersion?(version: string | null): void;
 
+  /** Oldest supported CLI version. The supervisor refuses a spawn only when the
+   *  probed version parses as older; an unknown version still spawns. */
+  readonly minimumVersion?: string;
+
   /**
    * Whether the driver can produce a non-null `encodeStdinMessage`
    * result *right now*. Option A v2 (Cindy `UMGu36zoTDVuKWXi`): the

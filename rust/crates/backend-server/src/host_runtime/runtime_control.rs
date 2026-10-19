@@ -16,7 +16,8 @@ use silverhand_backend_core::{
         BoundRuntimeControlSeat, ClearSessionOutcome, ClearSessionProviderRefusal,
         HardStopRuntimeOutcome, HardStopRuntimeProviderRefusal, RuntimeControlPort,
         RuntimeControlSeatPort, RuntimePlacementRefusal, RuntimeSeatTarget, RuntimeStartTarget,
-        StartRuntimeOutcome, StartRuntimeProviderRefusal, seal_clear_session_commit,
+        RuntimeUnavailable, RuntimeUnavailableReason, StartRuntimeOutcome,
+        StartRuntimeProviderRefusal, seal_clear_session_commit,
     },
     conversation_messaging::runtime_delivery::{RuntimeDispatchReadPort, RuntimeDispatchTarget},
     foundation::identity::HostId,
@@ -51,11 +52,13 @@ use crate::{
 
 const CLEAR_EXIT_TIMEOUT: Duration = Duration::from_secs(10);
 
-pub(crate) const RUNTIME_CAPABILITY_CODES: [&str; 4] = [
+pub(crate) const RUNTIME_CAPABILITY_CODES: [&str; 6] = [
     "agent_deleting",
     "workspace_not_provisioned",
     "workspace_bundle_missing",
     "registry_unavailable",
+    "runtime_binary_missing",
+    "runtime_version_unsupported",
 ];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +67,7 @@ enum RuntimeRefusalCode {
     WorkspaceNotProvisioned,
     WorkspaceBundleMissing,
     RegistryUnavailable,
+    Unavailable(RuntimeUnavailableReason),
 }
 
 impl RuntimeRefusalCode {
@@ -73,8 +77,28 @@ impl RuntimeRefusalCode {
             "workspace_not_provisioned" => Some(Self::WorkspaceNotProvisioned),
             "workspace_bundle_missing" => Some(Self::WorkspaceBundleMissing),
             "registry_unavailable" => Some(Self::RegistryUnavailable),
+            "runtime_binary_missing" => {
+                Some(Self::Unavailable(RuntimeUnavailableReason::BinaryMissing))
+            }
+            "runtime_version_unsupported" => Some(Self::Unavailable(
+                RuntimeUnavailableReason::VersionUnsupported,
+            )),
             _ => None,
         }
+    }
+}
+
+/// The runtime-unavailable reading of a daemon capability refusal, shared by the
+/// manual start and the delivery-triggered start.
+pub(crate) fn runtime_unavailable(
+    refusal: &crate::foundation::daemon_transport::CapabilityRefusal,
+) -> Option<RuntimeUnavailable> {
+    match RuntimeRefusalCode::parse(refusal.code())? {
+        RuntimeRefusalCode::Unavailable(reason) => Some(RuntimeUnavailable {
+            reason,
+            message: refusal.message().into(),
+        }),
+        _ => None,
     }
 }
 
@@ -638,6 +662,12 @@ fn map_start_refusal(refusal: CommandRefusal) -> Option<StartDispatchError> {
             RuntimeRefusalCode::RegistryUnavailable => Some(StartDispatchError::Product(
                 StartRuntimeProviderRefusal::RegistryUnavailable,
             )),
+            RuntimeRefusalCode::Unavailable(reason) => Some(StartDispatchError::Product(
+                StartRuntimeProviderRefusal::RuntimeUnavailable(RuntimeUnavailable {
+                    reason,
+                    message: refusal.message().into(),
+                }),
+            )),
             RuntimeRefusalCode::AgentDeleting => None,
         },
         CommandRefusal::Response(DaemonRefusalCode::ShuttingDown) => Some(
@@ -723,6 +753,41 @@ mod tests {
                 DaemonInstanceId::parse(daemon).unwrap(),
             ),
         )
+    }
+
+    #[test]
+    fn runtime_unavailable_refusals_map_to_a_product_refusal_carrying_the_daemon_text() {
+        for (code, reason) in [
+            (
+                "runtime_binary_missing",
+                RuntimeUnavailableReason::BinaryMissing,
+            ),
+            (
+                "runtime_version_unsupported",
+                RuntimeUnavailableReason::VersionUnsupported,
+            ),
+        ] {
+            assert!(admits_runtime_refusal(code));
+            let Some(StartDispatchError::Product(refusal)) =
+                map_start_refusal(CommandRefusal::capability_with_message(
+                    code,
+                    "Pi is not installed on this computer.",
+                ))
+            else {
+                panic!("{code} must be a product refusal");
+            };
+            assert_eq!(
+                refusal,
+                StartRuntimeProviderRefusal::RuntimeUnavailable(RuntimeUnavailable {
+                    reason,
+                    message: "Pi is not installed on this computer.".into(),
+                })
+            );
+            assert_eq!(reason.code(), code);
+        }
+        assert!(
+            map_start_refusal(CommandRefusal::Response(DaemonRefusalCode::InternalError)).is_none()
+        );
     }
 
     #[tokio::test]

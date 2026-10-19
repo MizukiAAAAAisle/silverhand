@@ -137,6 +137,7 @@ export function useNotificationToasts(
   onJump?: (target: MessageJumpTarget) => void,
 ) {
   const qc = useQueryClient();
+  const { mutate: markRead } = useMarkNotificationsRead();
   const { data } = useQuery<{ notifications: NotificationDto[] }>({
     queryKey: [...listKey, { unread: true, toasts: true }],
     queryFn: () => api<{ notifications: NotificationDto[] }>("/api/notifications?unread=1"),
@@ -243,19 +244,22 @@ export function useNotificationToasts(
     const notifications = data.notifications;
 
     if (!initialized.current) {
-      // First load: mark all existing notifications as seen without
-      // toasting — we only alert for genuinely new arrivals.
+      // First load: existing notifications are seen without toasting, except an
+      // unread agent start failure — it may have no Activity row (owner outside
+      // the source conversation) and stays actionable until dismissed.
       for (const n of notifications) {
+        if (n.kind === "agent_start_failed") continue;
         seenIds.current.add(n.id);
         if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
       }
       initialized.current = true;
-      return;
     }
 
     for (const n of notifications) {
-      if (seenIds.current.has(n.id)) continue;
-      seenIds.current.add(n.id);
+      // A start-failure row is refreshed in place (same id, newer created_at).
+      const seenKey = n.kind === "agent_start_failed" ? `${n.id}@${n.created_at}` : n.id;
+      if (seenIds.current.has(seenKey)) continue;
+      seenIds.current.add(seenKey);
       if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
 
       const isAgentFailure = n.kind === "agent_start_failed";
@@ -296,7 +300,26 @@ export function useNotificationToasts(
           : undefined;
 
         if (isAgentFailure) {
-          toast.error(label, toastOptions);
+          // Sticky until the read is confirmed: that acknowledge lets the next
+          // failure of this agent notify again. A failed read keeps it up for retry.
+          toast.error(label, {
+            id: n.id,
+            duration: Infinity,
+            action: {
+              label: "Dismiss",
+              onClick: (event) => {
+                event.preventDefault();
+                markRead(
+                  { id: n.id },
+                  {
+                    onSuccess: () => toast.dismiss(n.id),
+                    onError: () =>
+                      toast.error(label, { id: n.id, description: "Couldn't dismiss. Try again." }),
+                  },
+                );
+              },
+            },
+          });
         } else {
           toast(label, { ...toastOptions, icon: toastIcon("notification") });
         }
@@ -319,7 +342,7 @@ export function useNotificationToasts(
     // read-state, so the notification correctly stays unread until an ACTIVE
     // eliminate path clears it: visible read advancing the cursor, clicking the
     // toast/notification to jump to source, or the Activity Mark-as-read ✓.
-  }, [data, activeChannelId, qc, handleClickById]);
+  }, [data, activeChannelId, qc, handleClickById, markRead]);
 }
 
 /**

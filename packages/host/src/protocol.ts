@@ -1958,11 +1958,16 @@ const AgentMaterializeIpcErrorSchema = z
 //     case — that gate was removed with the registry demotion; it survives only
 //     as the agent-home ownership boundary. (Kept in the enum; a broader
 //     epoch-wide narrowing of the shared code is tracked with #1807/#1808.)
+//   - `runtime_binary_missing`: the runtime's CLI is not installed / not on PATH.
+//   - `runtime_version_unsupported`: the installed CLI parses as older than the
+//     driver's `minimumVersion`. An unparseable/unknown version is NOT refused.
 export const RuntimeStartErrorCodeSchema = z.enum([
   'agent_deleting',
   'workspace_not_provisioned',
   'workspace_bundle_missing',
   'registry_unavailable',
+  'runtime_binary_missing',
+  'runtime_version_unsupported',
 ]);
 export type RuntimeStartErrorCode = z.infer<typeof RuntimeStartErrorCodeSchema>;
 

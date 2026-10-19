@@ -11,7 +11,7 @@ function fixture(effort: string | null = null) {
   const dir = mkdtempSync(join(tmpdir(), 'pi-driver-')); dirs.push(dir);
   const ctx: DriverSpawnContext = { agentId: 'agent', agentName: 'Pi', workspacePath: dir, cliSessionId: null, model: null, reasoningEffort: effort, fastMode: null, systemPromptPath: join(dir, 'prompt.md'), initialPrompt: '' };
   writeFileSync(ctx.systemPromptPath, 'standing prompt');
-  const d = new PiDriver(); d.bindRuntimeVersion('1.0.4');
+  const d = new PiDriver();
   const args = d.buildArgs(ctx); const id = args[args.indexOf('--session-id') + 1];
   const lines: any[] = [];
   d.bindIO({ spawnCtx: ctx, writeLine: async line => { lines.push(JSON.parse(line)); } });
@@ -22,13 +22,12 @@ function fixture(effort: string | null = null) {
   return { d, ctx, args, id, lines, reply, extension, commands, init };
 }
 describe('Pi RPC driver', () => {
-  it('isolates exact session coordinates, preserves configuration, and gates versions', () => {
+  it('isolates exact session coordinates, preserves configuration, and declares its version floor', () => {
     const { d, ctx, args, id } = fixture();
     expect(args).toContain('--append-system-prompt'); expect(args).not.toContain('--approve');
     expect(d.buildArgs({ ...ctx, cliSessionId: id! })).toEqual(args);
     expect(d.applyEnv({ PI_CODING_AGENT_DIR: '/configured' }).PI_CODING_AGENT_DIR).toBe('/configured');
-    expect(() => new PiDriver().bindRuntimeVersion('0.99.0')).toThrow('1.0.0');
-    expect(() => new PiDriver().bindRuntimeVersion(null)).toThrow();
+    expect(d.minimumVersion).toBe('1.0.0');
   });
   it('requires its own delivery extension before reporting ready', () => {
     const { d, reply, id, lines, extension, commands } = fixture();

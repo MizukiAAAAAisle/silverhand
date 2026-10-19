@@ -35,6 +35,23 @@
  */
 
 /** Parsed numeric prefix, or null when the string has none. */
+export function parsedVersion(version: string | null | undefined): string | null {
+  const parsed = parseNumericVersion(version);
+  return parsed ? parsed.join('.') : null;
+}
+
+/**
+ * `below` only when `version` parses and is older than `minimum`; an absent or
+ * unparseable version is `unknown`, which callers must not refuse.
+ */
+export function compareToMinimum(
+  version: string | null | undefined,
+  minimum: string,
+): 'ok' | 'below' | 'unknown' {
+  if (!parseNumericVersion(version)) return 'unknown';
+  return versionAtLeast(version, minimum) ? 'ok' : 'below';
+}
+
 function parseNumericVersion(version: string | null | undefined): number[] | null {
   if (typeof version !== 'string') return null;
   const match = version.trim().match(/^v?(\d+(?:\.\d+)*)/);

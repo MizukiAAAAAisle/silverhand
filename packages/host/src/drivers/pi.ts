@@ -2,7 +2,6 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { Driver, DriverIO, DriverSpawnContext, ParsedEvent } from './index.js';
-import { versionAtLeast } from './version-gate.js';
 
 type Frame = Record<string, any>;
 
@@ -45,9 +44,7 @@ export class PiDriver implements Driver {
   private errors: ParsedEvent[] = [];
   private extensionPath = '';
 
-  bindRuntimeVersion(version: string | null): void {
-    if (!versionAtLeast(version, '1.0.0')) throw new Error('Pi 1.0.0 or newer is required.');
-  }
+  readonly minimumVersion = '1.0.0';
   buildArgs(ctx: DriverSpawnContext): string[] {
     this.sessionId = ctx.cliSessionId ?? randomUUID();
     if (!/^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(this.sessionId)) {

@@ -12,6 +12,7 @@ use std::{
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeUnavailable;
 use silverhand_backend_core::{
     conversation_messaging::runtime_delivery::{
         DeliveryLeaseOwner, InboxDeliveryId, RuntimeDeliveryFailureReason, RuntimeDispatchReadPort,
@@ -24,7 +25,8 @@ use silverhand_backend_core::{
         RuntimeScope,
     },
     host_runtime::runtime_event::{
-        CommitRuntimeConsumed, DaemonEventDurablePort, RuntimeEventAdmission,
+        CommitRuntimeConsumed, DaemonEventDurablePort, RecordRuntimeStartFailure,
+        RuntimeEventAdmission,
     },
 };
 
@@ -39,7 +41,8 @@ use crate::{
         },
     },
     host_runtime::daemon_runtime_transport::{
-        DeliveryTransport, DeliveryTransportError, StartTransport, StopTransport,
+        DeliveryTransport, DeliveryTransportError, StartTransport, StartTransportError,
+        StopTransport,
     },
     host_runtime::runtime_control::RuntimeClearSessionWaiters,
     host_runtime::runtime_credential::{
@@ -521,16 +524,56 @@ where
             self.command_timeout,
             self.data.clone(),
         );
-        self.credentials
+        let result = self
+            .credentials
             .dispatch_start(
                 target.plan.scope.clone(),
                 daemon_instance,
                 target.conversation.clone(),
                 &transport,
             )
-            .await
-            .map(|_| ())
-            .map_err(DaemonDeliveryError::start)
+            .await;
+        if let Err(RuntimeStartFailure::ProvenNotDispatched(
+            StartTransportError::RuntimeUnavailable(unavailable),
+        )) = &result
+        {
+            self.notify_start_failure(conversation, agent, unavailable)
+                .await;
+        }
+        result.map(|_| ()).map_err(DaemonDeliveryError::start)
+    }
+
+    /// Tells the agent's owner why an automatic start was refused. Best effort: the
+    /// caller's failure is returned unchanged either way.
+    async fn notify_start_failure(
+        &self,
+        conversation: &ConversationId,
+        agent: &AgentId,
+        unavailable: &RuntimeUnavailable,
+    ) {
+        let recorded = self
+            .data
+            .record_start_failure(RecordRuntimeStartFailure {
+                agent: agent.clone(),
+                conversation: conversation.clone(),
+                reason: unavailable.reason.code(),
+                message: unavailable.message.to_string(),
+            })
+            .await;
+        let published = match recorded {
+            Ok(Some(owner)) => self
+                .events
+                .publish_start_failure(&owner)
+                .map_err(|cause| error::describe(&cause)),
+            Ok(None) => Ok(()),
+            Err(cause) => Err(error::describe(&cause)),
+        };
+        if let Err(cause) = published {
+            tracing::error!(
+                error_chain = crate::foundation::safe_log_field::safe_display(&cause),
+                "runtime start failure notice was not recorded"
+            );
+        }
     }
 
     pub(crate) async fn start_if_idle(
@@ -582,7 +625,16 @@ where
             Err(RuntimeStartFailure::ProvenNotDispatched(DeliveryTransportError::NoPending)) => {
                 Ok(())
             }
-            Err(error) => Err(DaemonDeliveryError::delivery(error)),
+            Err(error) => {
+                if let RuntimeStartFailure::ProvenNotDispatched(
+                    DeliveryTransportError::RuntimeUnavailable(unavailable),
+                ) = &error
+                {
+                    self.notify_start_failure(conversation, agent, unavailable)
+                        .await;
+                }
+                Err(DaemonDeliveryError::delivery(error))
+            }
         }
     }
 

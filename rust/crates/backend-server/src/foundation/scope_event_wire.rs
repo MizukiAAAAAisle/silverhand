@@ -99,13 +99,18 @@ pub(crate) enum ViewerWorkspaceChange {
 pub(crate) enum NotificationKind {
     MentionSelf,
     MentionExternal,
+    AgentStartFailed,
 }
 
+/// `agent_start_failed` has no message anchor and may have no conversation the
+/// owner can read, so both coordinates are optional on the wire.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub(crate) struct NotificationEvent {
     pub(crate) kind: NotificationKind,
-    pub(crate) conversation_id: String,
-    pub(crate) message_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) message_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

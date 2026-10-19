@@ -82,6 +82,9 @@ pub(super) fn start_refusal(refusal: StartRuntimeProviderRefusal) -> Response {
             "shutting_down",
             "daemon host is shutting down",
         ),
+        StartRuntimeProviderRefusal::RuntimeUnavailable(refusal) => {
+            coded(StatusCode::CONFLICT, refusal.reason.code(), refusal.message)
+        }
     }
 }
 

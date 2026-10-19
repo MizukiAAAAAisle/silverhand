@@ -19,16 +19,18 @@ use silverhand_backend_core::{
 
 use crate::{
     conversation_messaging::messaging::references::MarkdownReferencePositions,
-    foundation::daemon_transport::{AttachedHostDataPlane, CommandDispatchError},
+    foundation::daemon_transport::{AttachedHostDataPlane, CommandDispatchError, CommandRefusal},
     host_runtime::daemon_runtime_codecs::{
         runtime_start,
         runtime_stop::{self, RuntimeStopCodecError, RuntimeStopCommand},
         spawn_options, workspace_wire,
     },
+    host_runtime::runtime_control::runtime_unavailable,
     host_runtime::runtime_credential::{
         RuntimeDispatchFailure, RuntimeStartHandoff, RuntimeStartTransport, RuntimeStopTransport,
     },
 };
+use silverhand_backend_core::conversation_messaging::messaging::collaboration::RuntimeUnavailable;
 
 #[derive(Clone)]
 pub(crate) struct StartTransport<D> {
@@ -112,6 +114,13 @@ impl<D: RuntimeDispatchReadPort> RuntimeStartTransport for StartTransport<D> {
             Err(CommandDispatchError::ProvenNotDispatched) => Err(
                 RuntimeDispatchFailure::ProvenNotDispatched(StartTransportError::Transport),
             ),
+            Err(CommandDispatchError::DaemonRefused(CommandRefusal::Capability(refusal)))
+                if let Some(unavailable) = runtime_unavailable(&refusal) =>
+            {
+                Err(RuntimeDispatchFailure::ProvenNotDispatched(
+                    StartTransportError::RuntimeUnavailable(unavailable),
+                ))
+            }
             Err(_) => Err(RuntimeDispatchFailure::Ambiguous(
                 StartTransportError::Transport,
             )),
@@ -125,6 +134,7 @@ pub(crate) enum StartTransportError {
     Persistence(PersistenceFailure),
     Transport,
     Refused,
+    RuntimeUnavailable(RuntimeUnavailable),
     InvalidRequest,
     InvalidResponse,
 }
@@ -136,6 +146,7 @@ impl fmt::Display for StartTransportError {
             Self::Persistence(_) => "runtime_start admission failed",
             Self::Transport => "runtime_start transport failed",
             Self::Refused => "daemon refused runtime_start",
+            Self::RuntimeUnavailable(_) => "runtime CLI is unavailable on the daemon host",
             Self::InvalidRequest => "runtime_start request is outside its wire schema",
             Self::InvalidResponse => "daemon returned an invalid runtime_start response",
         })
@@ -315,10 +326,16 @@ where
                     DeliveryTransportError::Transport,
                 ))
             }
-            Err(CommandDispatchError::DaemonRefused(_)) => {
+            Err(CommandDispatchError::DaemonRefused(refusal)) => {
                 rollback_batch(&self.data, self.plane.host_id(), &batch).await?;
+                let error = match &refusal {
+                    CommandRefusal::Capability(refusal) => {
+                        runtime_unavailable(refusal).map(DeliveryTransportError::RuntimeUnavailable)
+                    }
+                    CommandRefusal::Response(_) => None,
+                };
                 Err(RuntimeDispatchFailure::ProvenNotDispatched(
-                    DeliveryTransportError::DaemonRefused,
+                    error.unwrap_or(DeliveryTransportError::DaemonRefused),
                 ))
             }
             Err(_) => Err(RuntimeDispatchFailure::Ambiguous(
@@ -355,6 +372,7 @@ pub(crate) enum DeliveryTransportError {
     StaleCustody,
     Transitioning,
     DaemonRefused,
+    RuntimeUnavailable(RuntimeUnavailable),
     InvalidResponse,
     Transport,
     Persistence(PersistenceFailure),
@@ -367,6 +385,7 @@ impl fmt::Display for DeliveryTransportError {
             Self::StaleCustody => "runtime custody changed before inbox claim",
             Self::Transitioning => "runtime transition fenced the inbox claim",
             Self::DaemonRefused => "daemon refused runtime delivery custody",
+            Self::RuntimeUnavailable(_) => "runtime CLI is unavailable on the daemon host",
             Self::InvalidResponse => "daemon returned an invalid runtime delivery response",
             Self::Transport => "runtime delivery transport failed",
             Self::Persistence(_) => "runtime delivery persistence failed",

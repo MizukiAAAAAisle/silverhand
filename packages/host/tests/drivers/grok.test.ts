@@ -36,7 +36,6 @@ async function setup(
     ...overrides,
   };
   const driver = new GrokDriver();
-  driver.bindRuntimeVersion('1.0.24');
   const sent: any[] = [];
   driver.bindIO({
     spawnCtx: ctx,
@@ -299,9 +298,7 @@ describe('Grok ACP lifecycle', () => {
     expect(driver.readyToEncode()).toBe(true);
   });
 
-  it('rejects unknown/old binaries before startup', () => {
-    for (const version of [null, '0.9.0', '1.0.23', 'garbage']) {
-      expect(() => new GrokDriver().bindRuntimeVersion(version)).toThrow();
-    }
+  it('declares its version floor for the supervisor gate', () => {
+    expect(new GrokDriver().minimumVersion).toBe('1.0.24');
   });
 });

@@ -5,7 +5,7 @@ use std::{collections::HashSet, path::Path, time::Duration};
 use serde::Serialize;
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
-        FromKind, MessageContent, MessageId, ReferencePositions,
+        FromKind, MessageContent, MessageId, NotificationId, ReferencePositions,
         collaboration::{
             BoundRuntimeControlSeat, ClearSessionAuditWitness, ClearSessionCommitReceipt,
             CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatPort,
@@ -29,12 +29,12 @@ use silverhand_backend_core::{
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     host_runtime::runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
-        ProjectRuntimeStatus, RefineRuntimeToolCallInput, RefinedRuntimeActivity,
-        RuntimeActivityCommitResult, RuntimeActivityFact, RuntimeActivityKind,
-        RuntimeActivityPayload, RuntimeConsumedCommitResult, RuntimeEventAdmission,
-        RuntimeExitCommitResult, RuntimeExitDisposition, RuntimeSessionInitCommitResult,
-        RuntimeStatusCommitResult, RuntimeStatusTarget, RuntimeToolCallInputCommitResult,
-        StampRuntimePresence, UpsertRuntimeTextActivity,
+        ProjectRuntimeStatus, RecordRuntimeStartFailure, RefineRuntimeToolCallInput,
+        RefinedRuntimeActivity, RuntimeActivityCommitResult, RuntimeActivityFact,
+        RuntimeActivityKind, RuntimeActivityPayload, RuntimeConsumedCommitResult,
+        RuntimeEventAdmission, RuntimeExitCommitResult, RuntimeExitDisposition,
+        RuntimeSessionInitCommitResult, RuntimeStatusCommitResult, RuntimeStatusTarget,
+        RuntimeToolCallInputCommitResult, StampRuntimePresence, UpsertRuntimeTextActivity,
     },
     identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
 };
@@ -1041,6 +1041,27 @@ impl RuntimeInboxCustodyPort for SqliteRuntimeDeliveryStore {
     }
 }
 
+/// The owner-scoped facts of one start-failure notice. Binds: payload JSON,
+/// source conversation, agent.
+macro_rules! start_failure_source {
+    () => {
+        "SELECT a.id AS agent_id, a.created_by_user_id AS owner,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM workspace_users wu
+                     WHERE wu.workspace_id = c.workspace_id AND wu.user_id = a.created_by_user_id)
+                THEN c.workspace_id END AS workspace_id,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM conversation_users cu
+                     WHERE cu.conversation_id = c.id AND cu.user_id = a.created_by_user_id)
+                  OR (c.endpoint_a_kind = 'human' AND c.endpoint_a_id = a.created_by_user_id)
+                  OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = a.created_by_user_id)
+                THEN c.id END AS conversation_id,
+                json_set(?, '$.agent_name', COALESCE(NULLIF(a.display_name, ''), a.name))
+                  AS payload
+           FROM agents a JOIN conversations c ON c.id = ? WHERE a.id = ?"
+    };
+}
+
 impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
     async fn runtime_activity_targets(
         &self,
@@ -1592,6 +1613,67 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
                 .await?;
         tx.commit().await.map_err(persistence)?;
         Ok(Some(viewers))
+    }
+
+    async fn record_start_failure(
+        &self,
+        event: RecordRuntimeStartFailure,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        let environment = crate::conversation_messaging::messaging::HostEnvironment;
+        let id = NotificationId::mint(&environment).map_err(PersistenceFailure::from_source)?;
+        let now = environment
+            .now_unix_ms()
+            .map_err(PersistenceFailure::from_source)?;
+        let payload = serde_json::json!({ "reason": event.reason, "error": event.message });
+        // One unread notice per agent, refreshed in place with the latest reason so a
+        // stale unread row never hides a newer failure and retries never stack toasts.
+        // Coordinates are attached only where the owner can read them.
+        let mut tx = self
+            .pool
+            .begin_with(ROOT_WRITE_BEGIN)
+            .await
+            .map_err(persistence)?;
+        let mut owner: Option<String> = sqlx::query_scalar(concat!(
+            "UPDATE notifications SET payload = s.payload, conversation_id = s.conversation_id,
+                    workspace_id = s.workspace_id, created_at = ?
+               FROM (",
+            start_failure_source!(),
+            ") s
+              WHERE notifications.kind = 'agent_start_failed'
+                AND notifications.agent_id = s.agent_id AND notifications.user_id = s.owner
+                AND notifications.read_at IS NULL
+             RETURNING notifications.user_id"
+        ))
+        .bind(now)
+        .bind(payload.to_string())
+        .bind(event.conversation.as_str())
+        .bind(event.agent.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(persistence)?;
+        if owner.is_none() {
+            owner = sqlx::query_scalar(concat!(
+                "INSERT INTO notifications (id, kind, user_id, agent_id, workspace_id,
+                        conversation_id, payload, created_at)
+                 SELECT ?, 'agent_start_failed', s.owner, s.agent_id, s.workspace_id,
+                        s.conversation_id, s.payload, ? FROM (",
+                start_failure_source!(),
+                ") s RETURNING user_id"
+            ))
+            .bind(id.as_str())
+            .bind(now)
+            .bind(payload.to_string())
+            .bind(event.conversation.as_str())
+            .bind(event.agent.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(persistence)?;
+        }
+        tx.commit().await.map_err(persistence)?;
+        owner
+            .map(UserId::parse)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)
     }
 }
 

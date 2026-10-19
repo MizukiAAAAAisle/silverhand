@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { versionAtLeast } from '../../src/drivers/version-gate.js';
+import { compareToMinimum, parsedVersion, versionAtLeast } from '../../src/drivers/version-gate.js';
 
 // ===========================================================================
 // CONTRACT (Do Not Weaken) — driver capability version gate, #task:1909
@@ -64,5 +64,16 @@ describe('versionAtLeast', () => {
 
   it('throws on an unparseable minimum (programming error, not input)', () => {
     expect(() => versionAtLeast('1.1.17', 'latest')).toThrow(/unparseable minimum/);
+  });
+
+  it('classifies against a floor without refusing unknown versions', () => {
+    expect(compareToMinimum('1.0.24', '1.0.24')).toBe('ok');
+    expect(compareToMinimum('v2.0', '1.0.24')).toBe('ok');
+    expect(compareToMinimum('1.0.23', '1.0.24')).toBe('below');
+    for (const unknown of [null, undefined, '', 'garbage', 'version: 1.0.0']) {
+      expect(compareToMinimum(unknown, '1.0.24'), String(unknown)).toBe('unknown');
+    }
+    expect(parsedVersion('v1.2.3-beta')).toBe('1.2.3');
+    expect(parsedVersion('garbage')).toBeNull();
   });
 });

@@ -287,6 +287,11 @@ generic `||` fallback, because the daemon files exist in a `desktop-v*` tag (and
 vice versa) and would succeed on the wrong axis. Do NOT transcribe the historical
 number into this doc — read it from the tag each time.
 
+The desktop also bundles and spawns the daemon, so a `desktop-v*` tag ships the
+daemon axes too. For `host` / `outbound`, the last shipped value is the newest of
+the two: read `packages/shared/src/daemon-admission.json` from the newest
+`desktop-v*` tag as well, and compare against the higher of the two values.
+
 Compare each field being released to the value that tag shows and confirm the
 step is 0 or +1.
 

@@ -394,13 +394,37 @@ pub enum RuntimePlacementRefusal {
     HostAttachPending,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StartRuntimeProviderRefusal {
     Placement(RuntimePlacementRefusal),
     WorkspaceNotProvisioned,
     WorkspaceBundleMissing,
     RegistryUnavailable,
     ShuttingDown,
+    RuntimeUnavailable(RuntimeUnavailable),
+}
+
+/// The agent's runtime CLI cannot run on its computer. `message` is the daemon's
+/// fixed-template text (runtime label and parsed versions only).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeUnavailable {
+    pub reason: RuntimeUnavailableReason,
+    pub message: Box<str>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RuntimeUnavailableReason {
+    BinaryMissing,
+    VersionUnsupported,
+}
+
+impl RuntimeUnavailableReason {
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::BinaryMissing => "runtime_binary_missing",
+            Self::VersionUnsupported => "runtime_version_unsupported",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -495,7 +519,7 @@ pub trait RuntimeControlPort {
     > + Send;
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum StartRuntimeRefusal {
     Admission(RuntimeControlAdmissionRefusal),
     Provider(StartRuntimeProviderRefusal),
