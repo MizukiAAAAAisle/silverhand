@@ -214,8 +214,8 @@ export function WorkspaceSettingsDialog({
             15vh above plus ~92px of chrome, so 65 keeps the footer on screen
             down to a ~460px-tall window — below that nothing in this app is
             usable anyway. */}
-        <div className="flex h-[min(32rem,65vh)] gap-5">
-          <nav className="w-40 shrink-0">
+        <div data-project-settings-body className="flex h-[min(32rem,65vh)] gap-5">
+          <nav data-project-settings-nav className="w-40 shrink-0">
             <ul className="flex flex-col gap-0.5">
               {visibleNavItems.map((item) => {
                 const active = activeSection === item.id;
@@ -429,7 +429,10 @@ function GeneralSection({
               frame on a whole panel promises a click the panel does not
               honour, and the Delete block's `border-error/30` is identity
               (danger tint) that hover must not recolour anyway. */}
-          <div className="flex items-center justify-between gap-3 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3">
+          <div
+            data-project-settings-panel
+            className="flex items-center justify-between gap-3 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3"
+          >
             <div className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-text-primary">
                 {isArchived ? "Archived" : "Archive project"}

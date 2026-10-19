@@ -665,6 +665,44 @@
   max-height: max(240px, calc(100dvh - var(--fold-end) - var(--dialog-viewport-bottom, 0px)));
 }
 
+/* Project settings: the section list runs across the top and the sections take
+   the sheet's whole width. The body keeps one height across sections, so
+   switching never resizes the sheet; a section scrolls inside it. */
+:where([data-layout="compact"]) [data-project-settings-body] {
+  flex-direction: column;
+  gap: 16px;
+  height: min(36rem, 70dvh);
+}
+:where([data-layout="compact"]) [data-project-settings-nav] {
+  width: auto;
+}
+:where([data-layout="compact"]) [data-project-settings-nav] > ul {
+  flex-direction: row;
+  gap: 4px;
+}
+:where([data-layout="compact"]) [data-project-settings-nav] > ul > li {
+  flex: 1 1 0;
+  min-width: 0;
+}
+:where([data-layout="compact"]) [data-project-settings-nav] > ul > li > button {
+  justify-content: center;
+}
+:where([data-layout="compact"]) [data-project-settings-nav] > ul > li > button > span:nth-child(2) {
+  flex: 0 1 auto;
+}
+:where([data-layout="compact"]) [data-project-settings-body] > :last-child {
+  padding-right: 0;
+}
+/* A side-by-side panel would squeeze its caption into a column of single words. */
+:where([data-layout="compact"]) [data-project-settings-panel] {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+:where([data-layout="compact"]) [data-project-settings-panel] > button {
+  align-self: flex-end;
+}
+
 /* One editor and toolbar in both layouts; only the painted frame moves. */
 [data-composer-editor] {
   display: contents;
