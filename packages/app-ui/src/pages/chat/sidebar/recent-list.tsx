@@ -14,8 +14,7 @@ import type {
 } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { ChannelIcon } from "@/components/channel-icon";
-import { PlusIcon, SettingsIcon, StarIcon, ThreadIcon } from "@/icons";
+import { LockIcon, PlusIcon, SettingsIcon, StarIcon, ThreadIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { WorkspaceIcon } from "@/components/workspace-icon";
 import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
@@ -414,13 +413,6 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
         )}
       >
         <span className="flex min-w-0 items-baseline gap-1.5">
-          {row.kind === "channel" ? (
-            <ChannelIcon
-              variant="utility"
-              visibility={row.visibility}
-              className="-mr-0.5 size-3 self-center text-text-muted"
-            />
-          ) : null}
           <span
             className={cn(
               "min-w-0 truncate text-[13px] leading-4 text-text-primary",
@@ -430,6 +422,13 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
           >
             {title}
           </span>
+          {row.kind === "channel" && row.visibility === "private" ? (
+            <LockIcon
+              role="img"
+              aria-label="Private"
+              className="-mx-0.5 size-3 shrink-0 self-center text-text-muted"
+            />
+          ) : null}
           {row.kind === "channel" ? (
             <span className="min-w-0 shrink-[999] truncate text-(length:--text-meta) text-text-muted">
               {row.workspaceName}
