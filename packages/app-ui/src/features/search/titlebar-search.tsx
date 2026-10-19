@@ -7,6 +7,7 @@ import {
   ClockIcon,
   EnterIcon,
   HashIcon,
+  LockIcon,
   MembersIcon,
   MessageResultIcon,
   SearchIcon,
@@ -16,6 +17,8 @@ import type { AgentDto, SearchIdentity, SearchResultDto } from "@silverhand/shar
 
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
+import { ChannelIcon } from "@/components/channel-icon";
+import { useSidebarStyle } from "@/features/conversation-shell/use-sidebar-style";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
 import { ChannelAvatar } from "@/features/conversations/components/channel-avatar";
 import { recentTimeLabel } from "@/features/conversations/latest/recent-rows";
@@ -635,6 +638,9 @@ function RecentConversationRow({
   onMouseEnter: () => void;
   onClick: () => void;
 }): JSX.Element {
+  // Each conversation wears the face the sidebar gives it, so a row read here is
+  // recognised there: the tree's `#` and small avatar, or the Recent list's tiles.
+  const tree = useSidebarStyle() === "tree";
   const counterpart =
     conversation.kind === "direct" ? presentCounterpart(conversation.counterpart) : null;
   const title = conversation.kind === "channel" ? conversation.title : counterpart!.label;
@@ -649,21 +655,44 @@ function RecentConversationRow({
       data-active={active ? "" : undefined}
       className="flex w-full min-w-0 items-center gap-2.5 px-3 py-2 text-left"
     >
-      <span data-recent-avatar className="flex shrink-0">
-        {counterpart ? (
-          <AuthorAvatarView
-            avatar={counterpart.avatar}
-            size={AVATAR_PX.md}
-            label={counterpart.label}
-            agentAvatarUrls={agentAvatarUrls}
-            humanAvatarUrls={humanAvatarUrls}
-          />
-        ) : (
-          <ChannelAvatar id={conversation.id} title={title} size={AVATAR_PX.md} />
-        )}
-      </span>
+      {tree ? (
+        <span className="flex size-5.5 shrink-0 items-center justify-center">
+          {conversation.kind === "direct" ? (
+            <AuthorAvatarView
+              avatar={counterpart!.avatar}
+              size={AVATAR_PX.xs}
+              label={counterpart!.label}
+              agentAvatarUrls={agentAvatarUrls}
+              humanAvatarUrls={humanAvatarUrls}
+            />
+          ) : (
+            <ChannelIcon variant="sticker" visibility={conversation.visibility} />
+          )}
+        </span>
+      ) : (
+        <span data-recent-avatar className="flex shrink-0">
+          {counterpart ? (
+            <AuthorAvatarView
+              avatar={counterpart.avatar}
+              size={AVATAR_PX.md}
+              label={counterpart.label}
+              agentAvatarUrls={agentAvatarUrls}
+              humanAvatarUrls={humanAvatarUrls}
+            />
+          ) : (
+            <ChannelAvatar id={conversation.id} title={title} size={AVATAR_PX.md} />
+          )}
+        </span>
+      )}
       <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
         <span className="min-w-0 truncate text-sm font-medium text-text-primary">{title}</span>
+        {!tree && conversation.kind === "channel" && conversation.visibility === "private" ? (
+          <LockIcon
+            role="img"
+            aria-label="Private"
+            className="-mx-0.5 size-3 shrink-0 self-center text-text-muted"
+          />
+        ) : null}
         {conversation.kind === "channel" ? (
           <span className="min-w-0 shrink-[999] truncate text-xs text-text-muted">
             {conversation.workspaceName}

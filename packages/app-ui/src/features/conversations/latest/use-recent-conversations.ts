@@ -13,6 +13,7 @@ export type RecentConversation =
       createdAt: number;
       latest: ConversationLatest | null;
       title: string;
+      visibility: "public" | "private" | undefined;
       workspaceId: string;
       workspaceName: string;
     }
@@ -52,6 +53,7 @@ export function useRecentConversations(): RecentConversation[] {
         createdAt: channel.created_at,
         latest: latest?.get(channel.id) ?? null,
         title: channel.title,
+        visibility: channel.roster_policy === "open" ? channel.visibility : undefined,
         workspaceId: workspace.id,
         workspaceName: workspace.name,
       });
