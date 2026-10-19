@@ -4,9 +4,10 @@
 //! Membership is the single source of truth: a conversation is a favorite iff a
 //! `starred_at` row exists on its HOME list (`channels:<workspace_id>`) AND the
 //! viewer can still see the (non-archived) conversation in a non-archived
-//! workspace. The favorites list stores ONLY its own ordering (`list_key =
-//! 'favorites'` rank/mode) — never membership — so the projected item set and
-//! the reorder-validation set can never diverge.
+//! workspace; a direct pair is a favorite iff the viewer is its human endpoint
+//! and its `direct_pairs` home row is starred. The favorites list stores ONLY its
+//! own ordering (`list_key = 'favorites'` rank/mode) — never membership — so the
+//! projected item set and the reorder-validation set can never diverge.
 //!
 //! The row projection carries the disambiguating parent label as TEXT (workspace
 //! name, or the bound agent's display name / handle for an agent home), the
@@ -16,6 +17,7 @@
 use std::future::Future;
 
 use crate::{
+    conversation_messaging::direct_pair_read::DirectPairCounterpart,
     conversation_messaging::messaging::collaboration::channel_directory::DirectoryRoster,
     foundation::identity::{ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
@@ -65,6 +67,18 @@ pub struct FavoriteRow {
     pub visibility: FavoriteVisibility,
 }
 
+/// One starred direct pair. It shares `favorite_key` and the favorites ordering
+/// with [`FavoriteRow`]; its label is the counterpart, not a title.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirectPairFavoriteRow {
+    pub favorite_key: String,
+    pub entity_id: ConversationId,
+    pub counterpart: DirectPairCounterpart,
+    pub starred_at: i64,
+    pub created_at: i64,
+    pub unread_count: i64,
+}
+
 /// The `GET /api/favorites` body (`ListFavoritesDto`): the projected rows plus the
 /// viewer's `favorites`-list sort state. Rows carry a deterministic fallback order
 /// (`starred_at DESC, favorite_key ASC`); the authoritative display order is
@@ -72,6 +86,7 @@ pub struct FavoriteRow {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ListFavorites {
     pub items: Vec<FavoriteRow>,
+    pub direct_pairs: Vec<DirectPairFavoriteRow>,
     pub viewer_sort: ViewerSortStateProjection,
 }
 

@@ -150,6 +150,7 @@
   "DISPLAY_NAME_MAX_LENGTH",
   "DeleteAgentInputSchema",
   "DirectPairCounterpartSchema",
+  "DirectPairFavoriteRowDtoSchema",
   "DirectPairListItemSchema",
   "DirectPairListResponseSchema",
   "DirectPairsChangedPayloadSchema",

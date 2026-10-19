@@ -21,10 +21,16 @@ pub enum SortListKey {
     Sidebar,
     Favorites,
     Channels(String),
+    /// The home list of the viewer's direct pairs. It only stores stars and is
+    /// never admitted from the wire `list_key` grammar.
+    DirectPairs,
 }
 
 /// The `channels:` prefix, spelled once so parse and render cannot drift.
 const CHANNELS_PREFIX: &str = "channels:";
+
+/// The stored home `list_key` of a direct-pair star.
+pub const DIRECT_PAIRS_LIST_KEY: &str = "direct_pairs";
 
 impl SortListKey {
     /// Parse a wire `list_key`. Returns `None` only for a string outside the closed
@@ -47,6 +53,7 @@ impl SortListKey {
             Self::Sidebar => "sidebar".to_owned(),
             Self::Favorites => "favorites".to_owned(),
             Self::Channels(workspace) => format!("{CHANNELS_PREFIX}{workspace}"),
+            Self::DirectPairs => DIRECT_PAIRS_LIST_KEY.to_owned(),
         }
     }
 }
@@ -115,6 +122,7 @@ impl SortListKey {
             Self::Sidebar => &[SortGroup::Sidebar],
             Self::Favorites => &[SortGroup::Favorites],
             Self::Channels(_) => &[SortGroup::Channels],
+            Self::DirectPairs => &[],
         }
     }
 
@@ -239,8 +247,8 @@ pub enum SortMutation {
         group: SortGroup,
         ordered_ids: Vec<String>,
     },
-    /// `POST`/`DELETE /api/channels/{id}/star` — toggle the star on `entity_id`
-    /// (a channel-home conversation; the list is `channels:<ws>`).
+    /// `POST`/`DELETE /api/channels/{id}/star` — toggle the star on `entity_id` in
+    /// its home list (`channels:<ws>`, or `direct_pairs` for a direct pair).
     SetStarred { entity_id: String, starred: bool },
 }
 
@@ -302,32 +310,23 @@ pub trait ViewerSortMutationWriter {
 
 /// A channel-like conversation's home coordinate, as the star routes read it
 /// before resolving the `channels:<ws>` list — mirroring the TS
-/// `conversations.getChannelLike(id)` at the top of the star handler. A
-/// workspace-placed conversation carries its parent workspace; a direct pair or
-/// a missing row is not a star target.
+/// `conversations.getChannelLike(id)` at the top of the star handler.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChannelHome {
     pub conversation: crate::foundation::identity::ConversationId,
     pub workspace: WorkspaceId,
 }
 
-/// The three-valued channel-home verdict: the star target's existence
-/// fact must be preserved, NOT null-collapsed. TS `getChannelLike(id)` passes for a
-/// real `direct_pair` (which then forms `channels:null` and `resolveListGroups`
-/// returns `not found`), whereas a truly missing id is `channel not found`.
+/// A star target's home: a workspace-placed conversation stars in its
+/// `channels:<ws>` list, a direct pair in the viewer's `direct_pairs` list.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ChannelHomeVerdict {
-    /// A workspace-placed conversation carrying a parent workspace — the star target.
     WorkspacePlaced(ChannelHome),
-    /// A conversation that EXISTS but is workspace-less (a direct pair) — passes the
-    /// existence gate but cannot resolve a channels list → the reference `not found`.
-    WorkspaceLessExisting,
+    DirectPair,
 }
 
-/// Reads a channel-like conversation's home verdict, or `None` when the id names NO
-/// conversation at all (the reference `404 channel not found`). A workspace-less
-/// existing conversation returns `WorkspaceLessExisting` (rendered `404 not found`),
-/// distinct from missing — the existence fact must not be null-collapsed (#39).
+/// Reads a conversation's star home, or `None` when the id names NO conversation
+/// at all (`404 channel not found`).
 pub trait ChannelHomeReadPort {
     fn channel_home(
         &self,

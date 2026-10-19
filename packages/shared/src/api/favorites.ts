@@ -10,8 +10,8 @@
 // stored. See docs/list-sort-v1.md.
 //
 // SCOPE — CONSUMER CONTRACT. This endpoint emits CONVERSATIONS only: the
-// viewer's stars from a conversation list
-// (`list_key='channels:<ws_id>'`). A WORKSPACE / DM container is NOT a
+// viewer's stars from a conversation list (`list_key='channels:<ws_id>'`, or
+// `'direct_pairs'` for a direct pair — `direct_pairs[]`). A WORKSPACE container is NOT a
 // global-Favorites member, and since #task:1899 is not starrable at all. Mixing
 // granularities would put parents in a short list whose row count then grows with
 // their children; the single-column sidebar therefore stars leaves only.
@@ -35,6 +35,7 @@
 import { z } from 'zod';
 import { ConversationRosterPolicySchema, ConversationVisibilitySchema } from '../db/schema.js';
 import { ViewerSortStateDtoSchema } from './sort.js';
+import { DirectPairCounterpartSchema } from './conversation.js';
 
 /**
  * Which roster policy the favorite carries. The favorites list adds no
@@ -135,6 +136,22 @@ export const FavoriteRowDtoSchema = z.object({
 export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
 
 /**
+ * One starred direct pair (#task:2874). A pair stars in the viewer's own
+ * `direct_pairs` home list (it has no workspace), and shares `favorite_key` and
+ * the `favorites` ordering with {@link FavoriteRowDto}. Its label is the
+ * counterpart, exactly as in `GET /api/direct-pairs`.
+ */
+export const DirectPairFavoriteRowDtoSchema = z.object({
+  favorite_key: z.string(),
+  conversation_id: z.string(),
+  counterpart: DirectPairCounterpartSchema,
+  starred_at: z.number(),
+  created_at: z.number(),
+  unread_count: z.number().int().nonnegative(),
+});
+export type DirectPairFavoriteRowDto = z.infer<typeof DirectPairFavoriteRowDtoSchema>;
+
+/**
  * `GET /api/favorites` response — the viewer's flat favorites plus their
  * favorites ordering state. GLOBAL scope (no workspace filter), mirroring the
  * Activity list: a favorite can point anywhere the viewer has access.
@@ -176,6 +193,9 @@ export type FavoriteRowDto = z.infer<typeof FavoriteRowDtoSchema>;
  */
 export const ListFavoritesDtoSchema = z.object({
   items: z.array(FavoriteRowDtoSchema),
+  /** Starred direct pairs. Optional only because a server older than #task:2874
+   *  omits it. */
+  direct_pairs: z.array(DirectPairFavoriteRowDtoSchema).optional(),
   /** The viewer's favorites ordering state (`list_key='favorites'`): the
    *  list-wide mode (`modes['']`) + per-`favorite_key` entries (rank +
    *  home-derived last_accessed_at/starred_at). Mutated via

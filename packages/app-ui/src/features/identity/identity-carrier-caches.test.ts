@@ -161,12 +161,7 @@ describe("identity-carrier caches", () => {
 
     const human = stalePaths("human");
     expect(human).toContain('["users"]');
-    for (const agentOnly of [
-      '["agents"]',
-      '["favorites","all"]',
-      '["host-status","h1"]',
-      '["host-resources","h1"]',
-    ]) {
+    for (const agentOnly of ['["agents"]', '["host-status","h1"]', '["host-resources","h1"]']) {
       expect(human).not.toContain(agentOnly);
     }
   });
@@ -181,7 +176,7 @@ describe("identity-carrier caches", () => {
 
   it("exposes the per-kind carrier set for review", () => {
     expect(identityCarrierIdsFor("human")).toContain("users");
-    expect(identityCarrierIdsFor("human")).not.toContain("favorites");
+    expect(identityCarrierIdsFor("human")).toContain("favorites");
     expect(identityCarrierIdsFor("agent")).toContain("favorites");
     expect(identityCarrierIdsFor("agent")).not.toContain("users");
     // The embedded-author families are both-kind carriers (#task:1792).
@@ -198,14 +193,15 @@ describe("identity-carrier caches", () => {
     }
   });
 
-  it("splits the identity facets, and the DM list is the only lifecycle carrier (#task:2046)", () => {
+  it("splits the identity facets, and only DM counterpart carriers are lifecycle (#task:2046)", () => {
     // The registry was presentation-flavored until the DM list arrived: its
     // `deleted` arm + derived `read_only` are the first LIFECYCLE identity, and
     // they fail toward "looks writable". These pins make the split enforced —
     // narrowing `direct-pairs` to presentation-only, or dropping it, reddens
     // here rather than shipping a composer that accepts input the send path
     // refuses.
-    expect(carrierIdsWithFacet("lifecycle")).toEqual(["direct-pairs"]);
+    // Starred direct pairs embed the same counterpart (#task:2874).
+    expect(carrierIdsWithFacet("lifecycle")).toEqual(["direct-pairs", "favorites"]);
     expect(carrierIdsWithFacet("presentation")).toContain("direct-pairs");
     // Every carrier carries presentation identity; lifecycle is the exception,
     // so the two sets differ by exactly the entries that earned lifecycle.

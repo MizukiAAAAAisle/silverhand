@@ -291,6 +291,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                           selectedChannelId={props.selectedChannelId}
                           watchWorkspaceIds={watchWorkspaceIds}
                           onSelectConversation={props.onSelectConversation}
+                          onSelectDirectPair={props.onSelectDirectPair}
                         />
                       ) : branch.kind === "direct-messages" ? (
                         <DirectMessagesGroup

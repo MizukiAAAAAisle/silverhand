@@ -13,7 +13,10 @@ use silverhand_backend_core::{
     foundation::name_canonicalization::is_ecmascript_trim_whitespace,
     foundation::persistence::PersistenceFailure,
     viewer_read_model::{
-        favorites::{FavoriteRow, FavoriteVisibility, FavoritesReadPort, ListFavorites},
+        favorites::{
+            DirectPairFavoriteRow, FavoriteRow, FavoriteVisibility, FavoritesReadPort,
+            ListFavorites,
+        },
         viewer_sort_state::{
             SortListKey, SortMode, ViewerSortEntryProjection, ViewerSortStateProjection,
             favorite_key,
@@ -25,6 +28,9 @@ use sqlx::{Row, Sqlite, Transaction};
 use std::collections::BTreeMap;
 use thiserror::Error;
 
+use crate::conversation_messaging::direct_pair_read::{
+    DirectPairReadError, LivePrincipals, PairEvidence,
+};
 use crate::conversation_messaging::messaging::MessagingStore;
 use crate::viewer_read_model::unread_read::conversation_unread_counts;
 
@@ -56,6 +62,8 @@ pub enum FavoritesReadError {
     UnknownVisibility(String),
     #[error("stored favorites sort mode is outside the closed set")]
     UnknownMode(String),
+    #[error("stored direct-pair favorite is malformed")]
+    DirectPair(#[from] DirectPairReadError),
 }
 
 impl From<FavoritesReadError> for PersistenceFailure {
@@ -87,6 +95,18 @@ const SELECT_CONVERSATION_FAVORITES: &str = "\
          OR (c.placement_kind = 'workspace' AND c.roster_policy = 'open' \
              AND c.visibility = 'public') \
        )";
+
+const SELECT_DIRECT_PAIR_FAVORITES: &str = "\
+    SELECT c.id, c.endpoint_a_kind, c.endpoint_a_id, c.endpoint_a_deleted_at, \
+           c.endpoint_b_kind, c.endpoint_b_id, c.endpoint_b_deleted_at, c.created_at, \
+           use.starred_at AS starred_at, use.last_accessed_at AS last_accessed_at \
+      FROM user_sort_entry use \
+      JOIN conversations c ON c.id = use.entity_id AND c.placement_kind = 'direct_pair' \
+     WHERE use.user_id = ? \
+       AND use.list_key = 'direct_pairs' \
+       AND use.starred_at IS NOT NULL \
+       AND ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ?) \
+         OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ?))";
 
 const SELECT_FAVORITES_RANKS: &str = "\
     SELECT entity_id, rank FROM user_sort_entry \
@@ -145,6 +165,38 @@ impl FavoritesReadPort for SqliteFavoritesRead {
                 raw.push(decode_favorite(row)?);
             }
 
+            let pair_rows = sqlx::query(SELECT_DIRECT_PAIR_FAVORITES)
+                .bind(viewer.as_str())
+                .bind(viewer.as_str())
+                .bind(viewer.as_str())
+                .fetch_all(&mut *tx)
+                .observe(silverhand_backend_observability::operation_span!(
+                    "db.favorites.direct_pairs"
+                ))
+                .await
+                .map_err(FavoritesReadError::from)?;
+            let mut pairs = Vec::with_capacity(pair_rows.len());
+            for row in &pair_rows {
+                let starred_at = fav_js_safe(
+                    row.try_get("starred_at")
+                        .map_err(FavoritesReadError::from)?,
+                    "starred_at",
+                )?;
+                let last_accessed_at = match row
+                    .try_get::<Option<i64>, _>("last_accessed_at")
+                    .map_err(FavoritesReadError::from)?
+                {
+                    Some(v) => Some(fav_js_safe(v, "last_accessed_at")?),
+                    None => None,
+                };
+                let pair = PairEvidence::decode(row).map_err(FavoritesReadError::from)?;
+                pairs.push((pair, starred_at, last_accessed_at));
+            }
+            let evidence: Vec<PairEvidence> = pairs.iter().map(|(p, ..)| p.clone()).collect();
+            let principals = LivePrincipals::load(&mut tx, &evidence)
+                .await
+                .map_err(FavoritesReadError::from)?;
+
             let rank_rows = sqlx::query(SELECT_FAVORITES_RANKS)
                 .bind(viewer.as_str())
                 .fetch_all(&mut *tx)
@@ -180,8 +232,11 @@ impl FavoritesReadPort for SqliteFavoritesRead {
                 modes.insert(scope, mode);
             }
 
-            let conversation_ids: Vec<ConversationId> =
-                raw.iter().map(|row| row.entity_id.clone()).collect();
+            let conversation_ids: Vec<ConversationId> = raw
+                .iter()
+                .map(|row| row.entity_id.clone())
+                .chain(evidence.iter().map(|pair| pair.conversation().clone()))
+                .collect();
             let unread = unread_counts(&mut tx, viewer, &conversation_ids).await?;
 
             tx.commit().await.map_err(FavoritesReadError::from)?;
@@ -215,6 +270,37 @@ impl FavoritesReadPort for SqliteFavoritesRead {
                     visibility: row.visibility,
                 });
             }
+            let mut direct_pairs = Vec::with_capacity(pairs.len());
+            for (pair, starred_at, last_accessed_at) in pairs {
+                let counterpart = pair
+                    .counterpart(viewer)
+                    .and_then(|endpoint| principals.counterpart(&endpoint))
+                    .map_err(FavoritesReadError::from)?;
+                let entity_id = pair.conversation().clone();
+                let key = favorite_key(entity_id.as_str());
+                let created_at = fav_js_safe(pair.created_at_ms(), "created_at")?;
+                let unread_count =
+                    fav_js_safe(unread.get(&entity_id).copied().unwrap_or(0), "unread_count")?;
+                entries.push(ViewerSortEntryProjection {
+                    entity_id: key.clone(),
+                    rank: rank_by_key.get(&key).copied(),
+                    last_accessed_at,
+                    starred_at: Some(starred_at),
+                });
+                direct_pairs.push(DirectPairFavoriteRow {
+                    favorite_key: key,
+                    entity_id,
+                    counterpart,
+                    starred_at,
+                    created_at,
+                    unread_count,
+                });
+            }
+            direct_pairs.sort_by(|a, b| {
+                b.starred_at
+                    .cmp(&a.starred_at)
+                    .then_with(|| cmp_utf16(&a.favorite_key, &b.favorite_key))
+            });
             // Deterministic fallback order: most-recently-starred first, then a favorite_key
             // tiebreak by UTF-16 CODE UNITS (#10) — matching TS `<`/`>` on strings, NOT
             // Rust's default UTF-8 byte `String::cmp` (an opaque non-ASCII conversation id
@@ -228,6 +314,7 @@ impl FavoritesReadPort for SqliteFavoritesRead {
 
             Ok(ListFavorites {
                 items,
+                direct_pairs,
                 viewer_sort: ViewerSortStateProjection {
                     list_key: SortListKey::Favorites,
                     modes: modes.into_iter().collect(),
@@ -423,6 +510,74 @@ mod tests {
 
         // A normal display_name is returned verbatim.
         assert_eq!(parent_title_for("Alice").await, "Alice");
+    }
+
+    #[tokio::test]
+    async fn a_starred_direct_pair_is_listed_only_for_its_starring_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("favorites.sqlite");
+        let mut db = SqliteConnection::connect_with(
+            &SqliteConnectOptions::new()
+                .filename(&path)
+                .create_if_missing(true)
+                .foreign_keys(true),
+        )
+        .await
+        .unwrap();
+        db.execute(sqlx::raw_sql(CURRENT_SCHEMA)).await.unwrap();
+        db.execute(sqlx::raw_sql(SEED_PRE)).await.unwrap();
+        db.execute(sqlx::raw_sql(
+            "INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id, created_at, updated_at, session_scope) \
+               VALUES ('agent-a','alice','Alice','claude','host-1','user-1',1,1,'agent'); \
+             INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-2','other','Other',1,1); \
+             INSERT INTO conversations (id,placement_kind,roster_policy,title,status,visibility,created_at,updated_at,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id) \
+               VALUES ('dm-1','direct_pair','fixed','','idle','private',7,7,'agent','agent-a','human','user-1'); \
+             INSERT INTO user_sort_entry (user_id, list_key, entity_id, rank, last_accessed_at, starred_at) \
+               VALUES ('user-1','direct_pairs','dm-1',NULL,NULL,20), ('user-2','direct_pairs','dm-1',NULL,NULL,20); \
+             INSERT INTO user_sort_entry (user_id, list_key, entity_id, rank) VALUES ('user-1','favorites','conversation:dm-1',3);",
+        ))
+        .await
+        .unwrap();
+        db.close().await.unwrap();
+        let read = SqliteFavoritesRead {
+            pool: SqlitePoolOptions::new()
+                .connect_with(SqliteConnectOptions::new().filename(&path))
+                .await
+                .unwrap(),
+        };
+
+        let listed = read
+            .list_favorites(&UserId::parse("user-1").unwrap())
+            .await
+            .unwrap();
+        assert!(listed.items.is_empty());
+        let [pair] = listed.direct_pairs.as_slice() else {
+            panic!("one direct-pair favorite: {:?}", listed.direct_pairs);
+        };
+        assert_eq!(pair.favorite_key, "conversation:dm-1");
+        assert_eq!(pair.entity_id.as_str(), "dm-1");
+        assert_eq!(pair.created_at, 7);
+        assert!(matches!(
+            &pair.counterpart,
+            silverhand_backend_core::conversation_messaging::direct_pair_read::DirectPairCounterpart::Active(_)
+        ));
+        assert_eq!(
+            listed.viewer_sort.entries,
+            vec![ViewerSortEntryProjection {
+                entity_id: "conversation:dm-1".to_owned(),
+                rank: Some(3),
+                last_accessed_at: None,
+                starred_at: Some(20),
+            }]
+        );
+
+        // A star row from a non-endpoint never surfaces.
+        let other = read
+            .list_favorites(&UserId::parse("user-2").unwrap())
+            .await
+            .unwrap();
+        assert!(other.direct_pairs.is_empty());
+        assert!(other.viewer_sort.entries.is_empty());
     }
 
     #[test]

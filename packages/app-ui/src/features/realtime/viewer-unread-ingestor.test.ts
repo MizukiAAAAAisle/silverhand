@@ -267,6 +267,26 @@ describe("patchFavoritesUnread — list-row present-only write", () => {
     expect(patchFavoritesUnread(qc, payload())).toBe("unchanged");
     expect(qc.getQueryData(favoritesKey)).toBe(before);
   });
+  it("writes the count on a matching starred direct pair", () => {
+    qc.setQueryData<ListFavoritesDto>(favoritesKey, {
+      items: [favRow("c-2", 3)],
+      direct_pairs: [
+        {
+          favorite_key: "conversation:c-1",
+          conversation_id: "c-1",
+          counterpart: { status: "deleted", kind: "agent", id: "a-1" },
+          starred_at: 1,
+          created_at: 1,
+          unread_count: 1,
+        },
+      ],
+      viewer_sort: emptyViewerSort,
+    });
+    expect(patchFavoritesUnread(qc, payload({ conversation_unread_count: 6 }))).toBe("patched");
+    const data = qc.getQueryData<ListFavoritesDto>(favoritesKey)!;
+    expect(data.direct_pairs?.[0]?.unread_count).toBe(6);
+    expect(data.items[0]?.unread_count).toBe(3);
+  });
 });
 
 describe("ingestViewerUnreadFrame — routing + single-dispatch fan-out", () => {

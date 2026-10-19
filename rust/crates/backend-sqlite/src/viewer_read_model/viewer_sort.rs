@@ -99,11 +99,6 @@ impl ChannelHomeReadPort for SqliteViewerSort {
         &self,
         conversation_id: &str,
     ) -> Result<Option<ChannelHomeVerdict>, PersistenceFailure> {
-        // `getChannelLike(id)`: existence is decided WITHOUT the placement filter, so a
-        // real `direct_pair` PASSES existence and returns
-        // `WorkspaceLessExisting` (→ `not found`) rather than collapsing to missing
-        // (→ `channel not found`). A workspace-placed conversation with a parent
-        // workspace is the star target `WorkspacePlaced`.
         let Some(row) =
             sqlx::query("SELECT id, placement_kind, workspace_id FROM conversations WHERE id = ?")
                 .bind(conversation_id)
@@ -131,9 +126,8 @@ impl ChannelHomeReadPort for SqliteViewerSort {
                     workspace,
                 })))
             }
-            // Exists but not a workspace-placed channel (a direct pair) — passes the
-            // existence gate, no channels list resolves.
-            _ => Ok(Some(ChannelHomeVerdict::WorkspaceLessExisting)),
+            ("direct_pair", None) => Ok(Some(ChannelHomeVerdict::DirectPair)),
+            _ => Err(ViewerSortStoreError::MalformedChannelHome.into()),
         }
     }
 }
@@ -163,6 +157,9 @@ async fn resolve_list_groups_tx(
                 .bind(viewer.as_str())
                 .bind(viewer.as_str())
                 .bind(viewer.as_str())
+                .bind(viewer.as_str())
+                .bind(viewer.as_str())
+                .bind(viewer.as_str())
                 .fetch_all(&mut **tx)
                 .await
                 .map_err(ViewerSortStoreError::from)?;
@@ -172,6 +169,25 @@ async fn resolve_list_groups_tx(
                     .try_get("entity_id")
                     .map_err(ViewerSortStoreError::from)?;
                 groups.insert(favorite_key(&entity_id), SortGroup::Favorites);
+            }
+            Ok(Ok(ResolvedListGroups {
+                groups,
+                starred: HashSet::new(),
+            }))
+        }
+        SortListKey::DirectPairs => {
+            // Star-only list: its members are the pairs the viewer is the human
+            // endpoint of; the group value is never consulted.
+            let rows = sqlx::query(SELECT_VIEWER_DIRECT_PAIR_IDS_TX)
+                .bind(viewer.as_str())
+                .bind(viewer.as_str())
+                .fetch_all(&mut **tx)
+                .await
+                .map_err(ViewerSortStoreError::from)?;
+            let mut groups = BTreeMap::new();
+            for row in &rows {
+                let id: String = row.try_get("id").map_err(ViewerSortStoreError::from)?;
+                groups.insert(id, SortGroup::Channels);
             }
             Ok(Ok(ResolvedListGroups {
                 groups,
@@ -239,7 +255,22 @@ const SELECT_FAVORITE_KEYS_TX: &str = "\
                   WHERE cu.conversation_id = c.id AND cu.user_id = ?) \
          OR (c.placement_kind = 'workspace' AND c.roster_policy = 'open' \
              AND c.visibility = 'public') \
-       )";
+       ) \
+    UNION ALL \
+    SELECT use.entity_id AS entity_id \
+      FROM user_sort_entry use \
+      JOIN conversations c ON c.id = use.entity_id AND c.placement_kind = 'direct_pair' \
+     WHERE use.user_id = ? \
+       AND use.list_key = 'direct_pairs' \
+       AND use.starred_at IS NOT NULL \
+       AND ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ?) \
+         OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ?))";
+
+const SELECT_VIEWER_DIRECT_PAIR_IDS_TX: &str = "\
+    SELECT c.id AS id FROM conversations c \
+     WHERE c.placement_kind = 'direct_pair' \
+       AND ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ?) \
+         OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ?))";
 
 const SELECT_STARRED_ENTITY_IDS_TX: &str = "\
     SELECT entity_id FROM user_sort_entry \
@@ -288,7 +319,8 @@ async fn read_post_image_tx(
     // Favorites projection: the entries are NOT the `list_key='favorites'`
     // rank rows. Each LIVE favorite gets an entry; `rank` comes from the favorites
     // list (null when never manually sorted), while `last_accessed_at`/`starred_at`
-    // come from the conversation's HOME list (`channels:<ws>`), where the star lives.
+    // come from the conversation's HOME list (`channels:<ws>` / `direct_pairs`), where
+    // the star lives.
     // A raw `user_sort_entry WHERE list_key='favorites'` read would drop favorites
     // that lack a rank row AND null out the home facts.
     if matches!(list_key, SortListKey::Favorites) {
@@ -312,7 +344,9 @@ async fn read_post_image_tx(
             "SELECT use.entity_id AS entity_id, use.last_accessed_at AS last_accessed_at, \
                     use.starred_at AS starred_at \
              FROM user_sort_entry use JOIN conversations c ON c.id = use.entity_id \
-             WHERE use.user_id = ? AND use.list_key = 'channels:' || c.workspace_id \
+             WHERE use.user_id = ? \
+               AND (use.list_key = 'channels:' || c.workspace_id \
+                 OR (use.list_key = 'direct_pairs' AND c.placement_kind = 'direct_pair')) \
                AND use.starred_at IS NOT NULL",
         )
         .bind(viewer.as_str())
@@ -406,6 +440,12 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
         {
             return Ok(Err(SortMutationRefusal::ReorderOnly));
         }
+        // `direct_pairs` is internal and star-only; the wire grammar never names it.
+        if matches!(list_key, SortListKey::DirectPairs)
+            && !matches!(mutation, SortMutation::SetStarred { .. })
+        {
+            return Ok(Err(SortMutationRefusal::ListNotFound));
+        }
         let mut tx = self
             .pool
             .begin_with("BEGIN IMMEDIATE")
@@ -452,7 +492,10 @@ impl ViewerSortMutationWriter for SqliteViewerSort {
             SortMutation::SetMode { group, mode } => {
                 // Group/list consistency under the lock.
                 match list_key {
-                    SortListKey::Sidebar | SortListKey::Favorites | SortListKey::Channels(_) => {
+                    SortListKey::Sidebar
+                    | SortListKey::Favorites
+                    | SortListKey::Channels(_)
+                    | SortListKey::DirectPairs => {
                         if group.is_some() {
                             return Ok(Err(SortMutationRefusal::GroupNotSupportedForList {
                                 group: *group,
@@ -1202,5 +1245,113 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
             entry.last_accessed_at.is_some(),
             "home last_accessed_at preserved"
         );
+    }
+
+    #[tokio::test]
+    async fn a_direct_pair_stars_in_its_own_home_list_and_joins_the_favorites_order() {
+        let (_dir, sort, pool) = open_seeded().await;
+        for statement in [
+            "INSERT INTO users (id,name,display_name,created_at,updated_at) VALUES ('user-2','v','V',1,1)",
+            "INSERT INTO conversations (id,placement_kind,roster_policy,title,status,visibility,created_at,updated_at,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id) \
+             VALUES ('dm-1','direct_pair','fixed','','idle','private',1,1,'human','user-1','human','user-2')",
+        ] {
+            sqlx::query(statement).execute(&pool).await.unwrap();
+        }
+        let star = |starred| SortMutation::SetStarred {
+            entity_id: "dm-1".to_owned(),
+            starred,
+        };
+        // Only an endpoint can star the pair.
+        assert_eq!(
+            sort.apply_sort_mutation(&user("user-3"), &SortListKey::DirectPairs, &star(true))
+                .await
+                .unwrap(),
+            Err(SortMutationRefusal::UnknownEntity)
+        );
+        // The internal list admits nothing but stars.
+        assert_eq!(
+            sort.apply_sort_mutation(
+                &user("user-1"),
+                &SortListKey::DirectPairs,
+                &SortMutation::Touch {
+                    entity_id: "dm-1".to_owned()
+                },
+            )
+            .await
+            .unwrap(),
+            Err(SortMutationRefusal::ListNotFound)
+        );
+        sort.apply_sort_mutation(&user("user-1"), &SortListKey::DirectPairs, &star(true))
+            .await
+            .unwrap()
+            .unwrap();
+        sort.apply_sort_mutation(
+            &user("user-1"),
+            &channels("ws-1"),
+            &SortMutation::SetStarred {
+                entity_id: "conv-a".to_owned(),
+                starred: true,
+            },
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+        // The pair and the channel are one favorites group.
+        let ordered = sort
+            .apply_sort_mutation(
+                &user("user-1"),
+                &SortListKey::Favorites,
+                &SortMutation::Reorder {
+                    group: SortGroup::Favorites,
+                    ordered_ids: vec![
+                        "conversation:dm-1".to_owned(),
+                        "conversation:conv-a".to_owned(),
+                    ],
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        let mut ranks: Vec<_> = ordered
+            .entries
+            .iter()
+            .map(|e| (e.entity_id.as_str(), e.rank, e.starred_at.is_some()))
+            .collect();
+        ranks.sort();
+        assert_eq!(
+            ranks,
+            vec![
+                ("conversation:conv-a", Some(1), true),
+                ("conversation:dm-1", Some(0), true),
+            ]
+        );
+        // The other endpoint's favorites are untouched.
+        let theirs = sort
+            .apply_sort_mutation(
+                &user("user-2"),
+                &SortListKey::Favorites,
+                &SortMutation::SetMode {
+                    group: None,
+                    mode: SortMode::Recent,
+                },
+            )
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(theirs.entries.is_empty());
+
+        // Unstar leaves the favorites group and drops its rank.
+        sort.apply_sort_mutation(&user("user-1"), &SortListKey::DirectPairs, &star(false))
+            .await
+            .unwrap()
+            .unwrap();
+        let ranked: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM user_sort_entry WHERE list_key='favorites' AND entity_id='conversation:dm-1'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(ranked, 0);
     }
 }

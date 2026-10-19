@@ -44,7 +44,8 @@ import {
   useStarChannel,
 } from "@/features/workspaces/hooks";
 import { AppContextMenu } from "@/components/menus/app-context-menu";
-import { useFavoritesList } from "@/features/workspaces/favorites";
+import { starredConversationIds, useFavoritesList } from "@/features/workspaces/favorites";
+import { DirectPairStarMenuItem } from "./direct-messages-panel";
 import { useViewerUser } from "@/features/session/hooks";
 import { channelNodeBadge, directRowBadge } from "../model/sidebar-row-badges";
 import {
@@ -133,10 +134,7 @@ export function RecentList(props: {
   const latest = useConversationLatest();
   const viewer = useViewerUser();
 
-  const pinned = useMemo(
-    () => new Set((favorites.data?.items ?? []).map((item) => item.entity_id)),
-    [favorites.data],
-  );
+  const pinned = useMemo(() => starredConversationIds(favorites.data), [favorites.data]);
 
   const rows: RecentListRow[] = [];
   workspaceIds.forEach((workspaceId, index) => {
@@ -478,15 +476,19 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
   );
 });
 
-/** The tree's channel menu (star, notifications, archive, copy name) on the same
- *  channel here. DM rows have no menu in the tree either. */
+/** The tree's row menu on the same conversation here: the channel menu, or a
+ *  direct pair's Star item. */
 function RecentRowMenu(props: {
   row: RecentListRow;
   pinned: boolean;
   children: ReactElement;
 }): JSX.Element {
   if (props.row.kind !== "channel") {
-    return props.children;
+    return (
+      <AppContextMenu trigger={props.children}>
+        <DirectPairStarMenuItem conversationId={props.row.id} starred={props.pinned} />
+      </AppContextMenu>
+    );
   }
 
   return (
