@@ -40,6 +40,8 @@ public struct WireContract: Decodable {
   public let login: String
   public let signup: String
   public let logout: String
+  public let passwordRecoveryRequest: String
+  public let passwordRecoveryReset: String
 
   public static func bundled() throws -> WireContract {
     guard let url = Bundle.module.url(forResource: "Protocol", withExtension: "json") else {

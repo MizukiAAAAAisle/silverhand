@@ -131,6 +131,15 @@ public final class ClientSession {
       guard let scope = scope as? String, ["loopback", "lan", "public"].contains(scope)
       else { return false }
     }
+    if let features = info["features"] {
+      guard let features = features as? [String: Any] else { return false }
+      for key in ["signup_enabled", "password_recovery_enabled"] {
+        if let flag = features[key] {
+          guard let flag = flag as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID()
+          else { return false }
+        }
+      }
+    }
     if let advertisement = info["desktop_api"] {
       guard let advertisement = advertisement as? [String: Any],
         integer(advertisement["current_epoch"]), integer(advertisement["minimum_client_epoch"])
@@ -226,6 +235,24 @@ public final class ClientSession {
     let fields = ["id", "name", "display_name", "avatar_url", "created_at", "updated_at"]
     let safeUser = user.filter { fields.contains($0.key) }
     return ["ok": true, "user": safeUser]
+  }
+
+  /// Anonymous recovery call on the selected server. It never touches the stored
+  /// session, and a response that arrives after the server changed is refused.
+  public func passwordRecovery(action: String, body: String) async throws -> [String: Any] {
+    try checkStorage()
+    guard let record else { throw ClientError.noServer }
+    let path: String
+    switch action {
+    case "request": path = contract.passwordRecoveryRequest
+    case "reset": path = contract.passwordRecoveryReset
+    default: throw ClientError.invalidPath
+    }
+    let captured = generation
+    let response = try await fetch(
+      request(origin: record.serverURL, path: path, method: "POST", body: body))
+    try check(captured)
+    return ["status": response.status, "bodyText": String(data: response.data, encoding: .utf8) ?? ""]
   }
 
   public func logout() async throws {

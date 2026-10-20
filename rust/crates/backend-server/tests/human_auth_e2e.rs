@@ -323,6 +323,8 @@ async fn signup_creates_an_identity_and_returns_a_usable_session() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(me["name"], json!("alice"));
     assert_eq!(me["id"], user["id"]);
+    // Only the caller's own profile carries the email.
+    assert_eq!(me["email"], json!("alice@example.com"));
 }
 
 #[tokio::test]

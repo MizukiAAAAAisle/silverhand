@@ -1,6 +1,7 @@
 import { useCompactLayout } from "@/navigation/layout";
 import { useLocation } from "react-router-dom";
 import { useNav } from "@/router";
+import { AccountEmail } from "./components/account-email";
 import { AccountSkeleton } from "./components/account-skeleton";
 import { ChangePasswordForm } from "./components/change-password-form";
 import { DeleteAccountSection } from "./components/delete-account-section";
@@ -530,6 +531,7 @@ function AccountPane(): JSX.Element {
 
       <div className="flex max-w-2xl flex-col gap-6">
         <ViewerProfileEditor user={dto} />
+        <AccountEmail key={dto.id} userId={dto.id} />
         <ChangePasswordForm key={dto.id} userId={dto.id} />
 
         <div className="flex flex-col gap-3">

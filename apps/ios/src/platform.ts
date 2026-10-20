@@ -2,6 +2,7 @@ import type { ClientPlatform, ClientAuthState } from "@silverhand/client";
 import { classifyMeFetchOutcome } from "@silverhand/client";
 import {
   ServerInfoSchema,
+  serverFeatures,
   UpgradeRequiredBodySchema,
   classifyDesktopServerApiCompatibility,
   DESKTOP_SERVER_API_EPOCH,
@@ -115,7 +116,15 @@ export function createIOSPlatform(
           const info = ServerInfoSchema.parse(parse(state.info.bodyText));
           const skew = compatibility(info);
           if (skew) return skew;
-          if (!state.me) return { status: "unauthenticated", signup_enabled: info.signup_enabled };
+          const features = serverFeatures(info);
+          const unauthenticated = {
+            status: "unauthenticated" as const,
+            signup_enabled: features.signup_enabled,
+            password_recovery: features.password_recovery_enabled
+              ? ("enabled" as const)
+              : ("disabled" as const),
+          };
+          if (!state.me) return unauthenticated;
           const result = classifyMeFetchOutcome({
             kind: "response",
             status: state.me.status,
@@ -124,11 +133,10 @@ export function createIOSPlatform(
           if (result.kind === "valid")
             return {
               status: "authenticated",
-              signup_enabled: info.signup_enabled,
+              signup_enabled: features.signup_enabled,
               user: result.user,
             };
-          if (result.kind === "rejected")
-            return { status: "unauthenticated", signup_enabled: info.signup_enabled };
+          if (result.kind === "rejected") return unauthenticated;
           return { status: "backend_unreachable", server_url: serverUrl, message: result.message };
         } catch (error) {
           return { status: "backend_unreachable", server_url: serverUrl, message: String(error) };
@@ -136,6 +144,7 @@ export function createIOSPlatform(
       },
       login: (input) => bridge.authenticate({ action: "login", body: JSON.stringify(input) }),
       signup: (input) => bridge.authenticate({ action: "signup", body: JSON.stringify(input) }),
+      passwordRecovery: (input) => bridge.passwordRecovery(input),
       logout: async () => {
         await bridge.logout();
         resetApplication();

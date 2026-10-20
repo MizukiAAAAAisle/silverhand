@@ -8,6 +8,8 @@ import type {
   LocalHostInfo,
   ClientAuthState,
   ClientAuthResult,
+  PasswordRecoveryCall,
+  PasswordRecoveryResult,
   BackendProxyRequest,
   BackendProxyResponse,
   BackendUploadRequest,
@@ -34,6 +36,7 @@ export interface DesktopBridge {
   signup(input: AuthSignupInput): Promise<ClientAuthResult>;
   login(input: AuthLoginInput): Promise<ClientAuthResult>;
   logout(): Promise<{ ok: true }>;
+  passwordRecovery(input: PasswordRecoveryCall): Promise<PasswordRecoveryResult>;
   backendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse>;
   backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
   recordEventWsDiagnostic(input: EventWsDiagnostic): Promise<void>;

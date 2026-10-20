@@ -10,5 +10,7 @@
   "mePassword": "/api/me/password",
   "login": "/auth/login",
   "signup": "/auth/signup",
-  "logout": "/auth/logout"
+  "logout": "/auth/logout",
+  "passwordRecoveryRequest": "/auth/password-recovery/request",
+  "passwordRecoveryReset": "/auth/password-recovery/reset"
 }

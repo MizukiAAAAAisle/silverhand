@@ -25,6 +25,7 @@ const client = {
   signup: vi.fn(),
   login: vi.fn(async () => ({ ok: true as const, user })),
   logout: vi.fn(),
+  passwordRecovery: vi.fn(),
   backendRequest: vi.fn(async () => ({
     status: 200,
     statusText: "OK",

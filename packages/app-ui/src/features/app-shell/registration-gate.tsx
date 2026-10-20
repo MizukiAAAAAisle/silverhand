@@ -11,9 +11,12 @@ import { ExternalLink, PRIVACY_POLICY_URL } from "@/features/legal/legal-links";
 import { DraftAvatarCard } from "@/features/avatar-maker/components/draft-avatar-card";
 import { useDraftAvatar } from "@/features/avatar-maker/hooks/use-draft-avatar";
 import { useLoginUser, useSignupUser, useUploadDraftViewerAvatar } from "../session/hooks";
+import { PasswordRecoveryForm } from "./password-recovery-form";
 
 export interface RegistrationGateProps {
   signupEnabled: boolean;
+  /** Absent hides the recovery entry (the embedded local server). */
+  passwordRecovery?: "enabled" | "disabled";
   preferLogin?: boolean;
   autoFocus?: boolean;
   connectionReady?: boolean;
@@ -47,6 +50,7 @@ interface AuthError {
  */
 export function RegistrationGate({
   signupEnabled,
+  passwordRecovery,
   preferLogin = false,
   autoFocus = true,
   connectionReady = true,
@@ -68,6 +72,8 @@ export function RegistrationGate({
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<AuthError | null>(null);
   const [editingServer, setEditingServer] = useState(false);
+  const [recovering, setRecovering] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
   const emailInputRef = useRef<HTMLInputElement | null>(null);
   const handleInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -109,6 +115,7 @@ export function RegistrationGate({
     e.preventDefault();
     if (!canSubmit) return;
     setError(null);
+    setNotice(null);
     try {
       if (isSignup) {
         await signup.mutateAsync({
@@ -136,6 +143,33 @@ export function RegistrationGate({
 
   const formError = error?.field === null ? error.message : null;
   const handleError = handleFormatMessage ?? (error?.field === "handle" ? error.message : null);
+
+  if (recovering && passwordRecovery) {
+    return (
+      <AuthSplitLayout>
+        <div
+          className="w-full max-w-90"
+          style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
+        >
+          <header className="mb-7 flex flex-col gap-1.5">
+            <h1 className="text-3xl font-semibold tracking-tight">Reset password</h1>
+          </header>
+          <PasswordRecoveryForm
+            enabled={passwordRecovery === "enabled"}
+            initialEmail={emailTrimmed}
+            onCancel={() => setRecovering(false)}
+            onDone={(recoveredEmail) => {
+              setEmail(recoveredEmail);
+              setPassword("");
+              setError(null);
+              setNotice("Your password has been reset. Log in with your new password.");
+              setRecovering(false);
+            }}
+          />
+        </div>
+      </AuthSplitLayout>
+    );
+  }
 
   return (
     <AuthSplitLayout>
@@ -221,7 +255,23 @@ export function RegistrationGate({
           ) : null}
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="auth-password">Password</Label>
+            <div className="flex items-baseline justify-between gap-3">
+              <Label htmlFor="auth-password">Password</Label>
+              {!isSignup && passwordRecovery && connectionReady ? (
+                <button
+                  type="button"
+                  className="text-xs text-text-muted underline underline-offset-3 hover:text-text-secondary focus-outline"
+                  disabled={submitting}
+                  onClick={() => {
+                    setError(null);
+                    setNotice(null);
+                    setRecovering(true);
+                  }}
+                >
+                  Forgot password?
+                </button>
+              ) : null}
+            </div>
             <Input
               id="auth-password"
               type="password"
@@ -273,6 +323,7 @@ export function RegistrationGate({
             <p className="text-xs text-error">Passwords do not match.</p>
           ) : null}
           {formError ? <p className="text-xs text-error">{formError}</p> : null}
+          {notice && !formError ? <p className="text-xs text-text-muted">{notice}</p> : null}
           {signupEnabled ? (
             <p className="text-sm text-text-muted">
               {isSignup ? "Already have an account?" : "No account?"}{" "}
@@ -282,6 +333,7 @@ export function RegistrationGate({
                 onClick={() => {
                   setMode(isSignup ? "login" : "signup");
                   setError(null);
+                  setNotice(null);
                 }}
               >
                 {isSignup ? "Log in" : "Sign up"}

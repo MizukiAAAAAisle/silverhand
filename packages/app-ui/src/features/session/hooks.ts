@@ -39,6 +39,8 @@ const meKey = ["me"] as const;
 
 export type SetupRequired = RegistrationRequired & {
   signup_enabled: boolean;
+  /** Absent: this server has no account recovery (the embedded local server). */
+  password_recovery?: "enabled" | "disabled";
 };
 
 export interface BackendUnreachable {
@@ -203,6 +205,7 @@ export function mapAuthStateToViewer(state: ClientAuthState): ViewerState {
     registration_required: true,
     suggested_name: "",
     signup_enabled: state.signup_enabled,
+    ...(state.password_recovery ? { password_recovery: state.password_recovery } : {}),
   };
 }
 

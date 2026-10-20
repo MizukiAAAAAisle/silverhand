@@ -413,6 +413,7 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyC
   },
   "inline-find": { verdicts: ["swept"], reason: "['inline-find', cid, …] → position 1" },
   me: { verdicts: ["exempt"], reason: "viewer identity + capabilities; no conversation axis" },
+  "me-email": { verdicts: ["exempt"], reason: "viewer's own email; no conversation axis" },
   "message-reactions": {
     verdicts: ["retained"],
     reason:

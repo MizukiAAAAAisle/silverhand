@@ -1392,3 +1392,18 @@ CREATE TRIGGER users_avatar_design_delete AFTER DELETE ON users
 CREATE TRIGGER agents_avatar_design_delete AFTER DELETE ON agents
         WHEN OLD.avatar_design_id IS NOT NULL
         BEGIN DELETE FROM avatar_designs WHERE id = OLD.avatar_design_id; END;
+
+CREATE TABLE password_recovery_state (
+        user_id           TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        email             TEXT NOT NULL,
+        code_id           TEXT,
+        code_hash         TEXT,
+        code_expires_at   INTEGER,
+        code_attempts     INTEGER NOT NULL DEFAULT 0,
+        window_started_at INTEGER NOT NULL,
+        window_sends      INTEGER NOT NULL DEFAULT 0,
+        window_attempts   INTEGER NOT NULL DEFAULT 0,
+        last_sent_at      INTEGER,
+        CHECK ((code_id IS NULL) = (code_hash IS NULL)),
+        CHECK ((code_id IS NULL) = (code_expires_at IS NULL))
+      );

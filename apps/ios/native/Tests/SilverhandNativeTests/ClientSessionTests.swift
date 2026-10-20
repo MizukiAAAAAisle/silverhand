@@ -87,6 +87,9 @@ final class ClientSessionTests: XCTestCase {
       #"{"signup_enabled":true,"desktop_api":{"current_epoch":true,"minimum_client_epoch":1}}"#,
       #"{"signup_enabled":true,"outbound_protocol_version":-1}"#,
       #"{"signup_enabled":true,"bind_address_scope":"invalid"}"#,
+      #"{"signup_enabled":true,"features":null}"#,
+      #"{"signup_enabled":true,"features":{"password_recovery_enabled":1}}"#,
+      #"{"signup_enabled":true,"features":{"signup_enabled":"no"}}"#,
     ]
     for initialRecord in [initial, nil] {
       for json in malformed {
@@ -99,6 +102,59 @@ final class ClientSessionTests: XCTestCase {
         XCTAssertEqual(store.value, initialRecord)
       }
     }
+  }
+
+  func testDiscoveryAcceptsFeaturesAndOlderResponsesWithoutThem() async throws {
+    for json in [
+      #"{"signup_enabled":true}"#,
+      #"{"signup_enabled":true,"features":{}}"#,
+      #"{"signup_enabled":true,"features":{"signup_enabled":false,"password_recovery_enabled":true}}"#,
+    ] {
+      let store = MemoryStore(initial)
+      let client = try ClientSession(store: store, fetch: { _ in self.response(200, json) })
+      _ = try await client.saveProfile("https://b.example")
+      XCTAssertEqual(store.value?.serverURL, "https://b.example", json)
+    }
+  }
+
+  func testPasswordRecoveryIsAnonymousAndKeepsTheSession() async throws {
+    let store = MemoryStore(initial)
+    var seen: URLRequest?
+    let client = try ClientSession(store: store, fetch: { request in
+      seen = request
+      return self.response(202, #"{"ok":true}"#)
+    })
+    let result = try await client.passwordRecovery(
+      action: "request", body: #"{"email":"a@example.com"}"#)
+    XCTAssertEqual(result["status"] as? Int, 202)
+    XCTAssertEqual(seen?.url?.absoluteString, "https://a.example/auth/password-recovery/request")
+    XCTAssertNil(seen?.value(forHTTPHeaderField: "Authorization"))
+    XCTAssertEqual(store.value, initial)
+    do {
+      _ = try await client.passwordRecovery(action: "login", body: "{}")
+      XCTFail("Only recovery actions are allowed")
+    } catch {}
+  }
+
+  func testLateRecoveryResponseAfterServerSwitchIsRefused() async throws {
+    let store = MemoryStore(initial)
+    var continuation: CheckedContinuation<HTTPResult, Never>?
+    let client = try ClientSession(
+      store: store,
+      fetch: { request in
+        if request.url?.path == "/auth/password-recovery/reset" {
+          return await withCheckedContinuation { continuation = $0 }
+        }
+        return self.info
+      })
+    let reset = Task { try await client.passwordRecovery(action: "reset", body: "{}") }
+    while continuation == nil { await Task.yield() }
+    _ = try await client.saveProfile("https://b.example")
+    continuation?.resume(returning: response(200, #"{"ok":true}"#))
+    do {
+      _ = try await reset.value
+      XCTFail("must reject a late recovery response")
+    } catch {}
   }
 
   func testStorageFailureDoesNotCommitNewServer() async throws {

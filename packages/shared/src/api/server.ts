@@ -6,8 +6,20 @@ import { DesktopApiAdvertisementSchema } from '../desktop-server-api-epoch.js';
 export const BindAddressScopeSchema = z.enum(['loopback', 'lan', 'public']);
 export type BindAddressScope = z.infer<typeof BindAddressScopeSchema>;
 
+/**
+ * Capabilities this server offers. Discovery only: every route still enforces its
+ * own. Absent on older servers; read through {@link serverFeatures}.
+ */
+export const ServerFeaturesSchema = z.object({
+  signup_enabled: z.boolean().optional(),
+  password_recovery_enabled: z.boolean().optional(),
+});
+export type ServerFeatures = z.infer<typeof ServerFeaturesSchema>;
+
 export const ServerInfoSchema = z.object({
+  /** Kept for clients that predate `features`. */
   signup_enabled: z.boolean(),
+  features: ServerFeaturesSchema.optional(),
   /**
    * Exact outbound daemon protocol version accepted by this server build.
    *
@@ -56,3 +68,11 @@ export const ServerInfoSchema = z.object({
   desktop_api: DesktopApiAdvertisementSchema.optional(),
 });
 export type ServerInfo = z.infer<typeof ServerInfoSchema>;
+
+/** Resolves capabilities, falling back to the legacy field; unknown means off. */
+export function serverFeatures(info: ServerInfo): Required<ServerFeatures> {
+  return {
+    signup_enabled: info.features?.signup_enabled ?? info.signup_enabled,
+    password_recovery_enabled: info.features?.password_recovery_enabled ?? false,
+  };
+}

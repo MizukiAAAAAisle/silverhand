@@ -1,6 +1,6 @@
 import { SessionGeneration } from "@silverhand/client";
 import { describe, expect, it } from "vitest";
-import { apiPaths, type UserDto } from "@silverhand/shared";
+import { apiPaths, serverFeatures, type UserDto } from "@silverhand/shared";
 import {
   extractViewerUserFromProxyResponse,
   shouldClearPasswordSession,
@@ -206,6 +206,8 @@ function mainSessionHarness() {
     }),
     runtimeUpgradeMonitor: { onRestResponse: () => {}, reset: () => {} },
     fetchServerInfo: async () => ({ signup_enabled: false }),
+    serverFeatures,
+    backend: { kind: "embedded" },
     classifyDesktopServerApiCompatibility: () => "compatible",
     DESKTOP_SERVER_API_EPOCH: 4,
     MINIMUM_SERVER_API_EPOCH: 4,

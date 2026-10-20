@@ -4,7 +4,12 @@ import type {
   ProfileSaveWithTestResult,
   ClearProfileResult,
 } from "../connection/types.js";
-import type { ClientAuthState, ClientAuthResult } from "../session/types.js";
+import type {
+  ClientAuthState,
+  ClientAuthResult,
+  PasswordRecoveryCall,
+  PasswordRecoveryResult,
+} from "../session/types.js";
 import type {
   AuthSignupInput,
   AuthLoginInput,
@@ -26,6 +31,7 @@ export interface ClientAdapter {
   signup(input: AuthSignupInput): Promise<ClientAuthResult>;
   login(input: AuthLoginInput): Promise<ClientAuthResult>;
   logout(): Promise<{ ok: true }>;
+  passwordRecovery(input: PasswordRecoveryCall): Promise<PasswordRecoveryResult>;
   backendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse>;
   backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
   recordEventWsDiagnostic(input: EventWsDiagnostic): Promise<void>;

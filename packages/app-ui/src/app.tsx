@@ -101,6 +101,7 @@ export function App({
     return (
       <RegistrationGate
         signupEnabled={registration?.signup_enabled ?? false}
+        passwordRecovery={registration?.password_recovery}
         preferLogin
         autoFocus={false}
         connectionStatus={isBackendUnreachable(viewer.data) ? viewer.data.message : undefined}
@@ -148,6 +149,7 @@ export function App({
     return (
       <RegistrationGate
         signupEnabled={viewer.data.signup_enabled}
+        passwordRecovery={viewer.data.password_recovery}
         preferLogin={hasSignedIn}
         showServerAddress={showServerAddress}
         onRetry={() => {

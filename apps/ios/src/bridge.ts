@@ -12,6 +12,8 @@ import type {
   BackendProxyRequest,
   BackendProxyResponse,
   ClientAuthResult,
+  PasswordRecoveryCall,
+  PasswordRecoveryResult,
   NativeNavigationState,
   NativeNavigationIntent,
 } from "@silverhand/client";
@@ -67,6 +69,7 @@ export interface NativeBridge {
     me?: BackendProxyResponse;
   }>;
   authenticate(input: { action: "login" | "signup"; body: string }): Promise<ClientAuthResult>;
+  passwordRecovery(input: PasswordRecoveryCall): Promise<PasswordRecoveryResult>;
   logout(): Promise<void>;
   request(input: BackendProxyRequest): Promise<BackendProxyResponse & { bodyBase64?: string }>;
   upload(input: {

@@ -7,6 +7,8 @@ import type {
 import type {
   ClientAuthState,
   ClientAuthResult,
+  PasswordRecoveryCall,
+  PasswordRecoveryResult,
   BackendProxyRequest,
   BackendProxyResponse,
   BackendUploadRequest,
@@ -81,6 +83,8 @@ const api: DesktopBridge = {
   login: (input: AuthLoginInput): Promise<ClientAuthResult> =>
     ipcRenderer.invoke("auth:login", input),
   logout: (): Promise<{ ok: true }> => ipcRenderer.invoke("auth:logout"),
+  passwordRecovery: (input: PasswordRecoveryCall): Promise<PasswordRecoveryResult> =>
+    ipcRenderer.invoke("auth:passwordRecovery", input),
   backendRequest: (input: BackendProxyRequest): Promise<BackendProxyResponse> =>
     ipcRenderer.invoke("backend:request", input),
   backendUpload: (input: BackendUploadRequest): Promise<BackendProxyResponse> =>

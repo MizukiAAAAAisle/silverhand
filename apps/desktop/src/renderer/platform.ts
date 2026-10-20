@@ -12,6 +12,7 @@ export function createDesktopPlatform(
       signup: (input) => bridge.signup(input),
       login: (input) => bridge.login(input),
       logout: () => bridge.logout(),
+      passwordRecovery: (input) => bridge.passwordRecovery(input),
       backendRequest: (input) => bridge.backendRequest(input),
       backendUpload: (input) => bridge.backendUpload(input),
       recordEventWsDiagnostic: (input) => bridge.recordEventWsDiagnostic(input),

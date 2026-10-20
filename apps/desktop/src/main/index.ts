@@ -8,6 +8,8 @@ import type {
 import type {
   ClientAuthState as DesktopAuthState,
   ClientAuthResult as DesktopAuthResult,
+  PasswordRecoveryCall,
+  PasswordRecoveryResult,
   BackendProxyRequest,
   BackendProxyResponse,
   BackendUploadRequest,
@@ -60,6 +62,7 @@ import {
   type ServerConnectionProfileView,
   type ServerInfo,
   type UserDto,
+  serverFeatures,
 } from "@silverhand/shared";
 import {
   createCategorizedLoggers,
@@ -798,7 +801,7 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
   if (userSessionToken && userSessionUser) {
     return {
       status: "authenticated",
-      signup_enabled: info.signup_enabled,
+      signup_enabled: serverFeatures(info).signup_enabled,
       user: userSessionUser,
     };
   }
@@ -811,7 +814,39 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
       message: "session validation pending — /api/me did not return a verdict",
     };
   }
-  return { status: "unauthenticated", signup_enabled: info.signup_enabled };
+  return {
+    status: "unauthenticated",
+    signup_enabled: serverFeatures(info).signup_enabled,
+    ...(backend?.kind === "remote"
+      ? {
+          password_recovery: serverFeatures(info).password_recovery_enabled
+            ? ("enabled" as const)
+            : ("disabled" as const),
+        }
+      : {}),
+  };
+}
+
+/** Anonymous recovery call on the current server; a late answer after a server
+ *  or session change is dropped. Never stores a session. */
+async function passwordRecovery(input: PasswordRecoveryCall): Promise<PasswordRecoveryResult> {
+  const changed = { status: 409, bodyText: '{"error":"session_changed"}' };
+  if (switchingServer || backend?.kind !== "remote") return changed;
+  const isCurrent = clientSessionGeneration.capture();
+  const path =
+    input.action === "request" ? authPaths.passwordRecoveryRequest : authPaths.passwordRecoveryReset;
+  try {
+    const res = await backendFetch(backendUrl(path), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: input.body,
+    });
+    const bodyText = await res.text();
+    return isCurrent() ? { status: res.status, bodyText } : changed;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { status: 0, bodyText: JSON.stringify({ error: "backend_unreachable", message }) };
+  }
 }
 
 async function postAuthSession(
@@ -2291,6 +2326,10 @@ guardedIpc.handle("auth:login", (_event, input: AuthLoginInput) =>
 );
 
 guardedIpc.handle("auth:logout", () => logoutUserSession());
+
+guardedIpc.handle("auth:passwordRecovery", (_event, input: PasswordRecoveryCall) =>
+  passwordRecovery(input),
+);
 
 guardedIpc.handle("backend:request", (_event, input: BackendProxyRequest) =>
   proxyBackendRequest(input),

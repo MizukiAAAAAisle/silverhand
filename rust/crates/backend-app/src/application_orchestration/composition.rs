@@ -634,6 +634,24 @@ pub(super) async fn compose_after_audit(
             SystemSessionClock,
             sessions.clone(),
         );
+    let recovery_mailer = config.recovery_mailer();
+    let password_recovery_enabled = recovery_mailer.is_some();
+    let password_recovery_router =
+        silverhand_backend_server::identity_access::password_recovery::router(
+            silverhand_backend_server::identity_access::password_recovery::PasswordRecoveryDeps {
+                store: credential_store.clone(),
+                hasher: password_hasher.clone(),
+                clock: SystemSessionClock,
+                entropy: OsEntropy,
+                key: RecoveryCodeKey::generate(&OsEntropy).map_err(|source| {
+                    StartupError::Composition {
+                        name: "password recovery key",
+                        source: Box::new(source),
+                    }
+                })?,
+                mailer: recovery_mailer,
+            },
+        );
     let human_auth_router = human_auth::router(
         HumanAuthDeps {
             handles: handle_namespace.clone(),
@@ -1450,6 +1468,7 @@ pub(super) async fn compose_after_audit(
     // live `boot` holder and the shared-pool write probe.
     let server_info_router = server_info::router(ServerAdvertisement {
         signup_enabled: config.signup_enabled,
+        password_recovery_enabled,
         bind_address_scope: classify_bind_address_scope(&bound_listener_addr.ip().to_string()),
     });
     let health_router = process_health::router(server_mode, SystemProcessClock);
@@ -1528,6 +1547,7 @@ pub(super) async fn compose_after_audit(
             .merge(human_auth_router)
             .merge(password_change_router)
             .merge(account_deletion_router)
+            .merge(password_recovery_router)
             .merge(embedded_profile_router)
             // #2223 CP4: the human-directory + avatar family also mounts at the top level.
             // `users::router` self-wraps `require_human_session` around all four of its

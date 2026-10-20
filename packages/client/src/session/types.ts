@@ -2,7 +2,12 @@ import type { UserDto } from "@silverhand/shared";
 
 export type ClientAuthState =
   | { status: "authenticated"; signup_enabled: boolean; user: UserDto }
-  | { status: "unauthenticated"; signup_enabled: boolean }
+  | {
+      status: "unauthenticated";
+      signup_enabled: boolean;
+      /** Omitted where recovery does not apply (the embedded local server). */
+      password_recovery?: "enabled" | "disabled";
+    }
   | { status: "backend_unreachable"; server_url: string; message: string }
   | {
       status: "app_update_required";
@@ -14,6 +19,17 @@ export type ClientAuthState =
       server_api_epoch: number;
       client_api_epoch: number;
     };
+
+/** An anonymous password-recovery call on the selected server. A response that
+ *  arrives after the server or session changed is answered as 409. */
+export interface PasswordRecoveryCall {
+  action: "request" | "reset";
+  body: string;
+}
+export interface PasswordRecoveryResult {
+  status: number;
+  bodyText: string;
+}
 
 export type ClientAuthResult =
   | { ok: true; user: UserDto }

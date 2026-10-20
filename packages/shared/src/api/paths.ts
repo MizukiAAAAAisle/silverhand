@@ -552,6 +552,8 @@ export const authPaths = {
   signup: '/auth/signup',
   login: '/auth/login',
   logout: '/auth/logout',
+  passwordRecoveryRequest: '/auth/password-recovery/request',
+  passwordRecoveryReset: '/auth/password-recovery/reset',
 } as const;
 
 /** Canonical agent-global internal route family. Operation coordinates live in

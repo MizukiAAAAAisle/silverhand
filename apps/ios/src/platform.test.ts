@@ -50,6 +50,7 @@ function harness() {
       bodyText: "{}",
     })),
     authenticate: vi.fn(),
+    passwordRecovery: vi.fn(),
     logout: vi.fn(),
     addListener: vi.fn(async () => ({ remove: vi.fn() })),
     saveAttachment: vi.fn(async () => ({ completed: true })),
@@ -158,6 +159,41 @@ describe("iOS platform", () => {
     expect(await platform.client.getAuthState()).toEqual({
       status: "unauthenticated",
       signup_enabled: true,
+      password_recovery: "disabled",
+    });
+  });
+
+  it("reads features first and keeps a nested false over the legacy signup flag", async () => {
+    const { native, platform } = harness();
+    native.authState.mockResolvedValue({
+      serverUrl: "https://server.example",
+      info: {
+        status: 200,
+        statusText: "OK",
+        headers: {},
+        bodyText: JSON.stringify({
+          signup_enabled: true,
+          features: { signup_enabled: false, password_recovery_enabled: true },
+          desktop_api: { current_epoch: DESKTOP_SERVER_API_EPOCH, minimum_client_epoch: 1 },
+        }),
+      },
+    });
+    expect(await platform.client.getAuthState()).toEqual({
+      status: "unauthenticated",
+      signup_enabled: false,
+      password_recovery: "enabled",
+    });
+  });
+
+  it("routes password recovery natively without a session", async () => {
+    const { native, platform } = harness();
+    native.passwordRecovery.mockResolvedValue({ status: 202, bodyText: '{"ok":true}' });
+    expect(
+      await platform.client.passwordRecovery({ action: "request", body: '{"email":"u@example.com"}' }),
+    ).toEqual({ status: 202, bodyText: '{"ok":true}' });
+    expect(native.passwordRecovery).toHaveBeenCalledWith({
+      action: "request",
+      body: '{"email":"u@example.com"}',
     });
   });
 
@@ -247,6 +283,8 @@ describe("iOS platform", () => {
       login: authPaths.login,
       signup: authPaths.signup,
       logout: authPaths.logout,
+      passwordRecoveryRequest: authPaths.passwordRecoveryRequest,
+      passwordRecoveryReset: authPaths.passwordRecoveryReset,
     });
   });
 

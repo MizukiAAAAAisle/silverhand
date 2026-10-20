@@ -650,7 +650,7 @@ fn within_utf16(value: &str, min: usize, max: usize) -> bool {
 // ===========================================================================
 
 /// The `UserDto` both `me` routes and the signup/login `user` field project.
-/// snake_case on the wire; `email` is NEVER returned. `avatar_url` is the
+/// snake_case on the wire; `email` is never part of it (only the self profile adds it). `avatar_url` is the
 /// cache-busted `/api/users/:id/avatar?v=:updated_at` projected from the user's
 /// stored avatar revision (the shared [`principal_avatar_url`] human arm), or
 /// `null` when no avatar is stored — a freshly signed-up user has none.
@@ -724,8 +724,21 @@ fn session_response(secret: IssuedSessionSecret, user: &UserRecord) -> Response 
     .into_response()
 }
 
+/// The viewer's own profile: the public `UserDto` plus the caller's own email,
+/// which no other projection carries.
+#[derive(Serialize)]
+struct SelfProfileDto<'a> {
+    #[serde(flatten)]
+    user: UserDto,
+    email: Option<&'a str>,
+}
+
 fn profile_ok(user: &UserRecord) -> Response {
-    Json(UserDto::from_record(user)).into_response()
+    Json(SelfProfileDto {
+        user: UserDto::from_record(user),
+        email: user.email.as_deref(),
+    })
+    .into_response()
 }
 
 fn logout_ok() -> Response {

@@ -6,6 +6,7 @@
 //! no orchestration logic itself, and it does not absorb the `application_orchestration`
 //! composition context or the cfg-test schema support.
 
+pub(crate) mod mail;
 pub(crate) mod request_perimeter;
 
 pub(crate) mod observability;
