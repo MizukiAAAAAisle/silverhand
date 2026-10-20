@@ -14,7 +14,7 @@
 From the repository root:
 
 ```sh
-SILVERHAND_DEFAULT_SERVER_URL=https://silverhand.build \
+SILVERHAND_DEFAULT_SERVER_URL=https://api.silverhand.build \
   pnpm --filter @silverhand/ios archive --build 2 --version 1.0
 ```
 
@@ -31,7 +31,7 @@ finish account/signing setup in Xcode and retry.
 For local engineering validation before signing is ready:
 
 ```sh
-SILVERHAND_DEFAULT_SERVER_URL=https://silverhand.build \
+SILVERHAND_DEFAULT_SERVER_URL=https://api.silverhand.build \
   pnpm --filter @silverhand/ios archive --build 2 --version 1.0 --unsigned
 ```
 
