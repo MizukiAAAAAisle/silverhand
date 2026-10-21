@@ -16,6 +16,8 @@
     "./runtimes": "./src/runtimes.ts"
   },
   "scripts": {
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
     "typecheck": "tsc --noEmit",
     "build": "tsc && esbuild src/daemon/entry.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/daemon.js --minify=${SILVERHAND_MINIFY:-false} --banner:js='import{createRequire}from\"node:module\";const require=createRequire(import.meta.url);'",
     "test": "vitest run",

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the remaining JavaScript suites. SQLite is owned by Rust, so no ABI swap.
+# Check formatting, then run the JavaScript suites. SQLite is owned by Rust, so no ABI swap.
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
@@ -12,6 +12,7 @@ esac
 if [[ "$scope" != all ]]; then
   for known in "${PACKAGES[@]}"; do
     if [[ "$known" == "$scope" ]]; then
+      pnpm --filter "@silverhand/$scope" fmt:check
       exec pnpm --filter "@silverhand/$scope" test "$@"
     fi
   done
@@ -23,5 +24,6 @@ if [[ "$#" -gt 0 ]]; then
   exit 2
 fi
 for pkg in "${PACKAGES[@]}"; do
+  pnpm --filter "@silverhand/$pkg" fmt:check
   pnpm --filter "@silverhand/$pkg" test
 done
