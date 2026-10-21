@@ -1,3 +1,4 @@
+import dayjs from "dayjs";
 import type { MessageDto, UserDto } from "@silverhand/shared";
 import { SystemMessage } from "./system-message";
 import type { ChannelReference } from "./channel-ref";
@@ -54,17 +55,29 @@ export function SystemActivityCluster({
 }: SystemActivityClusterProps): JSX.Element {
   return (
     <div className="system-activity-cluster" data-system-activity-cluster={String(messages.length)}>
-      {messages.map((m) => (
-        <SystemMessage
-          key={m.id}
-          message={m}
-          conversationRefsById={conversationRefsById}
-          onOpenConversationRef={onOpenConversationRef}
-          channelsByName={channelsByName}
-          onOpenChannelRef={onOpenChannelRef}
-          humansByName={humansByName}
-        />
-      ))}
+      {messages.map((m) => {
+        const createdAt = dayjs(m.created_at);
+
+        return (
+          <div key={m.id} data-activity-row className="relative">
+            <time
+              data-activity-time
+              dateTime={createdAt.toISOString()}
+              title={createdAt.format("YYYY-MM-DD HH:mm:ss")}
+            >
+              {createdAt.format("HH:mm")}
+            </time>
+            <SystemMessage
+              message={m}
+              conversationRefsById={conversationRefsById}
+              onOpenConversationRef={onOpenConversationRef}
+              channelsByName={channelsByName}
+              onOpenChannelRef={onOpenChannelRef}
+              humansByName={humansByName}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }

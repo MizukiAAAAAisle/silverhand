@@ -244,6 +244,30 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
   border-inline-start: var(--activity-cluster-rule, 1px solid var(--border-subtle));
 }
 
+/* The time sits in the avatar column, right-aligned where a continuation
+   row's hover time sits (cluster inset 54px + 10px padding, rail ends 40px in). */
+.system-activity-cluster [data-activity-time] {
+  position: absolute;
+  inset-block: 0;
+  right: calc(100% + 24px);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  user-select: none;
+  font-size: var(--text-badge);
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.system-activity-cluster [data-activity-row]:hover [data-activity-time] {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .system-activity-cluster [data-activity-time] {
+    display: none;
+  }
+}
+
 .system-activity-cluster [data-system-event-row="1"] > * {
   padding-block: 2px;
   padding-inline: 0;
