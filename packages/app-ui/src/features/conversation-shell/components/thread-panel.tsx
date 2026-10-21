@@ -990,12 +990,7 @@ export function ThreadPanel({
           <SidePanelHeaderTitle
             icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
             title={parentTitle || t("conversationShell.thread")}
-            subtitle={
-              <>
-                {t("conversationShell.thread")} {replyCount}{" "}
-                {replyCount === 1 ? "reply" : "replies"}
-              </>
-            }
+            subtitle={t("conversationShell.threadReplies", { count: replyCount })}
           />
         </SidePanelHeader>
 
