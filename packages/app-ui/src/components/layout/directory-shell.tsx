@@ -2,6 +2,7 @@ import { useCompactLayout } from "@/navigation/layout";
 import type { ReactNode } from "react";
 import { SectionLayer } from "./section-layer";
 import { Sidebar } from "./sidebar";
+import { SidebarSlot } from "./sidebar-slot";
 import { paneChrome } from "./pane-chrome";
 
 export interface DirectoryLifecycle {
@@ -16,14 +17,12 @@ export function DirectoryShell({
   name,
   sidebar,
   children,
-  splitter,
   selected = false,
 }: DirectoryLifecycle & {
   name: string;
   selected?: boolean;
   sidebar: ReactNode;
   children: ReactNode;
-  splitter?: ReactNode;
 }): JSX.Element | null {
   const compact = useCompactLayout();
   if (!mounted) {
@@ -39,9 +38,12 @@ export function DirectoryShell({
           <Sidebar name={name} sidebar={sidebar} fill />
         )
       ) : (
-        <Sidebar name={name} width="var(--sidebar-width)" sidebar={sidebar} splitter={splitter}>
+        <>
+          <SidebarSlot>
+            <Sidebar name={name} width="var(--sidebar-width)" sidebar={sidebar} />
+          </SidebarSlot>
           {children}
-        </Sidebar>
+        </>
       )}
     </SectionLayer>
   );

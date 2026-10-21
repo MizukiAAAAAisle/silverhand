@@ -5,7 +5,7 @@ import type { JumpPhase } from "@/features/channels/message-jump-phase";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import type { UnreadCounts } from "@/features/attention/notifications";
 import type { WorkspaceListItem } from "@/features/workspaces/hooks";
-import type { SidebarPane } from "@/features/conversation-shell/use-sidebar-pane";
+import type { SidebarPane } from "@/hooks/use-sidebar-pane";
 import type {
   ConversationPointer,
   SecondaryDescriptor,
@@ -51,7 +51,6 @@ export interface ChatShellModel {
   selectedWorkspaceId: string | null;
   directDraftTarget: DirectMessageTarget | null;
   workspaceSidebarPane: SidebarPane;
-  workspaceSidebarVisible: boolean;
   workspaces: WorkspaceListItem[];
   workspacesLoading: boolean;
   agentsById: Map<string, AgentDto>;

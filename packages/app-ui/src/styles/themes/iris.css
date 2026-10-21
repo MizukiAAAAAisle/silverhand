@@ -251,8 +251,8 @@
   pointer-events: none;
 }
 
-[data-theme="iris"] [data-section-layer] > aside[data-sidebar="members"],
-[data-theme="iris"] [data-section-layer] > aside[data-sidebar="computers"],
+[data-theme="iris"] aside[data-sidebar="members"],
+[data-theme="iris"] aside[data-sidebar="computers"],
 [data-theme="iris"] aside[data-sidebar="settings"] {
   border-right: 1px solid var(--border);
 }

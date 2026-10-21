@@ -72,6 +72,7 @@ import { ConnectionPane } from "./components/connection-pane";
 import { AboutPane } from "./components/about-pane";
 import { PaneHeader, PaneShell } from "@/components/layout/pane-shell";
 import { Sidebar } from "@/components/layout/sidebar";
+import { SidebarSlot } from "@/components/layout/sidebar-slot";
 
 /** 4-color swatch preview and display name for each theme. */
 const THEME_META: Record<
@@ -186,14 +187,17 @@ export function SettingsShell(): JSX.Element {
       />
     );
   return (
-    <Sidebar
-      name="settings"
-      label={t("settings.sectionsLabel")}
-      width="var(--sidebar-width)"
-      sidebar={<SettingsRailNav section={section} onSelect={setSection} />}
-    >
+    <>
+      <SidebarSlot>
+        <Sidebar
+          name="settings"
+          label={t("settings.sectionsLabel")}
+          width="var(--sidebar-width)"
+          sidebar={<SettingsRailNav section={section} onSelect={setSection} />}
+        />
+      </SidebarSlot>
       {content}
-    </Sidebar>
+    </>
   );
 }
 
