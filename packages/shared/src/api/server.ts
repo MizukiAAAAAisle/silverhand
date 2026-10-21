@@ -13,6 +13,7 @@ export type BindAddressScope = z.infer<typeof BindAddressScopeSchema>;
 export const ServerFeaturesSchema = z.object({
   signup_enabled: z.boolean().optional(),
   password_recovery_enabled: z.boolean().optional(),
+  account_deletion_enabled: z.boolean().optional(),
 });
 export type ServerFeatures = z.infer<typeof ServerFeaturesSchema>;
 
@@ -74,5 +75,6 @@ export function serverFeatures(info: ServerInfo): Required<ServerFeatures> {
   return {
     signup_enabled: info.features?.signup_enabled ?? info.signup_enabled,
     password_recovery_enabled: info.features?.password_recovery_enabled ?? false,
+    account_deletion_enabled: info.features?.account_deletion_enabled ?? false,
   };
 }

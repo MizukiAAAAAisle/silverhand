@@ -1469,6 +1469,10 @@ pub(super) async fn compose_after_audit(
     let server_info_router = server_info::router(ServerAdvertisement {
         signup_enabled: config.signup_enabled,
         password_recovery_enabled,
+        account_deletion_enabled:
+            silverhand_backend_server::identity_access::account_deletion::offered(
+                config.deployment_profile,
+            ),
         bind_address_scope: classify_bind_address_scope(&bound_listener_addr.ip().to_string()),
     });
     let health_router = process_health::router(server_mode, SystemProcessClock);

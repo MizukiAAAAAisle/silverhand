@@ -8406,7 +8406,7 @@ async fn readyz_reports_listen_ready_only_after_serve_receives_the_bound_listene
 /// the TS authorities (`packages/backend/src/auth/config.ts`,
 /// `packages/server/src/config.ts`), including the values where they DIVERGE.
 #[tokio::test]
-async fn password_recovery_is_advertised_only_by_a_remote_server_with_mail() {
+async fn features_advertise_recovery_with_remote_mail_and_deletion_off_embedded() {
     let mail = crate::foundation::mail::MailConfig::parse(
         Some("smtps://user:secret@smtp.example.com:465"),
         Some("no-reply@example.com"),
@@ -8432,6 +8432,7 @@ async fn password_recovery_is_advertised_only_by_a_remote_server_with_mail() {
         assert_eq!(status, StatusCode::OK);
         let body: serde_json::Value = serde_json::from_str(&body).unwrap();
         assert_eq!(body["features"]["password_recovery_enabled"], expected);
+        assert_eq!(body["features"]["account_deletion_enabled"], remote);
         assert_eq!(body["features"]["signup_enabled"], body["signup_enabled"]);
         let (status, _) = json_request_with_body(
             &app.router,

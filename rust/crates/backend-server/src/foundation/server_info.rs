@@ -42,6 +42,7 @@ pub const SERVER_INFO_PATH: &str = "/api/server/info";
 pub struct ServerAdvertisement {
     pub signup_enabled: bool,
     pub password_recovery_enabled: bool,
+    pub account_deletion_enabled: bool,
     pub bind_address_scope: BindAddressScope,
 }
 
@@ -57,6 +58,7 @@ async fn server_info(State(advertisement): State<ServerAdvertisement>) -> Respon
         features: ServerFeatures {
             signup_enabled: advertisement.signup_enabled,
             password_recovery_enabled: advertisement.password_recovery_enabled,
+            account_deletion_enabled: advertisement.account_deletion_enabled,
         },
         bind_address_scope: advertisement.bind_address_scope.as_str(),
         outbound_protocol_version: OUTBOUND_PROTOCOL_VERSION,
@@ -88,6 +90,7 @@ struct ServerInfoResponse {
 struct ServerFeatures {
     signup_enabled: bool,
     password_recovery_enabled: bool,
+    account_deletion_enabled: bool,
 }
 
 #[derive(Serialize)]
@@ -125,6 +128,7 @@ mod tests {
         let (status, body) = get(ServerAdvertisement {
             signup_enabled: true,
             password_recovery_enabled: false,
+            account_deletion_enabled: false,
             bind_address_scope: BindAddressScope::Loopback,
         })
         .await;
@@ -133,7 +137,11 @@ mod tests {
             body,
             json!({
                 "signup_enabled": true,
-                "features": {"signup_enabled": true, "password_recovery_enabled": false},
+                "features": {
+                    "signup_enabled": true,
+                    "password_recovery_enabled": false,
+                    "account_deletion_enabled": false
+                },
                 "bind_address_scope": "loopback",
                 "outbound_protocol_version": OUTBOUND_PROTOCOL_VERSION,
                 "desktop_api": {
@@ -152,6 +160,7 @@ mod tests {
         let (_, body) = get(ServerAdvertisement {
             signup_enabled: true,
             password_recovery_enabled: true,
+            account_deletion_enabled: true,
             bind_address_scope: BindAddressScope::Public,
         })
         .await;
@@ -163,6 +172,7 @@ mod tests {
         let (_, closed) = get(ServerAdvertisement {
             signup_enabled: false,
             password_recovery_enabled: false,
+            account_deletion_enabled: false,
             bind_address_scope: BindAddressScope::Lan,
         })
         .await;

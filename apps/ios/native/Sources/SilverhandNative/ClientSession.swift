@@ -133,7 +133,7 @@ public final class ClientSession {
     }
     if let features = info["features"] {
       guard let features = features as? [String: Any] else { return false }
-      for key in ["signup_enabled", "password_recovery_enabled"] {
+      for key in ["signup_enabled", "password_recovery_enabled", "account_deletion_enabled"] {
         if let flag = features[key] {
           guard let flag = flag as? NSNumber, CFGetTypeID(flag) == CFBooleanGetTypeID()
           else { return false }
