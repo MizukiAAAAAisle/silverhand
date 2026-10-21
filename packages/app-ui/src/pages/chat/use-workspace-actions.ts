@@ -51,3 +51,5 @@ export function useWorkspaceActions(
     handleWorkspaceDeleted,
   };
 }
+
+export type WorkspaceActions = ReturnType<typeof useWorkspaceActions>;

@@ -18,6 +18,38 @@
   overflow: visible;
   z-index: 1;
 }
+/* Floats over the section sheet's left edge; clipped on the left so the slide
+   never passes over the nav rail, open on the other sides for the shadow. */
+.sidebar-peek {
+  position: absolute;
+  top: 0;
+  bottom: var(--frame-padding, 0px);
+  left: calc(var(--frame-padding, 0px) * 2 + var(--nav-rail-width));
+  z-index: 30;
+  clip-path: inset(-32px -64px -32px 0);
+  pointer-events: none;
+}
+.sidebar-peek[data-state="closed"] {
+  visibility: hidden;
+  transition: visibility 0s var(--sidebar-anim-ms);
+}
+/* Same edge as every floating surface, so it reads as a layer over the page
+   rather than the page being cut. Its corners match the surface it lands on
+   (the pane, or iris's sheet), so the two outlines coincide where they overlap. */
+.sidebar-peek > .sidebar-surface {
+  overflow: hidden;
+  border: var(--floating-border);
+  border-radius: var(--sidebar-peek-radius, var(--pane-radius, var(--card-radius, 0)));
+  corner-shape: var(--pane-corner-shape, normal);
+  box-shadow: var(--shadow-popover);
+}
+/* The floating frame owns edge and corners; the docked pane's own radius and
+   shadow inside it would draw a second, mismatched corner. */
+.sidebar-peek > .sidebar-surface > [data-panel] {
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
 .sidebar-surface {
   height: 100%;
   transform: translate3d(-100%, 0, 0);

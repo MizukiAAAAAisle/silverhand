@@ -323,7 +323,7 @@ function read(relative: string): string {
 
 describe("the sidebar and the shell defer to the seam (the wiring half)", () => {
   const panelSource = read("../../pages/chat/sidebar/direct-messages-panel.tsx");
-  const appSource = read("../../pages/chat/chat-shell.tsx");
+  const appSource = read("../../pages/chat/chat-browse-sidebar.tsx");
 
   it("the section merges through the seam and decides nothing itself", () => {
     expect(panelSource).toContain("mergeDirectLineRows({");

@@ -4,7 +4,7 @@ import { NavigationLaunch } from "@/navigation/launch";
 import { NavigationProvider } from "@/navigation/provider";
 import { PageBarHost } from "@/navigation/page-bar";
 import { PageStack } from "@/navigation/page-stack";
-import { useCompactLayout } from "@/navigation/layout";
+import { useCoarsePointer, useCompactLayout } from "@/navigation/layout";
 import { getPlatform } from "@/platform";
 import { MobileHeader, MobileTabBar } from "@/components/layout/mobile-shell";
 import { useEffect, useState } from "react";
@@ -21,6 +21,11 @@ import { Toaster } from "sonner";
 import { NavRail } from "@/components/layout/nav-rail";
 import { SectionLayer } from "@/components/layout/section-layer";
 import { hasCollapsibleSidebar, SidebarLayoutProvider } from "@/components/layout/sidebar-slot";
+import { SidebarPeekLayer, useSidebarPeek } from "@/components/layout/sidebar-peek";
+import { ChatPeekSidebar } from "@/pages/chat/chat-peek-sidebar";
+import { MembersPeekSidebar } from "@/pages/agent/agent-shell";
+import { ComputersPeekSidebar } from "@/pages/computer/computer-shell";
+import { SettingsPeekSidebar } from "@/pages/settings/settings-shell";
 import { useResizableWidth } from "@/hooks/use-resizable-width";
 import { useSidebarStyle } from "@/features/conversation-shell/use-sidebar-style";
 import { Titlebar } from "@/components/layout/titlebar";
@@ -221,6 +226,7 @@ function RegisteredAppShell({
   darkFrame: boolean;
 }): JSX.Element {
   const compact = useCompactLayout();
+  const coarse = useCoarsePointer();
   const signals = useApplicationSignals();
   const { navRailDots } = signals;
   const appUpdateState = useAppUpdateState();
@@ -255,6 +261,9 @@ function RegisteredAppShell({
     max: 400,
     cssVar: "--sidebar-width",
   });
+  const sidebarPeek = useSidebarPeek(
+    sidebarToggle && !workspaceSidebarVisible && !compact && !coarse,
+  );
   const searchNav: TitlebarSearchNav = {
     onJumpMessage: handleJumpToMessage,
     onOpenConversation: (workspaceId, channelId) => {
@@ -309,7 +318,7 @@ function RegisteredAppShell({
           )}
           <div
             data-app-frame
-            className="flex min-w-0 flex-1 overflow-hidden"
+            className="relative flex min-w-0 flex-1 overflow-hidden"
             style={{
               padding: "0 var(--frame-padding, 0) var(--frame-padding, 0)",
               gap: "var(--frame-padding, 0)",
@@ -324,6 +333,9 @@ function RegisteredAppShell({
                     ? { label: t("ui.updateSilverhand"), onClick: openAppUpdateDialog }
                     : null
                 }
+                onHoverSection={sidebarPeek.hover}
+                onHoverEnd={sidebarPeek.leave}
+                peeking={sidebarPeek.section !== null}
                 onChange={(section) => {
                   if (section === "chat") {
                     nav.toChat();
@@ -400,6 +412,17 @@ function RegisteredAppShell({
                 </>
               </PageStack>
             </div>
+            <SidebarPeekLayer peek={sidebarPeek}>
+              {sidebarPeek.mountedSection === "chat" ? (
+                <ChatPeekSidebar model={conversation.chat} />
+              ) : sidebarPeek.mountedSection === "members" ? (
+                <MembersPeekSidebar />
+              ) : sidebarPeek.mountedSection === "computers" ? (
+                <ComputersPeekSidebar />
+              ) : sidebarPeek.mountedSection === "settings" ? (
+                <SettingsPeekSidebar />
+              ) : null}
+            </SidebarPeekLayer>
           </div>
 
           {/* With a native tab bar this renders nothing and only syncs badges,

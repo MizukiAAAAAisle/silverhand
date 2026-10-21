@@ -43,6 +43,12 @@ interface NavRailProps {
   dots?: Partial<Record<AppSection, boolean>>;
   /** Shown above Settings while an app update awaits the user. */
   update?: { label: string; onClick: () => void } | null;
+  /** Hover of a section button; drives the hidden sidebar's peek. */
+  onHoverSection?: (section: AppSection) => void;
+  onHoverEnd?: () => void;
+  /** A sidebar is peeking: it already names the section, and the shortcut
+   *  tooltip would sit on top of its rows. */
+  peeking?: boolean;
 }
 
 interface NavItem {
@@ -103,11 +109,20 @@ export function deriveNavRailDots(input: {
   };
 }
 
-export function NavRail({ current, onChange, dots, update }: NavRailProps): JSX.Element {
+export function NavRail({
+  current,
+  onChange,
+  dots,
+  update,
+  onHoverSection,
+  onHoverEnd,
+  peeking = false,
+}: NavRailProps): JSX.Element {
   const settingsSelected = current === "settings";
   return (
     <nav
       aria-label={t("ui.appSections")}
+      onPointerLeave={onHoverEnd}
       className="nav-rail flex h-full w-(--nav-rail-width) shrink-0 flex-col items-center gap-2"
     >
       <TooltipProvider>
@@ -115,13 +130,14 @@ export function NavRail({ current, onChange, dots, update }: NavRailProps): JSX.
           const selected = item.id === current;
           const hasDot = dots?.[item.id] === true;
           return (
-            <Tooltip key={item.id}>
+            <Tooltip key={item.id} open={peeking ? false : undefined}>
               <TooltipTrigger asChild>
                 <button
                   type="button"
                   aria-label={item.label}
                   aria-current={selected ? "page" : undefined}
                   onClick={() => onChange(item.id)}
+                  onPointerEnter={() => onHoverSection?.(item.id)}
                   className="nav-rail__item flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors"
                 >
                   {item.icon}
@@ -162,6 +178,7 @@ export function NavRail({ current, onChange, dots, update }: NavRailProps): JSX.
         aria-label={t("ui.settings")}
         aria-current={settingsSelected ? "page" : undefined}
         onClick={() => onChange("settings")}
+        onPointerEnter={() => onHoverSection?.("settings")}
         className={`nav-rail__item ${update ? "" : "mt-auto "}flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors`}
       >
         <SettingsIcon className="size-[18px]" />

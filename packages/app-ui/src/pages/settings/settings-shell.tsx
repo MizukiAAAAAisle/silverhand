@@ -201,6 +201,36 @@ export function SettingsShell(): JSX.Element {
   );
 }
 
+/** The Settings sidebar as the rail's hover peek. */
+export function SettingsPeekSidebar(): JSX.Element {
+  const location = useLocation();
+  const nav = useNav();
+  const sectionParam = new URLSearchParams(location.search).get("settingsSection");
+  const current =
+    location.pathname === "/settings"
+      ? SETTINGS_SECTIONS.includes(sectionParam as SettingsSection)
+        ? (sectionParam as SettingsSection)
+        : readSettingsSection()
+      : null;
+
+  return (
+    <Sidebar
+      name="settings"
+      label={t("settings.sectionsLabel")}
+      width="var(--sidebar-width)"
+      sidebar={
+        <SettingsRailNav
+          section={current}
+          onSelect={(next) => {
+            persistSettingsSection(next);
+            nav.go(`/settings?settingsSection=${next}`);
+          }}
+        />
+      }
+    />
+  );
+}
+
 const sectionChrome = (): Record<SettingsSection, { label: string; icon: ReactNode }> => ({
   account: { label: t("settings.sections.account"), icon: <UserIcon className="size-3.5" /> },
   language: {
