@@ -1,5 +1,6 @@
 import type { ConversationLatest } from "./use-conversation-latest";
 import { t } from "@/lib/i18n";
+import { plainTextFromMarkdown } from "@/lib/plain-text-from-markdown";
 
 /** What ordering needs from a Recent row. Rows come from the conversation lists
  *  the tree already reads; `latest` only adds the preview and the order. */
@@ -26,42 +27,10 @@ export function orderRecentRows<T extends RecentOrderable>(
   );
 }
 
-const REFERENCE_RE = /<silverhand:\/\/(?:human|agent)\/([^>\s]+)>/g;
-const LOCATOR_RE = /<silverhand:\/\/(workspace|dm)\/([^>\s]+)>/g;
-const EMPHASIS_RE = /\*\*|__|`/g;
-
-function decodeSegment(segment: string): string {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return segment;
-  }
-}
-
-/** The preview arrives as the author's Markdown source. One line of muted text
- *  cannot draw chips or emphasis, so references read as the names the message
- *  shows (`@shiki`, `#ui polish`) and emphasis marks drop away. */
-export function plainPreview(source: string): string {
-  return source
-    .replace(REFERENCE_RE, (_, handle: string) => `@${handle}`)
-    .replace(LOCATOR_RE, (_, root: string, path: string) => {
-      const segments = path.split("/").map(decodeSegment);
-      if (root === "dm") {
-        return segments
-          .slice(0, 2)
-          .map((handle) => `@${handle}`)
-          .join(", ");
-      }
-
-      return segments.length >= 2 ? `#${segments[1]}` : segments[0]!;
-    })
-    .replace(EMPHASIS_RE, "");
-}
-
 /** The preview line as text: the message, else how many files it carries. */
 export function recentPreviewText(latest: ConversationLatest): string {
   if (latest.preview) {
-    return plainPreview(latest.preview);
+    return plainTextFromMarkdown(latest.preview);
   }
   if (latest.attachment_count === 0) {
     return "";

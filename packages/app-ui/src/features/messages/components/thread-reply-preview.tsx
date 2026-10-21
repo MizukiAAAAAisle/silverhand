@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { plainTextFromMarkdown } from "@/lib/plain-text-from-markdown";
 import type { MessageAuthorDto, ThreadReplyPreviewRow } from "@silverhand/shared";
 import { AttachmentIcon } from "@/icons";
 import { t } from "@/lib/i18n";
@@ -223,7 +224,9 @@ export function ThreadReplyPreview({
               stretch its line and push the attachment label out to the far
               edge, where the label reads as unrelated to the text it belongs
               to. The label follows the text immediately. */}
-            {row.preview ? <span className="min-w-0 shrink truncate">{row.preview}</span> : null}
+            {row.preview ? (
+              <span className="min-w-0 shrink truncate">{plainTextFromMarkdown(row.preview)}</span>
+            ) : null}
             {row.attachment_count > 0 ? (
               // Label only, capped so it cannot squeeze the reply text to nothing
               // (canonical labels are short, but the cap also holds if a theme

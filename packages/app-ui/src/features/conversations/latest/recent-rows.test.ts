@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import type { ConversationLatest } from "./use-conversation-latest";
 import {
   orderRecentRows,
-  plainPreview,
   recentPreviewText,
   recentTimeLabel,
   type RecentOrderable,
@@ -65,27 +64,6 @@ describe("recentPreviewText", () => {
     );
     expect(recentPreviewText(latest({ attachment_count: 3 }))).toBe("3 attachments");
     expect(recentPreviewText(latest({}))).toBe("");
-  });
-});
-
-describe("plainPreview", () => {
-  it("reads references and locators as the names a message shows", () => {
-    expect(plainPreview("<silverhand://human/shiki> done, cc <silverhand://agent/Alice>")).toBe(
-      "@shiki done, cc @Alice",
-    );
-    expect(plainPreview("see <silverhand://workspace/silverhand/ui%20polish>")).toBe(
-      "see #ui polish",
-    );
-    expect(plainPreview("in <silverhand://workspace/silverhand>")).toBe("in silverhand");
-    expect(plainPreview("<silverhand://dm/Cindy/shiki/abc>")).toBe("@Cindy, @shiki");
-  });
-
-  it("drops emphasis and code marks", () => {
-    expect(plainPreview("commit **`266ab4837`** landed")).toBe("commit 266ab4837 landed");
-  });
-
-  it("leaves a reference cut off by the length cap as written", () => {
-    expect(plainPreview("hi <silverhand://hum")).toBe("hi <silverhand://hum");
   });
 });
 

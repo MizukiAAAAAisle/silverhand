@@ -1,4 +1,5 @@
 import { ThreadsSkeleton } from "./channel-list-skeletons";
+import { plainTextFromMarkdown } from "@/lib/plain-text-from-markdown";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { ClockIcon, SpinnerIcon, ThreadIcon } from "@/icons";
@@ -340,7 +341,7 @@ function ThreadRow({
           <span className="line-clamp-2 wrap-break-word text-sm text-text-primary">
             {renderAuthorName(summary.root_author)}
             <span className="font-semibold">{": "}</span>
-            {summary.root_preview}
+            {plainTextFromMarkdown(summary.root_preview)}
           </span>
         </span>
 

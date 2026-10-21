@@ -1,4 +1,5 @@
 import { useListReadingPosition } from "@/navigation/view-memory";
+import { plainTextFromMarkdown } from "@/lib/plain-text-from-markdown";
 import { useMemo, useState } from "react";
 import { ActivityIcon, CheckIcon, ThreadIcon, WarningIcon } from "@/icons";
 import type { ActivityItemDto, MessageAuthorDto, AgentDto } from "@silverhand/shared";
@@ -724,14 +725,14 @@ function ActivityRow({
             <div className="mt-1 flex items-center gap-2">
               <ThreadIcon aria-hidden className="size-3.5 shrink-0 text-text-muted" />
               <span className="min-w-0 flex-1 truncate text-sm text-text-muted">
-                {item.thread_root_preview}
+                {plainTextFromMarkdown(item.thread_root_preview ?? "")}
               </span>
             </div>
           ) : (
             <SenderMessageLine
               sender={sender}
               objectUrl={senderObjectUrl}
-              content={item.preview ?? location.label}
+              content={item.preview ? plainTextFromMarkdown(item.preview) : location.label}
             />
           )}
 
@@ -741,7 +742,7 @@ function ActivityRow({
             <SenderMessageLine
               sender={sender}
               objectUrl={senderObjectUrl}
-              content={item.preview}
+              content={item.preview ? plainTextFromMarkdown(item.preview) : null}
               className="mt-0.5"
             />
           ) : null}
