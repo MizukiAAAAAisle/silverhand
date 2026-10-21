@@ -1,4 +1,4 @@
-import { RefreshIcon, WarningIcon } from "@/icons";
+import { WarningIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { useBackendInfoSnapshot } from "@/features/computers/hooks/hooks";
 import { useBackendUnreachableSnitch } from "./use-backend-unreachable-snitch";
@@ -38,10 +38,10 @@ function BannerShell({ title, detail, action }: BannerShellProps): JSX.Element {
           <Button
             type="button"
             variant="ghost"
+            size="xs"
             onClick={action.onClick}
-            className="h-7 gap-1.5 px-2 text-xs"
+            className="bg-text-primary px-2.5 text-text-inverse hover:bg-text-primary/85 hover:text-text-inverse"
           >
-            <RefreshIcon className="size-3" />
             {action.label}
           </Button>
         ) : null}
