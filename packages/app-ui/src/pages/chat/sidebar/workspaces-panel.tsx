@@ -2,7 +2,14 @@ import { AnimatePresence } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentDto } from "@silverhand/shared";
-import { FolderIcon, FolderOpenIcon, MoreVerticalIcon, PlusIcon, SettingsIcon } from "@/icons";
+import {
+  FolderIcon,
+  FolderOpenIcon,
+  LeaveIcon,
+  MoreVerticalIcon,
+  PlusIcon,
+  SettingsIcon,
+} from "@/icons";
 import { cn } from "@/lib/cn";
 import { Button } from "@/components/ui/button";
 import { WorkspaceIcon } from "@/components/workspace-icon";
@@ -22,6 +29,9 @@ import {
   type SelectedConversation,
 } from "@/features/workspaces/home-grouping";
 import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
+import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
+import { canLeaveWorkspace } from "@/features/workspaces/workspace-permissions";
+import { LeaveWorkspaceConfirmDialog } from "@/features/workspaces/leave-workspace-confirm-dialog";
 import { t } from "@/lib/i18n";
 
 export interface WorkspaceItem {
@@ -196,6 +206,9 @@ function WorkspaceHeaderRow({
             onSettings={
               isAgentSpace(workspace) ? undefined : () => ctx.onOpenWorkspaceSettings(workspace.id)
             }
+            leaveWorkspace={
+              canLeaveWorkspaceRow(workspace) ? { id: workspace.id, name: workspace.name } : null
+            }
           />
         </span>
       </span>
@@ -225,12 +238,15 @@ function WorkspaceActions({
   title,
   onCreate,
   onSettings,
+  leaveWorkspace,
 }: {
   title: string;
   onCreate: () => void;
   onSettings?: () => void;
+  leaveWorkspace: { id: string; name: string } | null;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout>>();
   const keyboardOpen = useRef(false);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -247,68 +263,115 @@ function WorkspaceActions({
   };
   useEffect(() => () => clearTimeout(closeTimer.current), []);
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
-      <Popover.Trigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="h-6 w-6"
-          aria-label={t("chat.actionsFor", { name: title })}
-          onMouseEnter={show}
-          onMouseLeave={hide}
-          onClick={(event) => {
-            event.preventDefault();
-            keyboardOpen.current = event.detail === 0;
-            show();
-            if (keyboardOpen.current)
-              contentRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
-          }}
-        >
-          <MoreVerticalIcon className="size-3.5" />
-        </Button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          ref={contentRef}
-          align="end"
-          sideOffset={4}
-          onMouseEnter={cancelClose}
-          onMouseLeave={hide}
-          onOpenAutoFocus={(event) => {
-            if (!keyboardOpen.current) event.preventDefault();
-          }}
-          onCloseAutoFocus={(event) => {
-            if (!keyboardOpen.current) event.preventDefault();
-          }}
-          data-popover-frame="menu"
-          className="z-(--z-dialog) min-w-40 bg-bg-floating p-1 shadow-popover"
-        >
-          <button
-            type="button"
-            className="flex w-full items-center gap-2 rounded-(--floating-item-radius) px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
-            onClick={() => {
-              setOpen(false);
-              onCreate();
+    <>
+      <Popover.Root open={open} onOpenChange={setOpen}>
+        <Popover.Trigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-6 w-6"
+            aria-label={t("chat.actionsFor", { name: title })}
+            onMouseEnter={show}
+            onMouseLeave={hide}
+            onClick={(event) => {
+              event.preventDefault();
+              keyboardOpen.current = event.detail === 0;
+              show();
+              if (keyboardOpen.current)
+                contentRef.current?.querySelector<HTMLButtonElement>("button")?.focus();
             }}
           >
-            <PlusIcon className="size-3.5" />
-            {t("chat.createChannel")}
-          </button>
-          {onSettings ? (
+            <MoreVerticalIcon className="size-3.5" />
+          </Button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            ref={contentRef}
+            align="end"
+            sideOffset={4}
+            onMouseEnter={cancelClose}
+            onMouseLeave={hide}
+            onOpenAutoFocus={(event) => {
+              if (!keyboardOpen.current) event.preventDefault();
+            }}
+            onCloseAutoFocus={(event) => {
+              if (!keyboardOpen.current) event.preventDefault();
+            }}
+            data-popover-frame="menu"
+            className="z-(--z-dialog) min-w-40 bg-bg-floating p-1 shadow-popover"
+          >
             <button
               type="button"
               className="flex w-full items-center gap-2 rounded-(--floating-item-radius) px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
               onClick={() => {
                 setOpen(false);
-                onSettings();
+                onCreate();
               }}
             >
-              <SettingsIcon className="size-3.5" />
-              {t("chat.settings")}
+              <PlusIcon className="size-3.5" />
+              {t("chat.createChannel")}
             </button>
-          ) : null}
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+            {onSettings ? (
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-(--floating-item-radius) px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
+                onClick={() => {
+                  setOpen(false);
+                  onSettings();
+                }}
+              >
+                <SettingsIcon className="size-3.5" />
+                {t("chat.settings")}
+              </button>
+            ) : null}
+            {leaveWorkspace ? (
+              <LeaveWorkspaceActionItem
+                workspaceId={leaveWorkspace.id}
+                onSelect={() => {
+                  setOpen(false);
+                  setConfirmingLeave(true);
+                }}
+              />
+            ) : null}
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
+      {leaveWorkspace ? (
+        <LeaveWorkspaceConfirmDialog
+          open={confirmingLeave}
+          onOpenChange={setConfirmingLeave}
+          workspaceId={leaveWorkspace.id}
+          workspaceName={leaveWorkspace.name}
+        />
+      ) : null}
+    </>
+  );
+}
+
+/** Hidden for the owner, whose exit is Delete, and while the role is loading. */
+function LeaveWorkspaceActionItem({
+  workspaceId,
+  onSelect,
+}: {
+  workspaceId: string;
+  onSelect: () => void;
+}): JSX.Element | null {
+  const { data } = useWorkspaceMemberLists(workspaceId);
+  if (!canLeaveWorkspace(data?.viewerRole ?? null)) {
+    return null;
+  }
+
+  return (
+    <>
+      <div className="my-1 h-px bg-border-subtle/60" />
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 rounded-(--floating-item-radius) px-2 py-1.5 text-left text-xs text-text-primary hover:bg-bg-hover"
+        onClick={onSelect}
+      >
+        <LeaveIcon className="size-3.5" />
+        {t("chat.leaveProject")}
+      </button>
+    </>
   );
 }
