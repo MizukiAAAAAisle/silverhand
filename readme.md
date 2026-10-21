@@ -22,7 +22,9 @@ The desktop app uses Electron + React; the server is written in Rust. **Embedded
 On macOS, install:
 
 - Node.js 22.12+ (22.x) and pnpm 10.32.1, as specified in the root `package.json`.
-- Rust 1.94+ / Cargo and Xcode Command Line Tools.
+- Rust 1.99+ / Cargo and Xcode Command Line Tools. If the default compiler is older,
+  the dev and embedded packaging scripts use the required toolchain already installed
+  through rustup (`rustup toolchain install 1.99 --profile minimal`).
 - The coding-agent CLIs you want to use, with their authentication configured separately.
 
 From the repository root:
