@@ -1,4 +1,5 @@
 import type { ConversationLatest } from "./use-conversation-latest";
+import { t } from "@/lib/i18n";
 
 /** What ordering needs from a Recent row. Rows come from the conversation lists
  *  the tree already reads; `latest` only adds the preview and the order. */
@@ -66,7 +67,7 @@ export function recentPreviewText(latest: ConversationLatest): string {
     return "";
   }
 
-  return latest.attachment_count === 1 ? "Attachment" : `${latest.attachment_count} attachments`;
+  return t("common.attachmentCount", { count: latest.attachment_count });
 }
 
 /** Today shows the time, older messages the date. */

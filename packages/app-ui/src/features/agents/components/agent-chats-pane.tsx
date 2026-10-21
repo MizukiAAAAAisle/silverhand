@@ -74,6 +74,7 @@ import {
   type AgentChatRowAccess,
   type ViewerParticipation,
 } from "../model/audit-participation";
+import { t } from "@/lib/i18n";
 
 interface AgentChatsPaneProps {
   agentId: string;
@@ -153,10 +154,10 @@ export function AgentChatsPane({ agentId, onOpenChat }: AgentChatsPaneProps): JS
     return <AgentChatsSkeleton />;
   }
   if (chatsQuery.isError) {
-    return <PaneNote>Couldn’t load this agent’s chats.</PaneNote>;
+    return <PaneNote>{t("agents.couldntLoadThisAgents")}</PaneNote>;
   }
   if (!chats || chats.length === 0) {
-    return <PaneNote>This agent has no conversations yet.</PaneNote>;
+    return <PaneNote>{t("agents.thisAgentHasNo")}</PaneNote>;
   }
 
   return (
@@ -241,7 +242,7 @@ function groupAgentChats(chats: readonly AgentAuditChatSummary[]): AgentChatGrou
 
   const groups = [...byWorkspace.values()];
   if (directs.length > 0) {
-    groups.push({ key: "direct", label: "Direct messages", chats: directs });
+    groups.push({ key: "direct", label: t("agents.directMessages"), chats: directs });
   }
   return groups;
 }
@@ -258,10 +259,10 @@ function PaneNote({ children }: { children: ReactNode }): JSX.Element {
  *  permissions machinery — except that "we couldn't find out" must never be
  *  dressed up as "you're not in it": the second is a claim, the first is a
  *  temporary failure the viewer can retry by reopening the page. */
-const BLOCKED_TITLE: Record<AgentChatBlockedReason, string> = {
-  "not-a-participant": "You’re not in this conversation.",
-  unverified: "Couldn’t check your access to this conversation.",
-};
+const blockedTitle = (): Record<AgentChatBlockedReason, string> => ({
+  "not-a-participant": t("agents.youreNotInThis"),
+  unverified: t("agents.couldntCheckYourAccess"),
+});
 
 /**
  * How one row names itself, derived in a SINGLE narrowing of the placement union:
@@ -371,7 +372,7 @@ function ChatRow({
     <li>
       <div
         className={cn(COLLECTION_CARD_CLASS, inner, "text-text-muted")}
-        title={access.kind === "blocked" ? BLOCKED_TITLE[access.reason] : undefined}
+        title={access.kind === "blocked" ? blockedTitle()[access.reason] : undefined}
       >
         {body}
       </div>

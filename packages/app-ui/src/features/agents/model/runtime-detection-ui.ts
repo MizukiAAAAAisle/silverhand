@@ -1,4 +1,5 @@
 import type { RuntimeAvailabilityState } from "@silverhand/shared";
+import { t } from "@/lib/i18n";
 
 // Pure decision core for the create-dialog runtime picker (#task:1376). Kept
 // out of the component so the load-bearing rule — detection may *disable* a
@@ -57,9 +58,9 @@ export function runtimeChipDisabled(
 export function runtimeSectionHint(mode: RuntimePickerMode): string | null {
   switch (mode) {
     case "offline":
-      return "Connect the computer to detect runtimes";
+      return t("agents.connectTheComputerTo");
     case "probe-failed":
-      return "Couldn't check runtimes — use Recheck";
+      return t("agents.couldntCheckRuntimesUse");
     default:
       return null;
   }

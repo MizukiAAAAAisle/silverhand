@@ -2,6 +2,7 @@ import { CopyFeedbackIcon } from "./copy-feedback-icon";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { CodeIcon, DiagramIcon, ExpandIcon, ZoomInIcon, ZoomOutIcon } from "@/icons";
 import { MermaidLightbox } from "./mermaid-lightbox";
+import { t, useLocale } from "@/lib/i18n";
 
 /**
  * Renders a ```mermaid fenced block as an actual diagram (#task:1322), inside its
@@ -168,6 +169,7 @@ export function mermaidScrollOwnerForZoom(_zoom: number): "document" {
 export function MermaidDiagram({ code }: { code: string }): JSX.Element {
   const [state, setState] = useState<RenderState>({ status: "pending" });
   // Bumped whenever the app theme changes so the render effect re-fires.
+  const locale = useLocale();
   const [themeTick, setThemeTick] = useState(0);
   // View + zoom are per-block session state, deliberately NOT reset when `code`
   // changes: a streaming edit re-renders the same diagram, and yanking the
@@ -232,7 +234,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
     let cancelled = false;
     const source = code.trim();
     if (!source) {
-      setState({ status: "error", message: "empty diagram" });
+      setState({ status: "error", message: t("messages.emptyDiagram") });
       return;
     }
     setState({ status: "pending" });
@@ -254,7 +256,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, [code, themeTick]);
+  }, [locale, code, themeTick]);
 
   const onCopy = useCallback(async () => {
     const text = code.trim();
@@ -277,7 +279,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
         <div className="code-block__header">
           <span className="code-block__lang">mermaid</span>
           <span className="mermaid-fallback__note" title={state.message}>
-            Unable to render. Source shown
+            {t("messages.unableToRenderSource")}
           </span>
         </div>
         <pre>
@@ -299,7 +301,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             flip-button: both destinations stay visible and directly clickable,
             and the active segment names the current view, so the switch subsumes
             a separate static tag rather than sitting beside it. */}
-        <div className="mermaid-block__switch" role="group" aria-label="View">
+        <div className="mermaid-block__switch" role="group" aria-label={t("messages.view")}>
           <button
             type="button"
             className="mermaid-block__seg"
@@ -322,7 +324,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
             onClick={() => setView("code")}
           >
             <CodeIcon className="size-3" />
-            Code
+            {t("messages.code")}
           </button>
         </div>
         {/* RIGHT: view-scoped actions. Zoom + fullscreen belong to the diagram
@@ -338,7 +340,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                   "Zoom " prefix gives screen readers "Zoom 150%"); reset is by
                   stepping down with `−`. */}
               <span className="mermaid-block__zoom">
-                <span className="sr-only">Zoom </span>
+                <span className="sr-only">{t("messages.zoom")} </span>
                 {Math.round(zoom * 100)}%
               </span>
               <button
@@ -348,8 +350,8 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 data-sticker-size="md"
                 onClick={() => setZoomIndex((i) => Math.max(0, i - 1))}
                 disabled={!diagramReady || zoomIndex === 0}
-                aria-label="Zoom out"
-                title="Zoom out"
+                aria-label={t("messages.zoomOut")}
+                title={t("messages.zoomOut")}
               >
                 <ZoomOutIcon className="size-3" />
               </button>
@@ -360,8 +362,8 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 data-sticker-size="md"
                 onClick={() => setZoomIndex((i) => Math.min(ZOOM_STEPS.length - 1, i + 1))}
                 disabled={!diagramReady || zoomIndex === ZOOM_STEPS.length - 1}
-                aria-label="Zoom in"
-                title="Zoom in"
+                aria-label={t("messages.zoomIn")}
+                title={t("messages.zoomIn")}
               >
                 <ZoomInIcon className="size-3" />
               </button>
@@ -375,8 +377,8 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
                 data-sticker-size="md"
                 onClick={openFullscreen}
                 disabled={!diagramReady}
-                aria-label="Open fullscreen"
-                title="Fullscreen"
+                aria-label={t("messages.openFullscreen")}
+                title={t("messages.fullscreen")}
               >
                 <ExpandIcon className="size-3" />
               </button>
@@ -388,8 +390,8 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
               data-sticker
               data-sticker-size="md"
               onClick={onCopy}
-              title={copied ? "Copied" : "Copy source"}
-              aria-label="Copy source"
+              title={copied ? t("messages.copied") : t("messages.copySource")}
+              aria-label={t("messages.copySource")}
             >
               <CopyFeedbackIcon copied={copied} />
             </button>
@@ -430,7 +432,7 @@ export function MermaidDiagram({ code }: { code: string }): JSX.Element {
           ) : (
             // Pending: the block's own shell is already on screen, so this only
             // has to say the inside is still coming.
-            <span className="mermaid-diagram__pending">Rendering diagram…</span>
+            <span className="mermaid-diagram__pending">{t("messages.renderingDiagram")}</span>
           )}
         </div>
       )}

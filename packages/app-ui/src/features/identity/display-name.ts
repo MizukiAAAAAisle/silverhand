@@ -1,5 +1,6 @@
 import { DISPLAY_NAME_MAX_LENGTH, DisplayNameSchema } from "@silverhand/shared";
 import type { ZodError } from "zod";
+import { t } from "@/lib/i18n";
 
 /**
  * Client-side gate for every `display_name` write, human and agent.
@@ -68,10 +69,10 @@ export function rejectDisplayName(candidate: string): string | null {
 function describeRejection(error: ZodError<string>): string {
   const code = error.issues[0]?.code;
   if (code === "too_big") {
-    return `Display name is limited to ${DISPLAY_NAME_MAX_LENGTH} characters.`;
+    return t("identity.displayNameTooLong", { max: DISPLAY_NAME_MAX_LENGTH });
   }
-  if (code === "too_small") return "Display name cannot be empty.";
+  if (code === "too_small") return t("identity.displayNameCannotBe");
   // The remaining issue is the refinement: invisible characters the
   // viewer cannot see in the field, so the message has to name them.
-  return "Display name cannot contain control characters or line breaks.";
+  return t("identity.displayNameCannotContain");
 }

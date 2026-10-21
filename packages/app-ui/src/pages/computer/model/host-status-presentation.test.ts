@@ -159,13 +159,13 @@ describe("describeAdmissionFailure", () => {
     // where naming that package would point at something it never
     // installed.
     expect(describeAdmissionFailure(mismatch(7, 8), { appManaged: false })).toContain(
-      `Update ${computerCopy.connectionPackageName} on this computer`,
+      `Update ${computerCopy().connectionPackageName} on this computer`,
     );
     expect(describeAdmissionFailure(mismatch(7, 8), { appManaged: true })).toContain(
       "Update Silverhand on this computer",
     );
     expect(describeAdmissionFailure(mismatch(7, 8), { appManaged: true })).not.toContain(
-      computerCopy.connectionPackageName,
+      computerCopy().connectionPackageName,
     );
   });
 });
@@ -256,7 +256,7 @@ describe("copy-gate: no internal jargon in user-facing prose (§7.1)", () => {
   function collectUserFacingCopy(): Array<{ label: string; text: string }> {
     const out: Array<{ label: string; text: string }> = [];
 
-    for (const [key, value] of Object.entries(computerCopy)) {
+    for (const [key, value] of Object.entries(computerCopy())) {
       if (typeof value === "string") {
         out.push({ label: `computerCopy.${key}`, text: value });
       }
@@ -264,15 +264,15 @@ describe("copy-gate: no internal jargon in user-facing prose (§7.1)", () => {
     // Function-valued copy: exercise every branch that produces prose.
     out.push({
       label: "computerCopy.connectedTo",
-      text: computerCopy.connectedTo(SAMPLE_HOST),
+      text: computerCopy().connectedTo(SAMPLE_HOST),
     });
     out.push({
       label: "computerCopy.alreadyConnected(name)",
-      text: computerCopy.alreadyConnected(SAMPLE_HOST),
+      text: computerCopy().alreadyConnected(SAMPLE_HOST),
     });
     out.push({
       label: "computerCopy.alreadyConnected(null)",
-      text: computerCopy.alreadyConnected(null),
+      text: computerCopy().alreadyConnected(null),
     });
 
     // Status-presentation prose: label + detail for every arm.
@@ -350,7 +350,7 @@ describe("copy-gate: no internal jargon in user-facing prose (§7.1)", () => {
     // connection command string is: it is a copy-pasteable name the user
     // types, not prose. Strip the literal (only the literal) so a bare
     // "daemon" anywhere else in the same sentence still trips the gate.
-    const prose = text.split(computerCopy.connectionPackageName).join("");
+    const prose = text.split(computerCopy().connectionPackageName).join("");
     for (const { name, re } of JARGON) {
       expect(re.test(prose), `${label} = "${text}" leaks internal term "${name}"`).toBe(false);
     }

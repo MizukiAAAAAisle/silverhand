@@ -48,6 +48,7 @@ import {
   openAppUpdateDialog,
   useAppUpdateState,
 } from "@/features/app-update/app-update-store";
+import { t } from "@/lib/i18n";
 
 export { LAST_CHANNEL_KEY, clearPlaceMemory };
 
@@ -117,7 +118,7 @@ export function App({
   if (!viewer.data) {
     return (
       <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
-        Loading
+        {t("common.loading")}
       </div>
     );
   }
@@ -299,7 +300,7 @@ function RegisteredAppShell({
               dots={navRailDots}
               update={
                 hasActionableUpdate(appUpdateState)
-                  ? { label: "Update Silverhand", onClick: openAppUpdateDialog }
+                  ? { label: t("ui.updateSilverhand"), onClick: openAppUpdateDialog }
                   : null
               }
               onChange={(section) => {

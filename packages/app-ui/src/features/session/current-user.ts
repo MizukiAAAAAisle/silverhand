@@ -1,3 +1,4 @@
+import { t } from "@/lib/i18n";
 /**
  * The current viewer's user id, as resolved from the main-process
  * desktop auth session.
@@ -30,7 +31,7 @@ export function getCurrentUserId(): string | null {
 }
 
 export const CURRENT_USER_DISPLAY_NAME = "you" as const;
-export const CURRENT_USER_SUBTITLE = "You" as const;
+export const currentUserSubtitle = () => t("common.you");
 
 /**
  * Displayed label for rows whose author has been lost (pre-multi-human
@@ -43,7 +44,7 @@ export const CURRENT_USER_SUBTITLE = "You" as const;
  * write to whoever happened to be signed in (Alice audit 2026-06-03
  * #task:857 P0.5 / #2).
  */
-export const UNKNOWN_USER_DISPLAY_NAME = "Unknown user" as const;
+export const unknownUserDisplayName = () => t("common.unknownUser");
 
 /**
  * Type narrowing: is the supplied user id the current viewer?
@@ -75,7 +76,7 @@ export type UserNameResolver = (userId: string) => string | null;
  * Render a human author's display name.
  *
  * Resolution order:
- *   1. `null`/`undefined` → {@link UNKNOWN_USER_DISPLAY_NAME}. Legacy
+ *   1. `null`/`undefined` → {@link unknownUserDisplayName}. Legacy
  *      rows whose author was never recorded. Do NOT collapse to "you".
  *   2. Viewer's own id → the viewer's display name (defaults to "you"
  *      sentinel). Stable across renders even if the directory hasn't
@@ -90,7 +91,7 @@ export function formatUserDisplayName(
   userId: string | null | undefined,
   resolver?: UserNameResolver,
 ): string {
-  if (userId === null || userId === undefined) return UNKNOWN_USER_DISPLAY_NAME;
+  if (userId === null || userId === undefined) return unknownUserDisplayName();
   if (isCurrentUserId(userId)) return currentUserDisplayName;
   if (resolver) {
     const resolved = resolver(userId);

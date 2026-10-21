@@ -4,6 +4,7 @@ import type {
   AttachmentListItemSource,
   UserDto,
 } from "@silverhand/shared";
+import { localeTag, t } from "@/lib/i18n";
 
 /**
  * Pure helpers for the channel Attachments panel: sender resolution and
@@ -161,11 +162,11 @@ function dayLabel(
   appearedAt: number,
   locale: string | undefined,
 ): string {
-  if (key === todayKey) return "Today";
-  if (key === yesterdayKey) return "Yesterday";
+  if (key === todayKey) return t("channels.today");
+  if (key === yesterdayKey) return t("channels.yesterday");
   // Full date for older rows — the panel is a reference index, so a
   // localized `Jul 12, 2026` reads faster than an ISO string.
-  return new Date(appearedAt).toLocaleDateString(locale, {
+  return new Date(appearedAt).toLocaleDateString(locale ?? localeTag, {
     year: "numeric",
     month: "short",
     day: "numeric",

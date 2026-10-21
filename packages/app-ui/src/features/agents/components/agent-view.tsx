@@ -18,7 +18,7 @@ import { AgentActivityPane } from "./agent-activity-pane";
 import { AgentActivityTimeline, AgentStreamActivityTimeline } from "./agent-activity-timeline";
 import { AgentChatsPane } from "./agent-chats-pane";
 import { AGENT_PANE_INSET } from "../model/agent-pane-layout";
-import { AGENT_SECTIONS, AgentSectionTabs, type AgentSection } from "./agent-section-tabs";
+import { agentSections, AgentSectionTabs, type AgentSection } from "./agent-section-tabs";
 import { useAgent, useAgentRuntimeState } from "../hooks/hooks";
 import {
   canAuditAgentChats,
@@ -26,6 +26,7 @@ import {
   canViewAgentFiles,
 } from "../model/permissions";
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
+import { t } from "@/lib/i18n";
 
 const SECTION_STORAGE_KEYS = {
   full: "silverhand:layout.agent-section",
@@ -37,7 +38,7 @@ export type AgentViewMode = "full" | "side";
 function readSection(mode: AgentViewMode): AgentSection {
   try {
     const raw = localStorage.getItem(SECTION_STORAGE_KEYS[mode]);
-    if (AGENT_SECTIONS.some((section) => section.id === raw)) {
+    if (agentSections().some((section) => section.id === raw)) {
       return raw as AgentSection;
     }
   } catch {
@@ -97,8 +98,10 @@ export function AgentView({
   const visibleSections =
     mode === "side"
       ? visibleAgentSideSections(canViewFiles, canManageSchedules)
-      : AGENT_SECTIONS.filter((item) => !item.ownerOnly || canAuditChats).map((item) => item.id);
-  const sections = visibleSections.map((id) => AGENT_SECTIONS.find((item) => item.id === id)!);
+      : agentSections()
+          .filter((item) => !item.ownerOnly || canAuditChats)
+          .map((item) => item.id);
+  const sections = visibleSections.map((id) => agentSections().find((item) => item.id === id)!);
   const effectiveSection = visibleSections.some((id) => id === section)
     ? section
     : mode === "side"
@@ -182,7 +185,7 @@ export function AgentView({
         <ProfileSkeleton agent />
       ) : (
         <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-          Agent not found.
+          {t("agents.agentNotFound")}
         </div>
       )}
     </AgentPageLayout>
@@ -293,7 +296,7 @@ function AgentContextActivity({
   if (!conversationId) {
     return (
       <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
-        Open a channel to see this agent's activity there.
+        {t("agents.openAChannelTo")}
       </div>
     );
   }
@@ -304,7 +307,7 @@ function AgentContextActivity({
   if (!runtimeState.participations.some((item) => item.conversation_id === conversationId)) {
     return (
       <div className="flex flex-1 items-center justify-center px-6 text-center text-xs text-text-muted">
-        {agent.display_name || agent.name} is not in this channel.
+        {t("agents.notInChannel", { name: agent.display_name || agent.name })}
       </div>
     );
   }
@@ -361,9 +364,7 @@ function AgentSchedulesPermissionState({ loading }: { loading: boolean }): JSX.E
       className="flex flex-col items-center gap-2 border border-border-subtle bg-bg-floating/50 px-4 py-10 text-center"
     >
       <LockIcon className="size-6 text-text-muted" />
-      <p className="max-w-md text-sm text-text-primary">
-        Schedules are private to this agent's owner.
-      </p>
+      <p className="max-w-md text-sm text-text-primary">{t("agents.schedulesArePrivateTo")}</p>
     </div>
   );
 }
@@ -379,9 +380,7 @@ function AgentWorkspaceFilesPermissionState({ loading }: { loading: boolean }): 
       className="flex flex-col items-center gap-2 border border-border-subtle bg-bg-floating/50 px-4 py-10 text-center"
     >
       <LockIcon className="size-6 text-text-muted" />
-      <p className="max-w-md text-sm text-text-primary">
-        Agent workspace files are private to this agent's owner.
-      </p>
+      <p className="max-w-md text-sm text-text-primary">{t("agents.agentWorkspaceFilesAre")}</p>
     </div>
   );
 }

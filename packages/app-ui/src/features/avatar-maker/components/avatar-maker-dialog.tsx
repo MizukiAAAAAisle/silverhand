@@ -15,20 +15,21 @@ import {
 } from "../model/avatar-config";
 import { renderAvatarPng } from "../model/render-avatar-png";
 import { AvatarConfigPreview } from "./avatar-config-preview";
+import { t } from "@/lib/i18n";
 
-const CATEGORY_LABELS: Record<string, string> = {
-  eyebrows: "Brows",
-  eyes: "Eyes",
-  nose: "Nose",
-  mouth: "Mouth",
-  hair: "Hair",
-  glasses: "Glasses",
-  headwear: "Headwear",
-  status: "Mood",
-  gesture: "Gesture",
-  buddy: "Buddy",
-  background: "Color",
-};
+const categoryLabels = (): Record<string, string> => ({
+  eyebrows: t("avatarMaker.brows"),
+  eyes: t("avatarMaker.eyes"),
+  nose: t("avatarMaker.nose"),
+  mouth: t("avatarMaker.mouth"),
+  hair: t("avatarMaker.hair"),
+  glasses: t("avatarMaker.glasses"),
+  headwear: t("avatarMaker.headwear"),
+  status: t("avatarMaker.mood"),
+  gesture: t("avatarMaker.gesture"),
+  buddy: t("avatarMaker.buddy"),
+  background: t("avatarMaker.color"),
+});
 
 const BACKGROUND_TAB = "background";
 
@@ -159,7 +160,7 @@ function AvatarMakerBody({
       const png = await renderAvatarPng(config);
       await onSave({ config, png });
     } catch {
-      setError("Couldn't save the avatar. Try again.");
+      setError(t("avatarMaker.couldntSaveTheAvatar"));
       setSaving(false);
     }
   };
@@ -167,7 +168,7 @@ function AvatarMakerBody({
   return (
     <div className="flex min-w-0 flex-col">
       <DialogHeader className="px-5 pt-4 pb-3">
-        <DialogTitle>Make an avatar</DialogTitle>
+        <DialogTitle>{t("avatarMaker.makeAnAvatar")}</DialogTitle>
       </DialogHeader>
 
       <div className="avatar-maker-body">
@@ -178,11 +179,11 @@ function AvatarMakerBody({
           <div className="avatar-maker-actions">
             <Button variant="neutral" size="sm" onClick={() => setConfig(randomAvatarConfig())}>
               <RandomizeIcon className="size-3.5" />
-              Random
+              {t("avatarMaker.random")}
             </Button>
             <Button variant="neutral" size="sm" onClick={() => setConfig(defaultAvatarConfig())}>
               <UndoIcon className="size-3.5" />
-              Reset
+              {t("avatarMaker.reset")}
             </Button>
           </div>
         </div>
@@ -190,7 +191,7 @@ function AvatarMakerBody({
         <div
           role="tablist"
           aria-orientation="vertical"
-          aria-label="Avatar parts"
+          aria-label={t("avatarMaker.avatarParts")}
           className="avatar-maker-tabs"
         >
           {tabs.map((id) => (
@@ -207,21 +208,21 @@ function AvatarMakerBody({
                   : "text-text-secondary hover:bg-bg-hover/60 hover:text-text-primary",
               )}
             >
-              {CATEGORY_LABELS[id] ?? id}
+              {categoryLabels()[id] ?? id}
             </button>
           ))}
         </div>
 
         <div
           role="radiogroup"
-          aria-label={CATEGORY_LABELS[tab] ?? tab}
+          aria-label={categoryLabels()[tab] ?? tab}
           className="avatar-maker-grid"
         >
           {tab === BACKGROUND_TAB
             ? AVATAR_LIBRARY.backgrounds.map((color, index) => (
                 <PartTile
                   key={color}
-                  label={`Color ${index + 1}`}
+                  label={t("avatarMaker.colorN", { n: index + 1 })}
                   selected={config.bg === index}
                   onSelect={() => setConfig((current) => ({ ...current, bg: index }))}
                 >
@@ -237,7 +238,7 @@ function AvatarMakerBody({
                     ? [
                         <PartTile
                           key="none"
-                          label="None"
+                          label={t("avatarMaker.none")}
                           selected={config.parts[tab] === -1}
                           onSelect={() => selectPart(-1)}
                         >
@@ -248,7 +249,7 @@ function AvatarMakerBody({
                   ...category.parts.map((_, index) => (
                     <PartTile
                       key={index}
-                      label={`${CATEGORY_LABELS[tab] ?? tab} ${index + 1}`}
+                      label={`${categoryLabels()[tab] ?? tab} ${index + 1}`}
                       selected={config.parts[tab] === index}
                       onSelect={() => selectPart(index)}
                     >
@@ -267,10 +268,10 @@ function AvatarMakerBody({
           </p>
         ) : null}
         <Button variant="cancel" onClick={onCancel} disabled={saving}>
-          Cancel
+          {t("common.cancel")}
         </Button>
         <Button variant="primary" onClick={() => void save()} disabled={saving}>
-          {saving ? "Saving…" : "Use avatar"}
+          {saving ? t("avatarMaker.saving") : t("avatarMaker.useAvatar")}
         </Button>
       </div>
     </div>

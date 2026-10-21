@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { t } from "@/lib/i18n";
 
 interface Blocker {
   id: string;
@@ -44,10 +45,10 @@ function BlockerGroup({ label, items }: { label: string; items: Blocker[] }): JS
 function BlockerList({ blockers }: { blockers: Blockers }): JSX.Element {
   return (
     <div className="flex flex-col gap-3 text-xs text-text-muted">
-      <p>Resolve the following before deleting:</p>
-      <BlockerGroup label="Projects to transfer or delete" items={blockers.workspaces} />
+      <p>{t("settings.delete.resolveFirst")}</p>
+      <BlockerGroup label={t("settings.delete.projects")} items={blockers.workspaces} />
       <BlockerGroup
-        label="Agents to delete"
+        label={t("settings.delete.agents")}
         items={blockers.agents.map((a) => ({ id: a.id, name: `@${a.name}` }))}
       />
     </div>
@@ -65,9 +66,9 @@ export function DeleteAccountSection({ handle }: { handle: string }): JSX.Elemen
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="min-w-0">
-        <p className="text-xs font-medium text-text-secondary">Delete account</p>
+        <p className="text-xs font-medium text-text-secondary">{t("settings.delete.title")}</p>
         <p className="text-(length:--text-meta) text-text-muted">
-          Permanently delete this account.
+          {t("settings.delete.permanent")}
         </p>
       </div>
       <Button
@@ -78,7 +79,7 @@ export function DeleteAccountSection({ handle }: { handle: string }): JSX.Elemen
           setOpen(true);
         }}
       >
-        Delete account
+        {t("settings.delete.title")}
       </Button>
       <DeleteAccountDialog
         open={open}
@@ -135,12 +136,12 @@ function DeleteAccountDialog({
         try {
           setConflict((JSON.parse(err.body) as { blockers: Blockers }).blockers);
         } catch {
-          setError("Your account still owns projects or agents.");
+          setError(t("settings.delete.ownsThings"));
         }
       } else if (err instanceof ApiError && err.status === 403) {
-        setError("Password or handle is incorrect.");
+        setError(t("settings.delete.incorrect"));
       } else {
-        setError("Could not delete your account. Try again.");
+        setError(t("settings.delete.failed"));
       }
       setPending(false);
     }
@@ -150,11 +151,10 @@ function DeleteAccountDialog({
     <Dialog open={open} onOpenChange={(next) => (pending ? undefined : onOpenChange(next))}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Delete your account?</DialogTitle>
+          <DialogTitle>{t("settings.delete.confirmTitle")}</DialogTitle>
         </DialogHeader>
         <DialogDescription className="text-sm leading-relaxed text-text-muted">
-          Account data, memberships, and computers will be removed. Messages and attachments remain
-          in their conversations. This action cannot be undone.
+          {t("settings.delete.confirmBody")}
         </DialogDescription>
         {blocked && shown ? (
           <BlockerList blockers={shown} />
@@ -167,7 +167,7 @@ function DeleteAccountDialog({
               void submit();
             }}
           >
-            <Label htmlFor={`${id}-password`}>Password</Label>
+            <Label htmlFor={`${id}-password`}>{t("appShell.password")}</Label>
             <Input
               id={`${id}-password`}
               type="password"
@@ -178,7 +178,7 @@ function DeleteAccountDialog({
               required
               maxLength={1024}
             />
-            <Label htmlFor={`${id}-handle`}>{`Type your handle “${handle}” to confirm`}</Label>
+            <Label htmlFor={`${id}-handle`}>{t("settings.delete.typeHandle", { handle })}</Label>
             <Input
               id={`${id}-handle`}
               autoComplete="off"
@@ -196,7 +196,7 @@ function DeleteAccountDialog({
         ) : null}
         <DialogFooter>
           <Button variant="cancel" onClick={() => onOpenChange(false)} disabled={pending}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           {blocked ? null : (
             <Button
@@ -205,7 +205,7 @@ function DeleteAccountDialog({
               form={`${id}-form`}
               disabled={pending || !password || typed !== handle}
             >
-              {pending ? "Deleting…" : "Delete account"}
+              {pending ? t("settings.delete.deleting") : t("settings.delete.title")}
             </Button>
           )}
         </DialogFooter>

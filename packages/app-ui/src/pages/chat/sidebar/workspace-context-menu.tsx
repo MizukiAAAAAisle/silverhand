@@ -6,6 +6,7 @@ import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
 import { canLeaveWorkspace } from "@/features/workspaces/workspace-permissions";
 import { LeaveWorkspaceConfirmDialog } from "@/features/workspaces/leave-workspace-confirm-dialog";
 import { WorkspaceMuteMenuItem } from "../../../features/conversation-shell/components/channel-attention-surfaces";
+import { t } from "@/lib/i18n";
 
 /**
  * The container row's right-click menu — the container species' menu, mounted on
@@ -93,7 +94,7 @@ function WorkspaceLeaveMenuItem({
 
   return (
     <AppContextMenuItem icon={<LeaveIcon className="size-3.5" />} onSelect={onSelect}>
-      Leave project
+      {t("chat.leaveProject")}
     </AppContextMenuItem>
   );
 }

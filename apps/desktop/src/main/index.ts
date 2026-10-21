@@ -196,6 +196,7 @@ import {
   APP_UPDATE_STATE_CHANNEL,
   registerAppUpdateIpcHandlers,
 } from "./update/app-update-ipc.js";
+import { nativeCopy, setNativeLocale } from "./shell/native-copy.js";
 
 const nodeSystemCaActivation = enableNodeSystemCa();
 
@@ -2115,6 +2116,7 @@ function createWindow(): void {
  */
 function buildAppMenu(): Menu {
   const isMac = process.platform === "darwin";
+  const labels = nativeCopy();
 
   // macOS convention: "Settings" lives in the App menu directly under
   // About, with the standard Cmd+, accelerator. Electron's
@@ -2126,11 +2128,11 @@ function buildAppMenu(): Menu {
         submenu: [
           { role: "about" },
           ...(appUpdate
-            ? [{ label: "Check for Updates…", click: () => checkForUpdatesFromMenu() }]
+            ? [{ label: labels.checkForUpdates, click: () => checkForUpdatesFromMenu() }]
             : []),
           { type: "separator" },
           {
-            label: "Settings",
+            label: labels.settings,
             accelerator: "CmdOrCtrl+,",
             click: () => openSettings(),
           },
@@ -2162,10 +2164,10 @@ function buildAppMenu(): Menu {
   // File/Quit items or claim Ctrl+W. Mirrors the `appMenuItem` split above.
   const fileMenuItem: MenuItemConstructorOptions = isMac
     ? {
-        label: "File",
+        label: labels.file,
         submenu: [
           {
-            label: "Close",
+            label: labels.close,
             accelerator: "CmdOrCtrl+W",
             click: (_item, browserWindow) => {
               if (browserWindow instanceof BrowserWindow) {
@@ -2182,7 +2184,7 @@ function buildAppMenu(): Menu {
     fileMenuItem,
     { role: "editMenu" },
     {
-      label: "View",
+      label: labels.view,
       submenu: [
         { role: "reload" },
         { role: "forceReload" },
@@ -2280,6 +2282,12 @@ function closeTargetFor(window: BrowserWindow): CloseTarget {
 function handleContextualClose(triggeringWindow: BrowserWindow): void {
   contextualClose.begin(closeTargetFor(triggeringWindow));
 }
+
+guardedIpc.on("app:set-locale", (_event, value: unknown) => {
+  if (setNativeLocale(value)) {
+    Menu.setApplicationMenu(buildAppMenu());
+  }
+});
 
 guardedIpc.on("shortcut:contextual-close-result", (event, reqId: unknown, outcome: unknown) => {
   if (typeof reqId !== "string") return;

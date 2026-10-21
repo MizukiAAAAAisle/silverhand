@@ -16,6 +16,7 @@ import {
 } from "../../../features/computers/hooks/hooks";
 import { computerCopy } from "../../../features/computers/model/computer-copy";
 import { HostSection, Banner } from "./host-section";
+import { t } from "@/lib/i18n";
 
 /** The proxy form lists every known runtime kind (availability-agnostic:
  *  proxying is a host-network concern, not a "can we spawn it" concern),
@@ -59,8 +60,8 @@ export function ProxySection({
 
   if (!online) {
     return (
-      <HostSection title={computerCopy.proxyTitle} collapsible defaultOpen={false}>
-        <p className="text-sm text-text-muted">{computerCopy.proxyOfflineHint}</p>
+      <HostSection title={computerCopy().proxyTitle} collapsible defaultOpen={false}>
+        <p className="text-sm text-text-muted">{computerCopy().proxyOfflineHint}</p>
       </HostSection>
     );
   }
@@ -100,12 +101,12 @@ export function ProxySection({
       // between load and save) — show the same connect hint once, without
       // caching offline anywhere. Any other failure surfaces inline.
       if (isHostProxyOfflineError(err)) {
-        setError(computerCopy.proxyOfflineHint);
+        setError(computerCopy().proxyOfflineHint);
       } else {
         setError(
           err instanceof Error && err.message
-            ? `Could not save proxy settings. (${err.message})`
-            : "Could not save proxy settings. Please try again.",
+            ? t("computers.proxySaveFailedDetail", { detail: err.message })
+            : t("computers.couldNotSaveProxy"),
         );
       }
     }
@@ -115,7 +116,7 @@ export function ProxySection({
   const saving = saveMutation.isPending;
 
   return (
-    <HostSection title={computerCopy.proxyTitle} collapsible defaultOpen={false}>
+    <HostSection title={computerCopy().proxyTitle} collapsible defaultOpen={false}>
       {settingsLoading ? (
         <ProxySkeleton />
       ) : query.isError ? (
@@ -125,17 +126,17 @@ export function ProxySection({
         // any other failure is a real load error. Durable offline is the
         // availability gate above, not this branch.
         isHostProxyOfflineError(query.error) ? (
-          <Banner tone="muted">{computerCopy.proxyOfflineHint}</Banner>
+          <Banner tone="muted">{computerCopy().proxyOfflineHint}</Banner>
         ) : (
           <Banner tone="error">
-            Could not load proxy settings.
+            {t("computers.couldNotLoadProxy")}
             {query.error instanceof Error ? ` (${query.error.message})` : ""}
           </Banner>
         )
       ) : (
         <form onSubmit={handleSubmit} className="grid gap-5">
           <div className="grid gap-2">
-            <Label htmlFor="proxy-url">Proxy URL</Label>
+            <Label htmlFor="proxy-url">{t("computers.proxyUrl")}</Label>
             {/* v6.9 (#task:917, shiki computer-pane review): proxy URLs
                 are host:port / scheme strings — make the input read as a
                 config value, not prose. `font-mono` on the field itself
@@ -159,7 +160,7 @@ export function ProxySection({
 
           <div className="grid gap-2">
             <div className="flex items-center justify-between gap-3">
-              <Label>Enabled runtimes</Label>
+              <Label>{t("computers.enabledRuntimes")}</Label>
               <button
                 type="button"
                 disabled={!proxyEnabled}
@@ -170,7 +171,7 @@ export function ProxySection({
                   setProxyRuntimes(allChecked ? new Set() : new Set(PROXY_RUNTIMES));
                 }}
               >
-                {allChecked ? "Clear all" : "Select all"}
+                {allChecked ? t("computers.clearAll") : t("computers.selectAll")}
               </button>
             </div>
 
@@ -244,7 +245,7 @@ export function ProxySection({
               })}
             </div>
             {!proxyEnabled ? (
-              <p className="text-xs text-text-muted">Add a Proxy URL before selecting runtimes.</p>
+              <p className="text-xs text-text-muted">{t("computers.addAProxyUrl")}</p>
             ) : null}
           </div>
 
@@ -258,7 +259,7 @@ export function ProxySection({
               ) : saved ? (
                 <span className="inline-flex items-center gap-1.5 text-success">
                   <SuccessIcon className="size-3.5" />
-                  Saved
+                  {t("computers.saved")}
                 </span>
               ) : null}
             </div>
@@ -273,7 +274,7 @@ export function ProxySection({
               ) : (
                 <SaveIcon className="size-3.5" />
               )}
-              {saving ? "Saving..." : "Save settings"}
+              {saving ? t("computers.saving") : t("computers.saveSettings")}
             </Button>
           </div>
         </form>

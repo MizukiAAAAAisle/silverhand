@@ -22,6 +22,7 @@ import { SelectionActionButton } from "./selection-toolbar";
 import type { ChannelReference } from "./channel-ref";
 import type { WorkspaceChannelReference } from "./conversation-ref";
 import type { StaticTaskRefSummary } from "./task-ref";
+import { t } from "@/lib/i18n";
 
 /** Per-diagram pre-render budget (#task:1322). A diagram that doesn't settle
  *  within this bound is treated as failed → falls back to source, so a single
@@ -75,13 +76,13 @@ function formatCaptureFailure(err: unknown): string {
   if (typeof Event !== "undefined" && err instanceof Event) {
     const target = err.target as HTMLImageElement | null;
     const src = target && "src" in target ? target.src : "";
-    if (src) return `The image failed to load: ${truncate(src, 96)}`;
-    return `The image failed to load (${err.type})`;
+    if (src) return t("messages.imageFailedSrc", { src: truncate(src, 96) });
+    return t("messages.imageFailedType", { type: err.type });
   }
   if (err && typeof err === "object") {
     const e = err as { message?: unknown; type?: unknown };
     if (typeof e.message === "string" && e.message.length > 0) return e.message;
-    if (typeof e.type === "string") return `Event ${e.type}`;
+    if (typeof e.type === "string") return t("messages.eventType", { type: e.type });
   }
   return "unknown_error";
 }
@@ -387,7 +388,7 @@ export function ImagePreviewModal({
     try {
       const result = await getPlatform().files.copyPngExport({ pngBytes });
       if (result.ok) {
-        toast.success("Image copied to clipboard");
+        toast.success(t("messages.imageCopiedToClipboard"));
         onExportComplete?.();
         onOpenChange(false);
       } else {
@@ -407,7 +408,9 @@ export function ImagePreviewModal({
         suggestedName,
       });
       if (result.ok) {
-        toast.success(result.path ? "Saved to " + result.path : "Saved");
+        toast.success(
+          result.path ? t("messages.savedTo", { path: result.path }) : t("messages.saved"),
+        );
         onExportComplete?.();
         onOpenChange(false);
       } else if ("canceled" in result && result.canceled) {
@@ -431,10 +434,10 @@ export function ImagePreviewModal({
         >
           <div className="flex items-center gap-2">
             <Dialog.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
-              Image Preview
+              {t("messages.imagePreview")}
             </Dialog.Title>
             <Dialog.Close
-              aria-label="Close"
+              aria-label={t("common.close")}
               data-sticker-close
               data-sticker
               data-sticker-size="md"
@@ -445,7 +448,7 @@ export function ImagePreviewModal({
             </Dialog.Close>
           </div>
           <Dialog.Description className="mt-1 text-xs text-text-muted">
-            {messages.length === 0 ? "Select at least one message" : ""}
+            {messages.length === 0 ? t("messages.selectAtLeastOne") : ""}
           </Dialog.Description>
 
           <div
@@ -454,14 +457,14 @@ export function ImagePreviewModal({
           >
             {phase === "rendering" || phase === "idle" ? (
               <div className="flex h-full items-center justify-center text-xs text-text-muted">
-                Rendering…
+                {t("messages.rendering")}
               </div>
             ) : phase === "error" ? (
               <div className="flex h-full items-center justify-center text-xs text-error">
-                Couldn't render: {error}
+                {t("messages.renderFailed", { error: String(error) })}
               </div>
             ) : dataUrl ? (
-              <img src={dataUrl} alt="export preview" className="block max-w-full" />
+              <img src={dataUrl} alt={t("messages.exportPreview")} className="block max-w-full" />
             ) : null}
           </div>
 
@@ -472,7 +475,7 @@ export function ImagePreviewModal({
             {shareImage ? (
               <SelectionActionButton
                 rank="primary"
-                label="Share"
+                label={t("messages.share")}
                 icon={<ShareIcon className="size-3.5" />}
                 disabled={phase !== "ready" || busy}
                 onClick={onShare}
@@ -481,13 +484,13 @@ export function ImagePreviewModal({
               <>
                 <SelectionActionButton
                   rank="secondary"
-                  label="Copy"
+                  label={t("messages.copy")}
                   disabled={phase !== "ready" || busy}
                   onClick={onCopy}
                 />
                 <SelectionActionButton
                   rank="primary"
-                  label="Save"
+                  label={t("common.save")}
                   disabled={phase !== "ready" || busy}
                   onClick={onSave}
                 />

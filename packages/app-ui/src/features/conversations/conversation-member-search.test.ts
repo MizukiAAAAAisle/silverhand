@@ -10,6 +10,7 @@ vi.mock("react", async (original) => ({
   ...(await original<typeof import("react")>()),
   useMemo: <T>(compute: () => T) => compute(),
   useState: <T>(initial: T) => [initial, vi.fn()],
+  useSyncExternalStore: <T>(_subscribe: unknown, getSnapshot: () => T) => getSnapshot(),
 }));
 vi.mock("../workspaces/hooks", () => ({
   useWorkspaceMemberLists: () => ({
@@ -39,6 +40,7 @@ vi.mock("./use-add-conversation-member", () => ({
   },
 }));
 import { ConversationMemberSearch } from "./add-conversation-member-popover";
+import { t } from "@/lib/i18n";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -59,7 +61,7 @@ describe("inline member search uses the existing add authority", () => {
     expect(view.props.autoFocus).toBe(false);
     expect(view.props.onQueryChange).toBe(query);
     const groups = view.props.groups as MemberCandidateGroup[];
-    expect(groups.map((g) => g.label)).toEqual(["AGENTS"]);
+    expect(groups.map((g) => g.label)).toEqual([t("conversations.agents")]);
     expect(groups[0]!.items).toEqual([{ kind: "agent", agent: { id: "own" } }]);
     view.props.onPick(groups[0]!.items[0]);
     await vi.waitFor(() =>
@@ -76,7 +78,10 @@ describe("inline member search uses the existing add authority", () => {
     });
     expect(view.props.autoFocus).toBe(true);
     const groups = view.props.groups as MemberCandidateGroup[];
-    expect(groups.map((g) => g.label)).toEqual(["AGENTS", "HUMANS"]);
+    expect(groups.map((g) => g.label)).toEqual([
+      t("conversations.agents"),
+      t("conversations.humans"),
+    ]);
     expect(groups[0]!.items).toContainEqual({ kind: "agent", agent: { id: "foreign" } });
     view.props.onPick(groups[1]!.items[1]);
     await vi.waitFor(() =>

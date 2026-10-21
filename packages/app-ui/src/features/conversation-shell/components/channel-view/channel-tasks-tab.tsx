@@ -18,6 +18,7 @@ import {
   useCreateTaskSubmit,
   type CreateTaskTarget,
 } from "@/features/tasks/components/create-task-dialog";
+import { t } from "@/lib/i18n";
 
 /**
  * The conversation's Tasks tab (#task:2121) — the five-column status kanban
@@ -108,7 +109,7 @@ export function ChannelTasksTab({ container, onOpenTask }: ChannelTasksTabProps)
         baselineFilters={baselineFilters}
         workspaceOptions={workspaceOptions}
         channelOptions={channelOptions}
-        allChannelsLabel="All"
+        allChannelsLabel={t("conversationShell.all")}
         people={people}
       />
 

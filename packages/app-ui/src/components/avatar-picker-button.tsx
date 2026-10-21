@@ -2,6 +2,7 @@ import { useRef, type ReactNode } from "react";
 import { CameraIcon, EditIcon, UploadIcon } from "@/icons";
 import { AppDropdownMenu, AppDropdownMenuItem } from "@/components/menus/app-context-menu";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 export interface AvatarPickerButtonProps {
   /**
@@ -118,13 +119,13 @@ export function AvatarPickerButton({
       {onMake ? (
         <AppDropdownMenu align="start" contentClassName="min-w-[160px]" trigger={trigger}>
           <AppDropdownMenuItem icon={makeIcon} onSelect={onMake}>
-            Make avatar
+            {t("ui.makeAvatar")}
           </AppDropdownMenuItem>
           <AppDropdownMenuItem
             icon={<CameraIcon className="size-3.5" />}
             onSelect={() => inputRef.current?.click()}
           >
-            Upload photo
+            {t("ui.uploadPhoto")}
           </AppDropdownMenuItem>
         </AppDropdownMenu>
       ) : (

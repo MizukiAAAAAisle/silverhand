@@ -44,6 +44,7 @@ import {
   resolveTopShiftAction,
   shouldRemountForJump,
 } from "@/features/conversation-shell/model/message-list-virtualization";
+import { t } from "@/lib/i18n";
 
 // ── Message list ────────────────────────────────────────────────────────
 
@@ -862,7 +863,7 @@ export function MessageList({
             role="status"
             className="pointer-events-none absolute inset-x-0 top-(--pane-chrome-height,0px) text-center text-xs text-text-muted"
           >
-            Loading earlier messages…
+            {t("conversationShell.loadingEarlierMessages")}
           </div>
         ) : null}
 
@@ -873,8 +874,16 @@ export function MessageList({
             data-sticker
             data-sticker-size="lg"
             data-sticker-tone="neutral"
-            aria-label={shouldResetToLatest ? "Jump to latest" : "Scroll to bottom"}
-            title={shouldResetToLatest ? "Jump to latest" : "Scroll to bottom"}
+            aria-label={
+              shouldResetToLatest
+                ? t("conversationShell.jumpToLatest")
+                : t("conversationShell.scrollToBottom")
+            }
+            title={
+              shouldResetToLatest
+                ? t("conversationShell.jumpToLatest")
+                : t("conversationShell.scrollToBottom")
+            }
             onClick={() => {
               // Back-to-bottom is ONE command: cancel the jump + arm the bottom
               // intent first (both branches), then obtain the tail window. The

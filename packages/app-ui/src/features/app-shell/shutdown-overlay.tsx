@@ -1,5 +1,6 @@
 import { PowerIcon } from "@/icons";
 import { useShutdownProgress } from "./effects";
+import { t } from "@/lib/i18n";
 
 export function ShutdownOverlay() {
   const shutdownStep = useShutdownProgress();
@@ -20,7 +21,7 @@ export function ShutdownOverlay() {
             <PowerIcon className="size-5" />
           </div>
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-text-primary">Quitting Silverhand</p>
+            <p className="text-sm font-semibold text-text-primary">{t("appShell.quitting")}</p>
             <p className="mt-1 text-xs leading-5 text-text-muted">{shutdownStep}</p>
           </div>
         </div>

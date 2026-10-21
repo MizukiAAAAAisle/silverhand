@@ -8,6 +8,7 @@ import { AvatarPickerButton } from "@/components/avatar-picker-button";
 import { AvatarMakerSheet } from "@/features/avatar-maker/components/avatar-maker-sheet";
 import { avatarDesignField } from "@/features/avatar-maker/model/avatar-design-wire";
 import { useUploadAgentAvatar } from "../hooks/hooks";
+import { t } from "@/lib/i18n";
 
 interface EditableAgentAvatarProps {
   agentId: string;
@@ -82,7 +83,9 @@ export function EditableAgentAvatar({
   // 56px frame clip. ariaLabel carries the verbose screen-reader
   // text. Cindy review #task:314: "Change photo" overflowed and was
   // cut horizontally even at 56px once uppercase tracking was applied.
-  const pickerAriaLabel = hasAvatar ? `Change avatar for @${alt}` : `Add avatar for @${alt}`;
+  const pickerAriaLabel = hasAvatar
+    ? t("agents.changeAvatarFor", { name: alt })
+    : t("agents.addAvatarFor", { name: alt });
 
   return (
     <div className="flex flex-col items-center gap-1.5">
@@ -158,29 +161,29 @@ export function formatAvatarMutationError(err: unknown): string {
     const code = parseErrorCode(err.body);
     switch (code) {
       case "avatar_too_large":
-        return "Avatar must be 5 MB or smaller.";
+        return t("agents.avatarMustBe5");
       case "avatar_unsupported_type":
-        return "Avatar must be a PNG, JPEG, GIF, or WEBP image.";
+        return t("agents.avatarMustBeA");
       case "avatar_missing":
-        return "Avatar file is empty.";
+        return t("agents.avatarFileIsEmpty");
       case "avatar_storage_failed":
-        return "Storage backend failed to write the avatar. Try again.";
+        return t("agents.storageBackendFailedTo");
       default:
         // Fall through to status-based messages.
         break;
     }
     switch (err.status) {
       case 401:
-        return "Sign-in expired. Reload the app and try again.";
+        return t("agents.signInExpiredReload");
       case 403:
-        return "You no longer have permission to edit this agent's avatar.";
+        return t("agents.youNoLongerHave");
       case 404:
-        return "This agent no longer exists.";
+        return t("agents.thisAgentNoLonger");
       default:
-        return `Failed to update avatar (HTTP ${err.status}).`;
+        return t("settings.profile.avatarFailedStatus", { status: err.status });
     }
   }
-  return "Failed to update avatar.";
+  return t("agents.failedToUpdateAvatar");
 }
 
 function parseErrorCode(body: string): string | null {

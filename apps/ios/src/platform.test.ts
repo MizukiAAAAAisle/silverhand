@@ -16,6 +16,7 @@ function harness() {
     navigationSync: vi.fn(async () => ({ tabBarHeight: 0 })),
     navigationReset: vi.fn(async () => {}),
     navigationAvatar: vi.fn(async () => {}),
+    setLocale: vi.fn(async () => {}),
     titlebar: vi.fn(async () => {}),
     titlebarEndSearch: vi.fn(async () => {}),
     pageBar: vi.fn(async () => {}),
@@ -189,7 +190,10 @@ describe("iOS platform", () => {
     const { native, platform } = harness();
     native.passwordRecovery.mockResolvedValue({ status: 202, bodyText: '{"ok":true}' });
     expect(
-      await platform.client.passwordRecovery({ action: "request", body: '{"email":"u@example.com"}' }),
+      await platform.client.passwordRecovery({
+        action: "request",
+        body: '{"email":"u@example.com"}',
+      }),
     ).toEqual({ status: 202, bodyText: '{"ok":true}' });
     expect(native.passwordRecovery).toHaveBeenCalledWith({
       action: "request",

@@ -1,8 +1,9 @@
 import { SkeletonBlock as Block, SkeletonRegion as Region } from "@/components/layout/skeleton";
 import { COLLECTION_CARD_CLASS } from "@/components/layout/collection-item-card";
+import { t } from "@/lib/i18n";
 export function SavedListSkeleton(): JSX.Element {
   return (
-    <Region label="Loading saved messages">
+    <Region label={t("chat.loadingSavedMessages")}>
       <div className="space-y-2">
         {[2, 1, 3, 2].map((lines, i) => (
           <div key={i} className={`${COLLECTION_CARD_CLASS} px-4 py-3`}>

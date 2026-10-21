@@ -7,6 +7,7 @@ import {
   TASK_STATUS_ICON,
 } from "@/features/tasks/components/task-status-badge";
 import { useUpdateTaskStatus } from "@/features/tasks/hooks/hooks";
+import { t } from "@/lib/i18n";
 
 /**
  * Task tag for a message linked to a task.
@@ -53,7 +54,12 @@ export function MessageTaskTag({
   const assignee = linkedTask.assignee
     ? formatTaskAssignee(linkedTask.assignee, agentsById, userResolver)
     : null;
-  const title = [`Task #${linkedTask.task_number}`, label, assignee, linkedTask.title]
+  const title = [
+    t("messages.taskNumber", { number: linkedTask.task_number }),
+    label,
+    assignee,
+    linkedTask.title,
+  ]
     .filter(Boolean)
     .join(" ");
 
@@ -112,7 +118,10 @@ export function MessageTaskTag({
         // border / colour utilities here — they would fight the tokens.
         data-task-status={status}
         title={title}
-        aria-label={`Task #${linkedTask.task_number} (${label}) — click to change status`}
+        aria-label={t("messages.taskChangeStatus", {
+          number: linkedTask.task_number,
+          status: label,
+        })}
         // Stop the click from reaching the row's selection/jump capture.
         onClick={(e) => e.stopPropagation()}
         className="inline-flex h-4.5 max-w-55 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-(--task-status-radius) px-2 text-(length:--text-meta) font-medium leading-none transition-opacity hover:opacity-80 focus-outline"

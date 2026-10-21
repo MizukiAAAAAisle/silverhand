@@ -3,11 +3,13 @@ import { InfoIcon, OpenExternalIcon } from "@/icons";
 import { getPlatform } from "@/platform";
 import { ExternalLink, PRIVACY_POLICY_URL, SUPPORT_URL } from "@/features/legal/legal-links";
 import { SettingsHeading } from "./settings-heading";
+import { t } from "@/lib/i18n";
 
-const LINKS = [
-  { label: "Privacy Policy", href: PRIVACY_POLICY_URL },
-  { label: "Support", href: SUPPORT_URL },
-] as const;
+const legalLinks = () =>
+  [
+    { label: t("appShell.privacyPolicy"), href: PRIVACY_POLICY_URL },
+    { label: t("settings.about.support"), href: SUPPORT_URL },
+  ] as const;
 
 const ROW = "flex min-h-11 items-center justify-between gap-3 px-3 text-sm";
 
@@ -28,16 +30,19 @@ export function AboutPane(): JSX.Element {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-5 px-5 py-5">
-      <SettingsHeading icon={<InfoIcon className="size-4" />} title="About" />
+      <SettingsHeading
+        icon={<InfoIcon className="size-4" />}
+        title={t("settings.sections.about")}
+      />
 
       <div className="flex max-w-2xl flex-col divide-y divide-border-subtle rounded-(--control-radius) border border-border-subtle">
         {version ? (
           <div className={ROW}>
-            <span className="text-text-secondary">Version</span>
+            <span className="text-text-secondary">{t("settings.about.version")}</span>
             <span className="tabular-nums text-text-primary select-text">{version}</span>
           </div>
         ) : null}
-        {LINKS.map(({ label, href }) => (
+        {legalLinks().map(({ label, href }) => (
           <ExternalLink
             key={href}
             href={href}

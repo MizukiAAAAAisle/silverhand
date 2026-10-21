@@ -11,6 +11,7 @@ import { useAgentPresence, useStopAgent } from "../hooks/hooks";
 import { projectPresence, PRESENCE_TONE_DOT } from "../model/presence-projection";
 import { useAgentAvatarObjectUrl } from "../hooks/avatar-hooks";
 import { DeleteAgentDialog } from "./delete-agent-dialog";
+import { t } from "@/lib/i18n";
 
 interface AgentHeaderProps {
   agent: AgentDto;
@@ -68,8 +69,8 @@ export function AgentHeader({
       {canMessage && onMessageAgent ? (
         <HeaderAction
           compact={compact}
-          label="Message"
-          title={`Message @${agent.name}`}
+          label={t("agents.message")}
+          title={t("agents.messageAgent", { name: agent.name })}
           onClick={() => onMessageAgent(agent.id)}
         >
           <MessageIcon className="size-3.5" />
@@ -77,11 +78,11 @@ export function AgentHeader({
       ) : null}
       <HeaderAction
         compact={compact}
-        label="Stop"
+        label={t("agents.stop")}
         title={
           runningCount === 0
-            ? "Nothing is running"
-            : `Hard-stop ${runningCount} running session${runningCount === 1 ? "" : "s"}`
+            ? t("agents.nothingIsRunning")
+            : t("agents.hardStop", { count: runningCount })
         }
         disabled={runningCount === 0 || stopAgent.isPending}
         onClick={() => stopAgent.mutate()}
@@ -91,8 +92,8 @@ export function AgentHeader({
       {!compact ? (
         <HeaderAction
           compact={compact}
-          label="Delete"
-          title="Delete agent"
+          label={t("agents.delete")}
+          title={t("agents.deleteAgent")}
           destructive
           onClick={() => setDeleteOpen(true)}
         >
@@ -109,7 +110,7 @@ export function AgentHeader({
     compact
       ? null
       : {
-          title: "Members",
+          title: t("agents.members"),
           titleAction: null,
           actions: [
             [
@@ -117,24 +118,24 @@ export function AgentHeader({
                 ? [
                     {
                       id: "message",
-                      label: `Message @${agent.name}`,
+                      label: t("agents.messageAgent", { name: agent.name }),
                       icon: iconMarkup(MessageIcon),
                       primary: true,
                     },
                   ]
                 : []),
               ...(runningCount > 0
-                ? [{ id: "stop", label: "Stop", icon: iconMarkup(PowerIcon) }]
+                ? [{ id: "stop", label: t("agents.stop"), icon: iconMarkup(PowerIcon) }]
                 : []),
               {
                 id: "delete",
-                label: "Delete",
+                label: t("agents.delete"),
                 icon: iconMarkup(DeleteIcon),
                 destructive: true,
               },
             ],
           ],
-          overflow: { label: "More", icon: iconMarkup(MoreIcon) },
+          overflow: { label: t("agents.more"), icon: iconMarkup(MoreIcon) },
           tabs: null,
           addTabs: null,
         },
@@ -177,7 +178,7 @@ export function AgentHeader({
                   ? [
                       {
                         id: "message",
-                        label: `Message @${agent.name}`,
+                        label: t("agents.messageAgent", { name: agent.name }),
                         icon: iconMarkup(MessageIcon),
                       },
                     ]
@@ -186,7 +187,7 @@ export function AgentHeader({
                   ? [
                       {
                         id: "stop",
-                        label: `Hard-stop ${runningCount} running session${runningCount === 1 ? "" : "s"}`,
+                        label: t("agents.hardStop", { count: runningCount }),
                         icon: iconMarkup(PowerIcon),
                       },
                     ]

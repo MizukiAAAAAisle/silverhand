@@ -77,6 +77,7 @@ import {
   useAttachmentBlobToken,
 } from "@/features/attachments/attachment-blob-cache";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
+import { t } from "@/lib/i18n";
 
 interface ChannelAttachmentsPanelProps {
   channelId: string;
@@ -127,7 +128,7 @@ export function ChannelAttachmentsPanel({
       <SidePanelHeader
         onClose={onClose}
         nativeBar={{
-          title: "Attachments",
+          title: t("conversationShell.attachments"),
           subtitle: parentTitle ? `#${parentTitle}` : undefined,
           titleAction: null,
           actions: [],
@@ -137,7 +138,7 @@ export function ChannelAttachmentsPanel({
       >
         <SidePanelHeaderTitle
           icon={<AttachmentIcon className="size-3.5 shrink-0 text-text-muted" />}
-          title="Attachments"
+          title={t("conversationShell.attachments")}
           subtitle={parentTitle ? `#${parentTitle}` : ""}
         />
       </SidePanelHeader>
@@ -289,7 +290,7 @@ export function ChannelAttachmentsContent({
             />
             <DateFilterSelect
               value={filter.time}
-              ariaLabel="Filter attachments by time"
+              ariaLabel={t("conversationShell.filterAttachmentsByTime")}
               triggerClassName="w-auto"
               onChange={(time: DateFilterValue) => setFilter((f) => ({ ...f, time }))}
             />
@@ -302,32 +303,34 @@ export function ChannelAttachmentsContent({
           <AttachmentsSkeleton />
         ) : isError ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-            <p className="text-sm text-text-primary">Couldn’t load attachments</p>
+            <p className="text-sm text-text-primary">
+              {t("conversationShell.couldntLoadAttachments")}
+            </p>
             <p className="text-xs text-text-muted">
-              The attachments index isn’t available yet. Try again shortly.
+              {t("conversationShell.theAttachmentsIndexIsnt")}
             </p>
           </div>
         ) : flatItems.length === 0 ? (
           filterActive ? (
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
               <AttachmentIcon className="size-6 text-text-muted/50" />
-              <p className="text-sm text-text-primary">No matching attachments</p>
-              <p className="text-xs text-text-muted">No files match the current filter.</p>
+              <p className="text-sm text-text-primary">
+                {t("conversationShell.noMatchingAttachments")}
+              </p>
+              <p className="text-xs text-text-muted">{t("conversationShell.noFilesMatchThe")}</p>
               <button
                 type="button"
                 onClick={() => setFilter(ALL_ATTACHMENTS_FILTER)}
                 className="mt-1 rounded-(--control-radius) px-2 py-1 text-xs text-text-secondary hover:bg-bg-hover hover:text-text-primary"
               >
-                Clear filters
+                {t("conversationShell.clearFilters")}
               </button>
             </div>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
               <AttachmentIcon className="size-6 text-text-muted/50" />
-              <p className="text-sm text-text-primary">No attachments yet</p>
-              <p className="text-xs text-text-muted">
-                Files sent in this channel will show up here.
-              </p>
+              <p className="text-sm text-text-primary">{t("conversationShell.noAttachmentsYet")}</p>
+              <p className="text-xs text-text-muted">{t("conversationShell.filesSentInThis")}</p>
             </div>
           )
         ) : (
@@ -417,7 +420,7 @@ function pickAvatarProps(
   agentAvatarUrls: Map<string, string | null>,
   humanAvatarUrls: Map<string, string | null>,
 ): AvatarProps {
-  const label = identity.label ?? "System";
+  const label = identity.label ?? t("conversationShell.system");
   if (identity.kind === "agent" && identity.agentId) {
     const a = agentsById.get(identity.agentId);
     return {
@@ -528,7 +531,10 @@ function SenderFilterSelect({
 }): JSX.Element {
   const maps = { agentsById, humansById };
   const selectedIdentity = value ? resolveSenderIdentity(actorFromFilter(value), maps) : null;
-  const selectedLabel = value == null ? "All senders" : (selectedIdentity?.label ?? "System");
+  const selectedLabel =
+    value == null
+      ? t("conversationShell.allSenders")
+      : (selectedIdentity?.label ?? t("conversationShell.system"));
 
   return (
     <Select.Root
@@ -537,7 +543,7 @@ function SenderFilterSelect({
       onOpenChange={onOpenChange}
     >
       <Select.Trigger
-        aria-label="Filter attachments by sender"
+        aria-label={t("conversationShell.filterAttachmentsBySender")}
         className={cn(FILTER_SELECT_TRIGGER_CLASS, "w-auto max-w-48")}
       >
         <span className="flex min-w-0 items-center gap-1.5">
@@ -571,7 +577,7 @@ function SenderFilterSelect({
         >
           <Select.Viewport className="p-1">
             <FilterSelectItem value="all" icon={<MembersIcon className="size-3.5" />}>
-              All senders
+              {t("conversationShell.allSenders")}
             </FilterSelectItem>
             {isLoading && facets.length === 0 ? (
               // Distinct from a real empty set — a lazy fetch in flight must
@@ -581,12 +587,14 @@ function SenderFilterSelect({
                 className="flex items-center gap-2 px-2 py-1.5 text-xs text-text-muted"
               >
                 <SpinnerIcon aria-hidden className="size-3 motion-safe:animate-spin" />
-                Loading senders…
+                {t("conversationShell.loadingSenders")}
               </div>
             ) : isError && facets.length === 0 ? (
               // Explicit failure, not false-empty; reopening the dropdown
               // retries (see onOpenChange).
-              <div className="px-2 py-1.5 text-xs text-text-muted">Couldn’t load senders</div>
+              <div className="px-2 py-1.5 text-xs text-text-muted">
+                {t("conversationShell.couldntLoadSenders")}
+              </div>
             ) : (
               facets.map((facet) => {
                 const identity = resolveSenderIdentity(facet, maps);
@@ -602,7 +610,7 @@ function SenderFilterSelect({
                     value={facetValue(facet)}
                     icon={<SenderAvatar avatar={avatar} size={16} />}
                   >
-                    {identity.label ?? "System"}
+                    {identity.label ?? t("conversationShell.system")}
                   </FilterSelectItem>
                 );
               })
@@ -652,7 +660,7 @@ function AttachmentRow({
   const isImage = attachment.content_type.startsWith("image/");
   const appeared = dayjs(source.appeared_at);
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  const senderLabel = presentation?.label ?? "System";
+  const senderLabel = presentation?.label ?? t("conversationShell.system");
 
   // Image click flow — prefetch the blob URL BEFORE opening Lightbox so a
   // failed fetch surfaces as a toast (not a silently-closed modal). Only
@@ -766,8 +774,8 @@ function AttachmentRow({
           data-sticker-tone="neutral"
           onClick={() => void saveAttachmentToDisk(attachment)}
           className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus-outline"
-          title={`Download ${attachment.filename}`}
-          aria-label={`Download ${attachment.filename}`}
+          title={t("conversationShell.downloadFile", { file: attachment.filename })}
+          aria-label={t("conversationShell.downloadFile", { file: attachment.filename })}
         >
           <DownloadIcon className="size-3.5" />
         </button>
@@ -780,8 +788,8 @@ function AttachmentRow({
           data-sticker-tone="neutral"
           onClick={onJump}
           className="flex size-7 shrink-0 items-center justify-center text-text-muted hover:text-text-primary focus-outline"
-          title={`Show ${attachment.filename} in conversation`}
-          aria-label={`Show ${attachment.filename} in conversation`}
+          title={t("conversationShell.showInConversation", { file: attachment.filename })}
+          aria-label={t("conversationShell.showInConversation", { file: attachment.filename })}
         >
           <OpenExternalIcon className="size-3.5" />
         </button>

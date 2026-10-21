@@ -6,7 +6,7 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { AuthorAvatarView } from "@/features/messages/components/author-avatar-view";
-import { UNRESOLVED_AGENT_LABEL } from "@/features/messages/model/author-presentation";
+import { unresolvedAgentLabel } from "@/features/messages/model/author-presentation";
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import {
@@ -19,6 +19,7 @@ import {
   getCurrentUserId,
   type UserNameResolver,
 } from "@/features/session/current-user";
+import { t } from "@/lib/i18n";
 
 /**
  * Shared "filter by sender" dropdown — one control, one item design: Humans
@@ -94,7 +95,7 @@ export function SenderFilterSelect({
   users,
   userResolver,
   onChange,
-  ariaLabel = "Sender filter",
+  ariaLabel = t("search.senderFilter"),
 }: {
   value: SenderFilterValue;
   agents: AgentDto[];
@@ -141,11 +142,11 @@ export function SenderFilterSelect({
         >
           <Select.Viewport className="p-1">
             <FilterSelectItem value="all" icon={<SearchIcon className="size-3.5" />}>
-              All senders
+              {t("search.allSenders")}
             </FilterSelectItem>
             <Select.Group>
               <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
-                Humans
+                {t("search.humans")}
               </Select.Label>
               {sortedUsers.length === 0 ? (
                 // Empty is a LOAD WINDOW, not a state, so it offers no option
@@ -167,7 +168,9 @@ export function SenderFilterSelect({
                 // read-failure face wearing one face. Neither may claim the
                 // roster is empty, which it provably never is. It says only
                 // what both windows share: the list is not here.
-                <div className="px-2 py-1.5 text-xs italic text-text-muted">Unavailable</div>
+                <div className="px-2 py-1.5 text-xs italic text-text-muted">
+                  {t("search.unavailable")}
+                </div>
               ) : (
                 sortedUsers.map((user) => (
                   <FilterSelectItem
@@ -189,7 +192,7 @@ export function SenderFilterSelect({
             </Select.Group>
             <Select.Group>
               <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
-                Agents
+                {t("search.agents")}
               </Select.Label>
               {agents.length === 0 ? (
                 // Deliberately NOT the Humans row's wording: an Agent list of
@@ -197,7 +200,9 @@ export function SenderFilterSelect({
                 // no agents), so this row is allowed to assert absence and stays
                 // verbatim (#task:2065, @Paul). Same shape, different claim —
                 // "both groups are empty-ish" is not a reason to unify them.
-                <div className="px-2 py-1.5 text-xs italic text-text-muted">No agents</div>
+                <div className="px-2 py-1.5 text-xs italic text-text-muted">
+                  {t("search.noAgents")}
+                </div>
               ) : (
                 agents.map((agent) => (
                   <FilterSelectItem
@@ -276,12 +281,12 @@ function senderFilterLabel(
       // licence for the weaker claim) rather than inventing a third vocabulary,
       // and never the raw uuid, which names a sender to nobody.
       return {
-        label: UNRESOLVED_AGENT_LABEL,
+        label: unresolvedAgentLabel(),
         icon: (
           <AuthorAvatarView
             avatar={{ variant: "neutral-agent" }}
             size={AVATAR_PX.xs}
-            label={UNRESOLVED_AGENT_LABEL}
+            label={unresolvedAgentLabel()}
           />
         ),
       };
@@ -299,5 +304,5 @@ function senderFilterLabel(
       ),
     };
   }
-  return { label: "All senders", icon: <SearchIcon className="size-3.5" /> };
+  return { label: t("search.allSenders"), icon: <SearchIcon className="size-3.5" /> };
 }

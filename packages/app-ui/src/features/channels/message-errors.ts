@@ -1,6 +1,7 @@
 // Channel agent-mutation error formatting (#task:1292), extracted verbatim from
 // hooks.ts. Leaf module (only depends on the ApiError shape).
 import { ApiError } from "@/lib/api";
+import { t } from "@/lib/i18n";
 
 function parseApiErrorBody(err: ApiError): Record<string, unknown> | null {
   try {
@@ -54,24 +55,24 @@ export function formatStartAgentError(err: unknown): string {
           ? body.message
           : err.body || err.message;
     if (code === "host_attach_pending") {
-      return "Can't start the agent: its computer is not connected yet.";
+      return t("channels.cantStartTheAgent");
     }
     if (code === "workspace_bundle_missing") {
-      return "Can't start the agent: its working directory on that computer isn't usable. Check the computer's disk space and permissions, then try again.";
+      return t("channels.cantStartTheAgent2");
     }
     if (code === "registry_unavailable") {
-      return "Can't start the agent: its computer hasn't finished registering with the server. Try again in a moment.";
+      return t("channels.cantStartTheAgent3");
     }
     if (code === "runtime_binary_missing" || code === "runtime_version_unsupported") {
       // The daemon composes this text from a fixed template (runtime and versions only).
-      return `Can't start the agent: ${detail}`;
+      return t("channels.startFailed", { reason: detail });
     }
     if (code === "workspace_not_provisioned") {
-      return "Can't start the agent: its computer reported an internal error. Try again, and report it if it keeps happening.";
+      return t("channels.cantStartTheAgent4");
     }
-    return `Can't start the agent: ${detail}`;
+    return t("channels.startFailed", { reason: detail });
   }
-  return `Can't start the agent: ${err instanceof Error ? err.message : String(err)}`;
+  return t("channels.startFailed", { reason: err instanceof Error ? err.message : String(err) });
 }
 
 export function formatRemoveAgentError(err: unknown): string {
@@ -81,22 +82,24 @@ export function formatRemoveAgentError(err: unknown): string {
     if (code === "conversation_member_remove_unsupported") {
       // Capability, not kind (#task:2044): a direct pair and a fixed-roster
       // agent-space channel both land here, so the line can't name one of them.
-      return "This conversation's members are fixed and can't be changed.";
+      return t("channels.thisConversationsMembersAre");
     }
     if (code === "conversation_closed") {
-      return "This conversation is closed. Members can't be removed.";
+      return t("channels.thisConversationIsClosed");
     }
-    if (err.status === 403) return "You don't have permission to remove this agent.";
-    if (err.status === 404) return "This agent is no longer a member.";
+    if (err.status === 403) return t("channels.youDontHavePermission");
+    if (err.status === 404) return t("channels.thisAgentIsNo");
     const detail =
       typeof body?.error === "string"
         ? body.error
         : typeof body?.message === "string"
           ? body.message
           : `HTTP ${err.status}`;
-    return `Can't remove the agent: ${detail}`;
+    return t("channels.removeAgentFailed", { reason: detail });
   }
-  return `Can't remove the agent: ${err instanceof Error ? err.message : String(err)}`;
+  return t("channels.removeAgentFailed", {
+    reason: err instanceof Error ? err.message : String(err),
+  });
 }
 
 /**
@@ -117,34 +120,36 @@ export function formatRemoveHumanError(err: unknown): string {
     const code = typeof body?.code === "string" ? body.code : null;
     if (code === "conversation_member_remove_unsupported") {
       // Same capability line as the agent path above — one fact, one wording.
-      return "This conversation's members are fixed and can't be changed.";
+      return t("channels.thisConversationsMembersAre");
     }
     if (code === "conversation_closed") {
-      return "This channel is closed. Members can't be removed.";
+      return t("channels.thisChannelIsClosed");
     }
     if (code === "channel_archived") {
-      return "Restore the channel before changing its members.";
+      return t("channels.restoreTheChannelBefore");
     }
     if (code === "target_outranks_actor") {
-      return "This member holds a higher project role than you.";
+      return t("channels.thisMemberHoldsA");
     }
     if (code === "channel_owner") {
-      return "The owner of a private channel can't be removed.";
+      return t("channels.theOwnerOfA");
     }
     if (code === "last_human_member") {
-      return "The last member of a private channel can't be removed.";
+      return t("channels.theLastMemberOf");
     }
-    if (err.status === 403) return "You don't have permission to remove this member.";
+    if (err.status === 403) return t("channels.youDontHavePermission2");
     // 404 on this route means the CHANNEL is gone, never the member: a target
     // with no membership row is an idempotent 200.
-    if (err.status === 404) return "This channel no longer exists.";
+    if (err.status === 404) return t("channels.thisChannelNoLonger");
     const detail =
       typeof body?.error === "string"
         ? body.error
         : typeof body?.message === "string"
           ? body.message
           : `HTTP ${err.status}`;
-    return `Can't remove the member: ${detail}`;
+    return t("channels.removeMemberFailed", { reason: detail });
   }
-  return `Can't remove the member: ${err instanceof Error ? err.message : String(err)}`;
+  return t("channels.removeMemberFailed", {
+    reason: err instanceof Error ? err.message : String(err),
+  });
 }

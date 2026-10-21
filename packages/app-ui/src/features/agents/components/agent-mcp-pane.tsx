@@ -30,6 +30,7 @@ import { ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { ProfileSection } from "@/features/profile/profile-summary-sections";
 import { useAgentProfileMcp, useMcpProbe } from "../hooks/hooks";
+import { t, withStrong } from "@/lib/i18n";
 
 interface AgentMcpPaneProps {
   agentId: string;
@@ -81,13 +82,17 @@ export function AgentMcpPane({ agentId, runtime }: AgentMcpPaneProps): JSX.Eleme
         <div className="mx-auto max-w-3xl">
           <EmptyCard
             icon={<LockIcon className="size-6 text-text-muted" />}
-            title="MCP config is private"
-            body="Only the agent's creator can view its MCP servers — the raw config may contain secrets."
+            title={t("agents.mcpConfigIsPrivate")}
+            body={t("agents.onlyTheAgentsCreator")}
           />
         </div>
       );
     }
-    return <PaneMessage>Couldn't load MCP config. {String(query.error)}</PaneMessage>;
+    return (
+      <PaneMessage>
+        {t("agents.mcpLoadFailed")} {String(query.error)}
+      </PaneMessage>
+    );
   }
 
   return <ProfileMcpScope agentId={agentId} runtime={runtime} raw={query.data ?? null} />;
@@ -122,12 +127,10 @@ function ProfileMcpScope({
       <header className="flex items-start justify-between gap-4">
         <div className="min-w-0">
           <h2 className="font-serif text-lg font-semibold leading-tight text-text-primary">
-            Profile MCP
+            {t("agents.profileMcp")}
           </h2>
           {runtime !== "pi" ? (
-            <p className="mt-1 text-sm text-text-muted">
-              Global MCP servers, loaded on top of the runtime's own.
-            </p>
+            <p className="mt-1 text-sm text-text-muted">{t("agents.globalMcpServersLoaded")}</p>
           ) : null}
         </div>
         {supported ? <ConfigCheckButton raw={raw} runtime={runtime} /> : null}
@@ -135,37 +138,31 @@ function ProfileMcpScope({
 
       {supported ? (
         <NoticeLine icon={<InfoIcon className="size-3.5 shrink-0" />}>
-          Changes take effect at the agent's <strong>next spawn</strong> — this is not a hot reload.
+          {withStrong(t("agents.mcpNextSpawn"))}
         </NoticeLine>
       ) : (
         <div className={cn(NOTICE_FRAME_CLASS, "text-text-secondary")}>
           <WarningIcon className="mt-0.5 size-3.5 shrink-0 text-error" />
           <span>
             {runtime === "pi" ? (
-              <>MCP is configured through Pi extensions. Profile MCP settings do not apply to Pi.</>
+              <>{t("agents.mcpIsConfiguredThrough")}</>
             ) : (
-              <>
-                Profile MCP is not loaded for <strong>{runtimeLabel(runtime)}</strong> yet. The
-                servers below are kept but <strong>ignored at the next spawn</strong>.
-              </>
+              <>{withStrong(t("agents.mcpUnsupported", { runtime: runtimeLabel(runtime) }))}</>
             )}
           </span>
         </div>
       )}
 
-      <ProfileSection title="Servers">
+      <ProfileSection title={t("agents.servers")}>
         {!parsed.ok ? (
           <div className="flex items-start gap-2 text-sm text-text-secondary">
             <WarningIcon className="size-4 shrink-0 text-error" />
             <span>
-              Can't render a summary — the config isn't valid.{" "}
+              {t("agents.mcpInvalid")}{" "}
               {supported ? (
-                <>
-                  Run <strong>Check config</strong> for the exact error, or expand the raw view
-                  below.
-                </>
+                <>{withStrong(t("agents.mcpRunCheck"))}</>
               ) : (
-                <>Expand the raw view below to inspect it.</>
+                <>{t("agents.expandTheRawView")}</>
               )}
             </span>
           </div>
@@ -236,13 +233,13 @@ function ServerRow({
         {canProbe ? (
           <div className="ml-auto flex shrink-0 items-center gap-1.5">
             <ProbeButton
-              label="Test connection"
+              label={t("agents.testConnection")}
               pending={pendingConnect}
               disabled={probe.isPending}
               onClick={() => probe.mutate({ server_name: name, include_tools: false })}
             />
             <ProbeButton
-              label="List tools"
+              label={t("agents.listTools")}
               pending={pendingTools}
               disabled={probe.isPending}
               onClick={() => probe.mutate({ server_name: name, include_tools: true })}
@@ -259,11 +256,11 @@ function ServerRow({
         <span className="truncate">{target}</span>
       </div>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-(length:--text-meta) text-text-muted">
-        <span title="Private, domain-scoped name handed to the runtime so profile and workspace layers never collide.">
-          runtime: <code className="font-mono">{runtimeName}</code>
+        <span title={t("agents.mcpRuntimeNameHint")}>
+          {t("agents.mcpRuntimeName")} <code className="font-mono">{runtimeName}</code>
         </span>
         {secretCount > 0 ? (
-          <span title="Present but not shown — values may be secrets.">
+          <span title={t("agents.presentButNotShown")}>
             {secretLabel}: {secretCount}
           </span>
         ) : null}
@@ -317,15 +314,17 @@ function ProbeResult({ probe }: { probe: ReturnType<typeof useMcpProbe> }): JSX.
     return (
       <div className="flex items-center gap-1.5 text-(length:--text-meta) text-text-muted">
         <SpinnerIcon className="size-3 shrink-0 animate-spin" />
-        Probing…
+        {t("agents.probing")}
       </div>
     );
   }
   if (probe.isError) {
     const err = probe.error;
     const detail =
-      err instanceof ApiError && err.status === 404 ? "probe endpoint not available" : String(err);
-    return <ProbeLine ok={false}>Probe failed — {detail}</ProbeLine>;
+      err instanceof ApiError && err.status === 404
+        ? t("agents.probeEndpointNotAvailable")
+        : String(err);
+    return <ProbeLine ok={false}>{t("agents.probeFailedDetail", { detail })}</ProbeLine>;
   }
   const result = probe.data;
   if (!result) return null;
@@ -346,7 +345,7 @@ function ProbeResult({ probe }: { probe: ReturnType<typeof useMcpProbe> }): JSX.
   }
   return (
     <ProbeLine ok>
-      Connected
+      {t("agents.connected")}
       {result.server_info?.name ? (
         <span className="text-text-muted">
           {" "}
@@ -369,9 +368,7 @@ function ProbeTools({ tools }: { tools: NonNullable<McpProbeResult["tools"]> }):
         className="flex items-center gap-1.5 text-xs text-success transition-colors"
       >
         <ShieldCheckIcon className="size-3.5 shrink-0" />
-        <span>
-          Connected {list.length} tool{list.length === 1 ? "" : "s"}
-        </span>
+        <span>{t("agents.connectedTools", { count: list.length })}</span>
         {list.length > 0 ? (
           <ChevronRightIcon
             className={cn("size-3.5 text-text-muted transition-transform", open ? "rotate-90" : "")}
@@ -415,17 +412,17 @@ function ProbeLine({ ok, children }: { ok: boolean; children: ReactNode }): JSX.
 function probePhaseLabel(phase: McpProbePhase): string {
   switch (phase) {
     case "parse":
-      return "Config parse failed";
+      return t("agents.configParseFailed");
     case "not_found":
-      return "Server not found in config";
+      return t("agents.serverNotFoundIn");
     case "connect":
-      return "Connection failed";
+      return t("agents.connectionFailed");
     case "initialize":
-      return "Initialize failed";
+      return t("agents.initializeFailed");
     case "tools":
-      return "Tools list failed";
+      return t("agents.toolsListFailed");
     default:
-      return "Probe failed";
+      return t("agents.probeFailed");
   }
 }
 
@@ -493,9 +490,9 @@ function ConfigCheckButton({
         variant="outline"
         size="sm"
         onClick={() => setResult(runConfigCheck(raw, runtime))}
-        title="Static check: well-formed + projectable to this runtime. Does not connect to the server."
+        title={t("agents.staticCheckWellFormed")}
       >
-        Check config
+        {t("agents.checkConfig")}
       </Button>
       {result ? <CheckBadge result={result} /> : null}
     </div>
@@ -507,9 +504,7 @@ function CheckBadge({ result }: { result: ConfigCheckResult }): JSX.Element {
     return (
       <div className="flex items-center gap-1.5 text-xs text-success">
         <ShieldCheckIcon className="size-3.5 shrink-0" />
-        <span>
-          Config OK {result.count} server{result.count === 1 ? "" : "s"}
-        </span>
+        <span>{t("agents.configOk", { count: result.count })}</span>
       </div>
     );
   }
@@ -531,11 +526,13 @@ function RawConfig({ raw }: { raw: string | null }): JSX.Element {
 
   return (
     <ProfileSection
-      title="Raw mcp.json"
-      headerSlot={hasRaw ? <CopyButton text={raw} label="Copy" /> : undefined}
+      title={t("agents.rawMcpJson")}
+      headerSlot={hasRaw ? <CopyButton text={raw} label={t("agents.copy")} /> : undefined}
     >
       {!hasRaw ? (
-        <p className="text-sm text-text-muted">No {MCP_CONFIG_FILENAME} file yet.</p>
+        <p className="text-sm text-text-muted">
+          {t("agents.noConfigFile", { file: MCP_CONFIG_FILENAME })}
+        </p>
       ) : (
         <>
           <button
@@ -546,7 +543,7 @@ function RawConfig({ raw }: { raw: string | null }): JSX.Element {
             <ChevronRightIcon
               className={cn("size-3.5 transition-transform", open ? "rotate-90" : "")}
             />
-            {open ? "Hide" : "Show"} raw config
+            {open ? t("agents.hideRawConfig") : t("agents.showRawConfig")}
           </button>
           {open ? (
             <pre className="mt-2 max-h-96 overflow-auto border border-border-subtle bg-bg-base/60 p-3 font-mono text-xs leading-relaxed text-text-primary">
@@ -565,10 +562,8 @@ function EmptyServers(): JSX.Element {
   return (
     <div className="flex flex-col items-center gap-2 py-6 text-center">
       <IntegrationIcon className="size-6 text-text-muted" />
-      <p className="text-sm text-text-primary">No MCP servers configured</p>
-      <p className="max-w-xs text-xs text-text-muted">
-        Ask this agent to add MCP servers to its profile.
-      </p>
+      <p className="text-sm text-text-primary">{t("agents.noMcpServersConfigured")}</p>
+      <p className="max-w-xs text-xs text-text-muted">{t("agents.askThisAgentTo")}</p>
     </div>
   );
 }
@@ -623,14 +618,14 @@ function CopyButton({ text, label }: { text: string; label: string }): JSX.Eleme
         });
       }}
       className="inline-flex items-center gap-1.5 rounded-(--control-radius) text-(length:--text-meta) text-text-secondary transition-colors hover:text-text-primary focus-outline"
-      title="Copy to clipboard"
+      title={t("agents.copyToClipboard")}
     >
       {copied ? (
         <CheckIcon className="size-3 shrink-0" />
       ) : (
         <CopyIcon className="size-3 shrink-0" />
       )}
-      <span className="truncate">{copied ? "Copied" : label}</span>
+      <span className="truncate">{copied ? t("agents.copied") : label}</span>
     </button>
   );
 }

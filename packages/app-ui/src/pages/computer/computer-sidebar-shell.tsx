@@ -14,6 +14,7 @@ import {
 } from "@/pages/computer/model/host-status-presentation";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 import { useCompactLayout } from "@/navigation/layout";
+import { t } from "@/lib/i18n";
 
 export interface ComputerSidebarShellProps {
   hosts: HostDto[];
@@ -39,12 +40,12 @@ export function ComputerSidebarShell({
 
   const compact = useCompactLayout();
   const [bar, handlers] = nativeActionBar(
-    { title: "Computers", titleAction: null, tabs: null, addTabs: null },
+    { title: t("computers.computers"), titleAction: null, tabs: null, addTabs: null },
     [
       onAddComputer
         ? {
             id: "add",
-            label: computerCopy.addComputer,
+            label: computerCopy().addComputer,
             icon: iconMarkup(PlusIcon),
             run: onAddComputer,
           }
@@ -59,7 +60,7 @@ export function ComputerSidebarShell({
         {isLoading ? (
           <ComputerRowsSkeleton />
         ) : (
-          <p className="px-2 py-1.5 text-xs text-text-muted">No computers yet.</p>
+          <p className="px-2 py-1.5 text-xs text-text-muted">{t("computers.noComputersYet")}</p>
         )}
       </li>
     ) : (
@@ -85,7 +86,7 @@ export function ComputerSidebarShell({
               type="button"
               className="mobile-header-action focus-outline"
               onClick={onAddComputer}
-              aria-label={computerCopy.addComputer}
+              aria-label={computerCopy().addComputer}
             >
               <PlusIcon size={20} strokeWidth={2.25} />
             </button>
@@ -99,7 +100,7 @@ export function ComputerSidebarShell({
   return (
     <DirectorySidebar>
       <SidebarSection
-        label="COMPUTERS"
+        label={t("computers.computers2")}
         icon={<ComputerIcon className="size-3.5" />}
         count={sorted.length}
         collapsible
@@ -113,8 +114,8 @@ export function ComputerSidebarShell({
               size="icon"
               className="h-6 w-6"
               onClick={onAddComputer}
-              aria-label={computerCopy.addComputer}
-              title={computerCopy.addComputer}
+              aria-label={computerCopy().addComputer}
+              title={computerCopy().addComputer}
             >
               <PlusIcon className="size-3.5" />
             </Button>
@@ -170,7 +171,7 @@ function ComputerRow({
   const statusQuery = useHostStatusQuery(host.id, { enabled: !isRevoked });
   const view = statusQuery.data ? describeHostStatus(statusQuery.data) : null;
 
-  const availabilityLabel = isRevoked ? computerCopy.lifecycleRevoked : (view?.label ?? null);
+  const availabilityLabel = isRevoked ? computerCopy().lifecycleRevoked : (view?.label ?? null);
   const pip = isRevoked ? null : view ? TONE_TO_PIP[view.tone] : null;
 
   return (
@@ -197,7 +198,7 @@ function AppManagedBadge(): JSX.Element {
       data-computer-app-managed
       className="rounded-(--control-radius) border border-border-subtle px-1 text-(length:--text-badge) font-semibold uppercase tracking-wide"
     >
-      {computerCopy.appManaged}
+      {computerCopy().appManaged}
     </span>
   );
 }

@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { useLeaveWorkspace } from "./hooks";
+import { t } from "@/lib/i18n";
 
 /**
  * Confirm modal for self-leaving a workspace from the right-click menu. A menu
@@ -53,7 +54,7 @@ export function LeaveWorkspaceConfirmDialog({
     setError(null);
     leaveWorkspace.mutate(workspaceId, {
       onSuccess: () => onOpenChange(false),
-      onError: () => setError("Could not leave this project. Try again."),
+      onError: () => setError(t("workspaces.couldNotLeaveThis")),
     });
   };
 
@@ -61,10 +62,10 @@ export function LeaveWorkspaceConfirmDialog({
     <Dialog open={open} onOpenChange={(next) => (pending ? undefined : onOpenChange(next))}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{`Leave ${workspaceName}?`}</DialogTitle>
+          <DialogTitle>{t("workspaces.leaveTitle", { name: workspaceName })}</DialogTitle>
         </DialogHeader>
         <DialogDescription className="text-sm leading-relaxed text-text-muted">
-          You leave this project and all its channels.
+          {t("workspaces.youLeaveThisProject")}
         </DialogDescription>
         {error ? (
           <p className="text-xs text-error" role="alert">
@@ -73,10 +74,10 @@ export function LeaveWorkspaceConfirmDialog({
         ) : null}
         <DialogFooter>
           <Button variant="cancel" onClick={() => onOpenChange(false)} disabled={pending}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button variant="primary" onClick={onConfirm} disabled={pending}>
-            {pending ? "Leaving…" : "Leave project"}
+            {pending ? t("workspaces.leaving") : t("workspaces.leaveProject")}
           </Button>
         </DialogFooter>
       </DialogContent>

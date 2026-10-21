@@ -40,6 +40,7 @@ import {
 } from "@/features/search/sender-filter-select";
 import { SearchResultsSkeleton } from "@/features/search/search-results-skeleton";
 import { FloatingPaneChrome, PaneHeader, PaneShell } from "../../components/layout/pane-shell";
+import { t } from "@/lib/i18n";
 
 interface SearchPanelProps {
   workspaces: WorkspaceListItem[];
@@ -186,7 +187,7 @@ export function SearchPanel({
       <FloatingPaneChrome>
         <PaneHeader
           icon={<SearchIcon className="size-3.5" />}
-          title="Search"
+          title={t("common.search")}
           count={hasIntent ? results.length + identityCount : undefined}
           trailing={
             <div className="ml-auto">
@@ -209,15 +210,15 @@ export function SearchPanel({
                   resetFilters();
                 }
               }}
-              placeholder="Search people, agents, messages, channels"
+              placeholder={t("chat.searchPeopleAgentsMessages")}
               className="h-10 pl-9 pr-10"
             />
             <button
               type="button"
               onClick={resetFilters}
               disabled={!hasIntent}
-              aria-label="Clear search"
-              title="Clear search"
+              aria-label={t("chat.clearSearch")}
+              title={t("chat.clearSearch")}
               className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-(--control-radius) text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline disabled:pointer-events-none disabled:opacity-0"
             >
               <CloseIcon className="size-4" />
@@ -226,7 +227,7 @@ export function SearchPanel({
 
           <FilterPanel disclosure={filterDisclosure} className="mt-3">
             <div className="flex flex-wrap items-end gap-3">
-              <FilterBlock label="Project" className="w-full sm:w-72">
+              <FilterBlock label={t("chat.project")} className="w-full sm:w-72">
                 <WorkspaceFilterSelect
                   value={workspaceFilter}
                   workspaces={workspaces}
@@ -235,7 +236,7 @@ export function SearchPanel({
                 />
               </FilterBlock>
 
-              <FilterBlock label="Sender" className="w-full sm:w-60">
+              <FilterBlock label={t("chat.sender")} className="w-full sm:w-60">
                 <SenderFilterSelect
                   value={senderFilter}
                   agents={agents}
@@ -245,7 +246,7 @@ export function SearchPanel({
                 />
               </FilterBlock>
 
-              <FilterBlock label="Time" className="w-full sm:w-44">
+              <FilterBlock label={t("chat.time")} className="w-full sm:w-44">
                 <TimeRangeSelect value={timeRange} onChange={setTimeRange} />
               </FilterBlock>
             </div>
@@ -255,29 +256,27 @@ export function SearchPanel({
 
       <div className="search-list min-h-0 flex-1 overflow-y-auto px-4 py-3">
         {hasIntent && identities?.status === "filtered" ? (
-          <p className="mb-3 text-xs text-text-muted">
-            Clear project, sender and time filters to search people and agents.
-          </p>
+          <p className="mb-3 text-xs text-text-muted">{t("chat.clearProjectSenderAnd")}</p>
         ) : null}
         {isError ? (
           <p role="alert" className="mb-3 text-xs text-text-muted">
-            Search failed.{" "}
+            {t("chat.searchFailed")}{" "}
             <button
               type="button"
               className="underline focus-outline"
               onClick={() => void refetch()}
             >
-              Retry
+              {t("common.retry")}
             </button>
           </p>
         ) : null}
         {!hasIntent ? (
-          <EmptyState icon={<SearchIcon className="size-5" />} text="Type to search" />
+          <EmptyState icon={<SearchIcon className="size-5" />} text={t("chat.typeToSearch")} />
         ) : isLoading ? (
           <SearchResultsSkeleton />
         ) : results.length === 0 && identityCount === 0 ? (
           !isError ? (
-            <EmptyState icon={<SearchIcon className="size-5" />} text="No matches" />
+            <EmptyState icon={<SearchIcon className="size-5" />} text={t("chat.noMatches")} />
           ) : null
         ) : (
           <div className="space-y-5">
@@ -383,7 +382,7 @@ function WorkspaceFilterSelect({
 
   return (
     <Select.Root value={value} onValueChange={(v) => onChange(v as WorkspaceFilter)}>
-      <Select.Trigger aria-label="Project filter" className={SELECT_TRIGGER_CLASS}>
+      <Select.Trigger aria-label={t("chat.projectFilter")} className={SELECT_TRIGGER_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
           {selected.icon}
           <span className="truncate">{selected.label}</span>
@@ -401,12 +400,12 @@ function WorkspaceFilterSelect({
         >
           <Select.Viewport className="p-1">
             <SelectItem value="all" icon={<SearchIcon className="size-3.5" />}>
-              All projects
+              {t("chat.allProjects")}
             </SelectItem>
             {agentSpaces.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
-                  Agent Spaces
+                  {t("chat.agentSpaces")}
                 </Select.Label>
                 {agentSpaces.map((workspace) => (
                   <SelectItem
@@ -428,7 +427,7 @@ function WorkspaceFilterSelect({
             {peopleOwned.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
-                  Projects
+                  {t("chat.projects")}
                 </Select.Label>
                 {peopleOwned.map((workspace) => (
                   <SelectItem
@@ -464,7 +463,7 @@ function TimeRangeSelect({
 
   return (
     <Select.Root value={value} onValueChange={(v) => onChange(v as TimeRange)}>
-      <Select.Trigger aria-label="Time filter" className={SELECT_TRIGGER_CLASS}>
+      <Select.Trigger aria-label={t("chat.timeFilter")} className={SELECT_TRIGGER_CLASS}>
         <span className="flex min-w-0 items-center gap-1.5">
           <ClockIcon className="size-3.5 text-text-muted" />
           <span className="truncate">{selected}</span>
@@ -481,7 +480,7 @@ function TimeRangeSelect({
           className={SELECT_CONTENT_CLASS}
         >
           <Select.Viewport className="p-1">
-            {TIME_RANGE_OPTIONS.map((option) => (
+            {timeRangeOptions().map((option) => (
               <SelectItem
                 key={option.value}
                 value={option.value}
@@ -563,13 +562,13 @@ function groupResults(results: SearchResultDto[]): ResultGroup[] {
   return [
     {
       key: "channels",
-      label: "Channels",
+      label: t("chat.channels"),
       icon: <HashIcon className="size-3" />,
       results: channels,
     },
     {
       key: "messages",
-      label: "Messages",
+      label: t("chat.messages"),
       icon: <MessageResultIcon className="size-3" />,
       results: messages,
     },
@@ -616,19 +615,19 @@ function workspaceFilterLabel(
       };
     }
   }
-  return { label: "All projects", icon: <SearchIcon className="size-3.5" /> };
+  return { label: t("chat.allProjects"), icon: <SearchIcon className="size-3.5" /> };
 }
 
-const TIME_RANGE_OPTIONS: Array<{ value: TimeRange; label: string }> = [
-  { value: "all", label: "All time" },
-  { value: "today", label: "Today" },
-  { value: "week1", label: "Last 1 week" },
-  { value: "week2", label: "Last 2 weeks" },
-  { value: "month", label: "Last month" },
+const timeRangeOptions = (): Array<{ value: TimeRange; label: string }> => [
+  { value: "all", label: t("chat.allTime") },
+  { value: "today", label: t("chat.today") },
+  { value: "week1", label: t("chat.last1Week") },
+  { value: "week2", label: t("chat.last2Weeks") },
+  { value: "month", label: t("chat.lastMonth") },
 ];
 
 const TIME_RANGE_LABELS: Record<TimeRange, string> = Object.fromEntries(
-  TIME_RANGE_OPTIONS.map((option) => [option.value, option.label]),
+  timeRangeOptions().map((option) => [option.value, option.label]),
 ) as Record<TimeRange, string>;
 
 function timeRangeBounds(value: TimeRange): { from?: number; to?: number } {

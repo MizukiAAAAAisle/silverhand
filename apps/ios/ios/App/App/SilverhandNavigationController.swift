@@ -70,18 +70,20 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     tabBar.standardAppearance = appearance
     tabBar.scrollEdgeAppearance = appearance
-    let titles = ["Chats", "Activity", "Tasks", "Me"]
+    // Asset names; the visible titles come from `NativeCopy`.
+    let glyphs = ["Chats", "Activity", "Tasks", "Me"]
+    let labels = NativeCopy.tabTitles
     // Each tab is a navigation stack of one page, whose navigation bar
     // carries the page's bars. Pages are pushed and popped in the web view.
-    viewControllers = titles.enumerated().map { index, title in
+    viewControllers = glyphs.enumerated().map { index, glyph in
       let stack = UINavigationController(rootViewController: PageHost())
       stack.setNavigationBarHidden(true, animated: false)
       stack.navigationBar.prefersLargeTitles = true
       stack.interactivePopGestureRecognizer?.isEnabled = false
       if #available(iOS 26.0, *) { stack.interactiveContentPopGestureRecognizer?.isEnabled = false }
       stack.tabBarItem = UITabBarItem(
-        title: title, image: UIImage(named: "Navigation" + title),
-        selectedImage: UIImage(named: "Navigation" + title + "Selected"))
+        title: labels[index], image: UIImage(named: "Navigation" + glyph),
+        selectedImage: UIImage(named: "Navigation" + glyph + "Selected"))
       stack.tabBarItem.tag = index
       return stack
     }
@@ -476,6 +478,13 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   }
 
   // MARK: Tab items
+
+  /// Redraws tab titles after the page reports its language.
+  func applyLocale() {
+    for (stack, title) in zip(viewControllers ?? [], NativeCopy.tabTitles) {
+      stack.tabBarItem.title = title
+    }
+  }
 
   func badges(_ call: CAPPluginCall) {
     guard let owner = call.getString("session"), !invalidatedSessions.contains(owner) else {

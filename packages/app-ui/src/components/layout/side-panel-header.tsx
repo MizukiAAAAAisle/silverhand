@@ -6,6 +6,7 @@ import {
   type PageBarHandlers,
 } from "@/components/layout/native-page-bar";
 import { ArrowLeftIcon, CloseIcon } from "@/icons";
+import { t } from "@/lib/i18n";
 
 /**
  * The fixed-height header row shared by every right-pane side panel — the agent
@@ -97,7 +98,7 @@ function SidePanelHeaderRow({
       {!compact && onBack ? (
         <button
           type="button"
-          aria-label="Back"
+          aria-label={t("common.back")}
           onClick={onBack}
           className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover focus-outline"
         >
@@ -119,8 +120,8 @@ function SidePanelCloseButton({
   return (
     <button
       type="button"
-      aria-label="Close"
-      title="Close"
+      aria-label={t("common.close")}
+      title={t("common.close")}
       onClick={onClose}
       data-sticker-close
       data-sticker

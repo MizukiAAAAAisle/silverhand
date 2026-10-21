@@ -1,15 +1,13 @@
 import dayjs from "dayjs";
 import relativeTime from "dayjs/plugin/relativeTime";
-import "dayjs/locale/zh-cn";
 import { useEffect, useState } from "react";
 
 dayjs.extend(relativeTime);
-dayjs.locale("zh-cn");
 
 const MINUTE = 60_000;
 
 /**
- * Returns ("3 分钟前", "2026-05-02 14:32:01") for an epoch-ms timestamp.
+ * Returns ("3 minutes ago", "2026-05-02 14:32:01") for an epoch-ms timestamp.
  * Re-renders consumers every minute so the relative label stays fresh
  * without each MessageItem mounting its own interval.
  */

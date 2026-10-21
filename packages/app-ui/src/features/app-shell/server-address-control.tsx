@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { validateServerUrlDraft } from "@/features/settings/model/server-url-validation";
 import { describeProfileSaveForGate } from "./backend-unreachable-gate";
+import { t } from "@/lib/i18n";
 
 /** Remote-only auth gates offer an escape to a different self-hosted origin. */
 export function ServerAddressControl({
@@ -32,7 +33,7 @@ export function ServerAddressControl({
         }
       })
       .catch(() => {
-        if (!cancelled) setError("Could not read server address.");
+        if (!cancelled) setError(t("appShell.server.readFailed"));
       });
     return () => {
       cancelled = true;
@@ -48,7 +49,7 @@ export function ServerAddressControl({
         validateServerUrlDraft(draft, { allowInsecureRemote: policy.allow_insecure_remote })
           .kind !== "ok"
       ) {
-        setError("Enter a valid HTTPS server address.");
+        setError(t("appShell.server.invalid"));
         return;
       }
       const result = await getPlatform().client.saveServerConnectionProfile({
@@ -70,10 +71,10 @@ export function ServerAddressControl({
     }
   };
   return (
-    <section className="space-y-2 text-sm" aria-label="Server address">
+    <section className="space-y-2 text-sm" aria-label={t("appShell.server.address")}>
       {editing ? (
         <>
-          <Label htmlFor="login-server">Server address</Label>
+          <Label htmlFor="login-server">{t("appShell.server.address")}</Label>
           <Input
             id="login-server"
             type="url"
@@ -98,7 +99,7 @@ export function ServerAddressControl({
                 void save();
               }}
             >
-              {saving ? "Checking…" : "Save"}
+              {saving ? t("common.checking") : t("common.save")}
             </Button>
             <Button
               type="button"
@@ -111,19 +112,19 @@ export function ServerAddressControl({
                 onEditingChange?.(false);
               }}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
           </div>
         </>
       ) : (
         <div className="flex min-w-0 items-baseline gap-2 text-text-muted">
-          <span className="shrink-0">Server</span>
+          <span className="shrink-0">{t("appShell.server.label")}</span>
           <span className="min-w-0 flex-1 truncate font-medium text-text-primary" title={url}>
-            {url ? url.replace(/^https?:\/\//, "").replace(/\/$/, "") : "Not set"}
+            {url ? url.replace(/^https?:\/\//, "").replace(/\/$/, "") : t("appShell.server.notSet")}
           </span>
           <button
             type="button"
-            aria-label="Change server"
+            aria-label={t("appShell.server.change")}
             className="shrink-0 font-medium text-text-primary underline underline-offset-3 hover:text-text-secondary focus-outline disabled:opacity-50 max-md:min-h-11"
             disabled={saving || disabled}
             onClick={() => {
@@ -132,7 +133,7 @@ export function ServerAddressControl({
               onEditingChange?.(true);
             }}
           >
-            Change
+            {t("common.change")}
           </button>
         </div>
       )}
@@ -160,7 +161,7 @@ export function ServerConnectionStatus({
     return (
       <div role="status" className="mt-3 flex items-center gap-2 text-xs text-text-muted">
         <SpinnerIcon className="size-3.5 animate-spin" aria-hidden="true" />
-        Checking server…
+        {t("appShell.server.checking")}
       </div>
     );
   }
@@ -171,27 +172,28 @@ export function ServerConnectionStatus({
   const secure = /TLS|SSL|certificate|secure connection/i.test(status);
 
   return (
-    <section className="mt-3 flex flex-col gap-2 text-xs" aria-label="Server connection">
+    <section
+      className="mt-3 flex flex-col gap-2 text-xs"
+      aria-label={t("appShell.server.connection")}
+    >
       <div role="alert" className="flex items-start gap-2">
         <ErrorIcon className="mt-px size-3.5 shrink-0 text-error" aria-hidden="true" />
         <p className="min-w-0 leading-relaxed text-text-secondary">
           <span className="font-medium text-text-primary">
-            {secure ? "Secure connection failed." : "Cannot connect to server."}
+            {secure ? t("appShell.server.secureFailed") : t("appShell.server.cannotConnect")}
           </span>{" "}
-          {secure
-            ? "Sign-in is unavailable until the connection can be verified."
-            : "Check your connection or change the server address."}
+          {secure ? t("appShell.server.signInUnavailable") : t("appShell.server.checkConnection")}
         </p>
       </div>
       <div className="flex items-start justify-between gap-3 pl-5.5">
         <details className="min-w-0 text-text-muted">
-          <summary className="cursor-pointer focus-outline">Technical details</summary>
+          <summary className="cursor-pointer focus-outline">{t("common.technicalDetails")}</summary>
           <p className="mt-1 break-words leading-relaxed">{status.replace(/^Error:\s*/, "")}</p>
         </details>
         {onRetry && (
           <Button type="button" variant="neutral" size="sm" className="shrink-0" onClick={onRetry}>
             <RetryIcon className="size-3.5" aria-hidden="true" />
-            Retry
+            {t("common.retry")}
           </Button>
         )}
       </div>

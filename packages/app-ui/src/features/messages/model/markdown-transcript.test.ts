@@ -6,6 +6,7 @@ import {
   formatSenderLabel,
   suggestImageFilename,
 } from "./markdown-transcript";
+import { t } from "@/lib/i18n";
 
 // Transcript format is the contract that distinguishes single-message
 // `Copy markdown` (pure content) from multi-message `Copy markdown`
@@ -130,7 +131,7 @@ describe("formatSenderLabel", () => {
         avatar_url: null,
       },
     });
-    expect(formatSenderLabel(m)).toBe("Unknown agent");
+    expect(formatSenderLabel(m)).toBe(t("messages.unknownAgent"));
   });
 
   it("active user → label without a leading @", () => {
@@ -149,7 +150,7 @@ describe("formatSenderLabel", () => {
         avatar_url: null,
       },
     });
-    expect(formatSenderLabel(m)).toBe("Unknown user");
+    expect(formatSenderLabel(m)).toBe(t("messages.unknownUser"));
   });
 
   it('system row (author === null) → "system"', () => {

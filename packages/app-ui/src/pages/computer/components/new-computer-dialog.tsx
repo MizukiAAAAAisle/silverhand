@@ -229,18 +229,18 @@ export function NewComputerDialog({
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>{computerCopy.dialogTitle}</DialogTitle>
+          <DialogTitle>{computerCopy().dialogTitle}</DialogTitle>
           {phase !== "naming" ? (
-            <DialogDescription>{computerCopy.dialogIntro}</DialogDescription>
+            <DialogDescription>{computerCopy().dialogIntro}</DialogDescription>
           ) : null}
         </DialogHeader>
 
         {phase === "error" ? (
-          <p className="text-sm text-error">{computerCopy.createFailed}</p>
+          <p className="text-sm text-error">{computerCopy().createFailed}</p>
         ) : phase === "creating" || !created ? (
           <div className="flex items-center gap-2 py-6 text-sm text-text-muted">
             <SpinnerIcon className="size-4 animate-spin" />
-            {computerCopy.addComputer}…
+            {computerCopy().addComputer}…
           </div>
         ) : phase === "naming" ? (
           <form
@@ -252,10 +252,10 @@ export function NewComputerDialog({
           >
             <div className="flex items-center gap-2 border-l-[3px] border-success bg-success/10 px-3 py-2 text-sm">
               <span className="size-2 shrink-0 rounded-full bg-success" />
-              <span>{computerCopy.connectedTo(connectedHostname)}</span>
+              <span>{computerCopy().connectedTo(connectedHostname)}</span>
             </div>
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="computer-name">{computerCopy.nameLabel}</Label>
+              <Label htmlFor="computer-name">{computerCopy().nameLabel}</Label>
               <Input
                 id="computer-name"
                 value={name}
@@ -263,7 +263,7 @@ export function NewComputerDialog({
                   setName(e.target.value);
                   setNameError(null);
                 }}
-                placeholder={computerCopy.namePlaceholder}
+                placeholder={computerCopy().namePlaceholder}
                 aria-invalid={nameError ? true : undefined}
                 aria-describedby={nameError ? "computer-name-error" : undefined}
                 autoFocus
@@ -275,7 +275,7 @@ export function NewComputerDialog({
               ) : null}
             </div>
             {finalizeError ? (
-              <p className="text-sm text-error">{computerCopy.finalizeFailed}</p>
+              <p className="text-sm text-error">{computerCopy().finalizeFailed}</p>
             ) : null}
             <div className="mt-1 flex justify-end gap-2">
               {/* Name is required — it's the finalize gate. */}
@@ -284,7 +284,7 @@ export function NewComputerDialog({
                 variant="primary"
                 disabled={rename.isPending || name.trim() === ""}
               >
-                {computerCopy.finish}
+                {computerCopy().finish}
               </Button>
             </div>
           </form>
@@ -299,7 +299,7 @@ export function NewComputerDialog({
 
             <div className="mt-1 flex items-center gap-2 border border-dashed border-border px-3 py-2.5 text-sm text-text-secondary">
               <SpinnerIcon className="size-4 animate-spin text-text-secondary" />
-              {computerCopy.waitingForConnection}…
+              {computerCopy().waitingForConnection}…
             </div>
           </div>
         )}

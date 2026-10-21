@@ -102,6 +102,7 @@ export interface DesktopBridge {
   onContextualClose(handler: (reqId: string) => void): () => void;
 
   respondContextualClose(reqId: string, outcome: "closed-panel" | "background-app"): void;
+  setLocale(locale: "en" | "zh"): void;
   savePngExport(input: {
     pngBytes: Uint8Array;
     suggestedName: string;

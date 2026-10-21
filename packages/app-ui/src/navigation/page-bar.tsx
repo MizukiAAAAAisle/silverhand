@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, type ReactNode 
 import type { PageBarCapability, PageBarEvent, PageBarState } from "@silverhand/client";
 import { getPlatform } from "@/platform";
 import { NavigationContext } from "./provider";
+import { t } from "@/lib/i18n";
 
 /*
  * The page/native boundary for the compact header. A page declares its header
@@ -84,7 +85,11 @@ export class PageBarHub {
     const { canBack } = this.navigation;
     // A pushed page's title is never large.
     const state = bar
-      ? { ...bar, back: canBack ? "Back" : null, largeTitle: canBack ? undefined : bar.largeTitle }
+      ? {
+          ...bar,
+          back: canBack ? t("common.back") : null,
+          largeTitle: canBack ? undefined : bar.largeTitle,
+        }
       : null;
     const serialized = JSON.stringify(state);
     if (serialized !== this.sent) {

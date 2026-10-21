@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 import { Button } from "@/components/ui/button";
+import { t } from "@/lib/i18n";
 
 /**
  * Save / Cancel button pair for profile-card edit sessions (display
@@ -26,7 +27,7 @@ export function CancelButton({
 }): JSX.Element {
   return (
     <Button type="button" variant="cancel" size="xs" onClick={onClick} disabled={disabled}>
-      Cancel
+      {t("common.cancel")}
     </Button>
   );
 }
@@ -49,7 +50,7 @@ export function SaveButton({
       onClick={onClick}
       disabled={disabled || pending}
     >
-      {pending ? "Saving…" : "Save"}
+      {pending ? t("ui.saving") : t("common.save")}
     </Button>
   );
 }

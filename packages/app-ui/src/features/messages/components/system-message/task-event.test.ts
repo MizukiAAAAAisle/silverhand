@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { MessageDtoSchema } from "@silverhand/shared";
 import { CLUSTERABLE_SUBTYPES } from "@/features/messages/model/group-messages";
 import { TaskEventRow } from "./task-event";
+import { t } from "@/lib/i18n";
 
 vi.mock("./shared", () => ({ useUserResolver: () => () => "User" }));
 vi.mock("@/features/messages/components/task-ref", () => ({
@@ -47,10 +48,10 @@ describe("task event meaning", () => {
     "an edit says edited without claiming a status move (enriched=%s)",
     (enriched) => {
       const content = text("task_edit", enriched);
-      expect(content).toContain("edited");
+      expect(content).toContain(t("messages.taskVerb.edited"));
       expect(content).toContain("#42");
       expect(content).not.toContain("→");
-      expect(content).not.toContain("in progress");
+      expect(content).not.toContain(t("messages.taskStatus.inProgress"));
     },
   );
   it.each([false, true])(
@@ -58,8 +59,8 @@ describe("task event meaning", () => {
     (enriched) => {
       const content = text("task_status", enriched);
       expect(content).toContain("→");
-      expect(content).toContain("in progress");
-      expect(content).not.toContain("edited");
+      expect(content).toContain(t("messages.taskStatus.inProgress"));
+      expect(content).not.toContain(t("messages.taskVerb.edited"));
     },
   );
   it("clusters task edits with lifecycle events", () => {

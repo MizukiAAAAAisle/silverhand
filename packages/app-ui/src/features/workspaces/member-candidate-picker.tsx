@@ -18,6 +18,7 @@ import {
   type MemberCandidate,
   type MemberCandidateGroup,
 } from "./member-search";
+import { t } from "@/lib/i18n";
 
 /**
  * The single member picker — a search input that narrows a grouped candidate
@@ -66,7 +67,7 @@ export function MemberCandidatePicker({
   autoFocus = false,
   footer,
   onQueryChange,
-  placeholder = "Search by name or @handle",
+  placeholder = t("workspaces.searchByNameOr"),
 }: {
   /** Candidate pool, already narrowed by the caller's eligibility rules. */
   groups: readonly MemberCandidateGroup[];
@@ -173,10 +174,10 @@ export function MemberCandidatePicker({
   const rows =
     flat.length === 0 ? (
       loading ? (
-        <InlineLoading label="Loading members" />
+        <InlineLoading label={t("workspaces.loadingMembers")} />
       ) : (
         <div className="px-2 py-2 text-center text-xs italic text-text-muted">
-          {normalizedQuery ? "No matches" : emptyHint}
+          {normalizedQuery ? t("workspaces.noMatches") : emptyHint}
         </div>
       )
     ) : (

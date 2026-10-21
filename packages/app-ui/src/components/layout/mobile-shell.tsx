@@ -13,6 +13,7 @@ import { usePageBarClaim } from "@/navigation/page-bar";
 import { useNativeBarPlatform } from "./native-page-bar";
 import { useNav, useRouteState } from "@/router";
 import type { AppSection } from "./nav-rail";
+import { t } from "@/lib/i18n";
 
 /** The section's header, for a page that draws none: Back and the section
  * name. With a native bar it is the bar's fallback, which a page's own
@@ -24,8 +25,7 @@ export function MobileHeader({ hideFallback = false }: { hideFallback?: boolean 
   const { back, canBack } = useNavigationDriver();
   const route = useRouteState();
   const windowChrome = Boolean(getPlatform().shell);
-  const title =
-    route.section === "chat" ? "Chats" : route.section[0]!.toUpperCase() + route.section.slice(1);
+  const title = t(`ui.section.${route.section}`);
   usePageBarClaim(
     native ? { title, titleAction: null, actions: [], tabs: null, addTabs: null } : null,
     {},
@@ -38,7 +38,7 @@ export function MobileHeader({ hideFallback = false }: { hideFallback?: boolean 
     <button
       type="button"
       className="mobile-back no-drag focus-outline"
-      aria-label="Back"
+      aria-label={t("common.back")}
       onClick={back}
     >
       <span className="mobile-back-icon">
@@ -104,12 +104,12 @@ export function MobileTabBar({
   }, [avatarObjectUrl]);
   if (getPlatform().navigation || !showsTabBar(location.pathname, location.search)) return null;
   return (
-    <nav className="mobile-tabbar" aria-label="Main navigation">
+    <nav className="mobile-tabbar" aria-label={t("ui.mainNavigation")}>
       {(
         [
-          { tab: "chat", label: "Chats", Icon: ChatsIcon },
-          { tab: "activity", label: "Activity", Icon: ActivityIcon },
-          { tab: "tasks", label: "Tasks", Icon: TaskIcon },
+          { tab: "chat", label: t("ui.chats"), Icon: ChatsIcon },
+          { tab: "activity", label: t("ui.activity"), Icon: ActivityIcon },
+          { tab: "tasks", label: t("ui.tasks"), Icon: TaskIcon },
         ] as const
       ).map(({ tab, label, Icon }) => (
         <button
@@ -121,7 +121,7 @@ export function MobileTabBar({
         >
           <span className="relative">
             <Icon size={20} />
-            {dots?.[tab] && <span className="mobile-attention" aria-label="Unread" />}
+            {dots?.[tab] && <span className="mobile-attention" aria-label={t("ui.unread")} />}
           </span>
           <span>{label}</span>
         </button>
@@ -137,7 +137,7 @@ export function MobileTabBar({
           avatarObjectUrl={avatarObjectUrl}
           className="rounded-full"
         />
-        <span>Me</span>
+        <span>{t("ui.me")}</span>
       </button>
     </nav>
   );

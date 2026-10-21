@@ -1,0 +1,22 @@
+export const appUpdate = {
+  softwareUpdate: "Software update",
+  installOnQuit: "Install on Quit",
+  restartAndInstall: "Restart and Install",
+  restartNow: "Restart Now",
+  retryDownload: "Retry download",
+  download: "Download",
+  tryAgain: "Try Again",
+  checkForUpdates: "Check for Updates",
+  noNewerVersionIs: "No newer version is available yet.",
+  checkAgain: "Check again",
+  checkingForUpdates: "Checking for updates…",
+  readyRestart: "Silverhand {version} is ready. Restart to finish updating.",
+  notChecked: "Silverhand {version} has not checked for updates yet.",
+  latest: "Silverhand {version} is the latest version.",
+  available: "Silverhand {version} is available.",
+  downloading: "Downloading Silverhand {version}…",
+  readyToInstall:
+    "Silverhand {version} is ready to install. Restart now, or install it the next time you quit.",
+  preparing: "Preparing Silverhand {version}…",
+  willInstallOnQuit: "Silverhand {version} will be installed when you quit.",
+} as const;

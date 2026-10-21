@@ -9,6 +9,7 @@ import {
   TaskIcon,
 } from "@/icons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { t } from "@/lib/i18n";
 
 /**
  * Top-level app sections. Outer to the channels/sessions sidebars —
@@ -54,19 +55,24 @@ interface NavItem {
   shortcut: number;
 }
 
-const ITEMS: NavItem[] = [
-  { id: "chat", label: "Chat", icon: <ChatsIcon className="size-[18px]" />, shortcut: 1 },
+const navItems = (): NavItem[] => [
+  { id: "chat", label: t("ui.chat"), icon: <ChatsIcon className="size-[18px]" />, shortcut: 1 },
   {
     id: "activity",
-    label: "Activity",
+    label: t("ui.activity"),
     icon: <ActivityIcon className="size-[18px]" />,
     shortcut: 2,
   },
-  { id: "tasks", label: "Tasks", icon: <TaskIcon className="size-[18px]" />, shortcut: 3 },
-  { id: "members", label: "Members", icon: <MembersIcon className="size-[18px]" />, shortcut: 4 },
+  { id: "tasks", label: t("ui.tasks"), icon: <TaskIcon className="size-[18px]" />, shortcut: 3 },
+  {
+    id: "members",
+    label: t("ui.members"),
+    icon: <MembersIcon className="size-[18px]" />,
+    shortcut: 4,
+  },
   {
     id: "computers",
-    label: "Computers",
+    label: t("ui.computers"),
     icon: <ComputerIcon className="size-[18px]" />,
     shortcut: 5,
   },
@@ -101,11 +107,11 @@ export function NavRail({ current, onChange, dots, update }: NavRailProps): JSX.
   const settingsSelected = current === "settings";
   return (
     <nav
-      aria-label="App sections"
+      aria-label={t("ui.appSections")}
       className="nav-rail flex h-full w-(--nav-rail-width) shrink-0 flex-col items-center gap-2"
     >
       <TooltipProvider>
-        {ITEMS.map((item) => {
+        {navItems().map((item) => {
           const selected = item.id === current;
           const hasDot = dots?.[item.id] === true;
           return (
@@ -152,8 +158,8 @@ export function NavRail({ current, onChange, dots, update }: NavRailProps): JSX.
 
       <button
         type="button"
-        title="Settings"
-        aria-label="Settings"
+        title={t("ui.settings")}
+        aria-label={t("ui.settings")}
         aria-current={settingsSelected ? "page" : undefined}
         onClick={() => onChange("settings")}
         className={`nav-rail__item ${update ? "" : "mt-auto "}flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors`}

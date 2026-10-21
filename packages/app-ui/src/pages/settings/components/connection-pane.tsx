@@ -33,6 +33,7 @@ import {
   type DesktopServerConnectionStatus,
   type DesktopServerObservation,
 } from "../model/connection-readiness";
+import { t } from "@/lib/i18n";
 
 /**
  * Availability words come from the `computerCopy` single source — the
@@ -42,11 +43,11 @@ import {
  * `Connecting…` stays literal: it is the Desktop→Server attach window,
  * a state the availability lexicon has no word for.
  */
-const STATUS_LABEL: Record<Exclude<DesktopServerConnectionStatus, "unknown">, string> = {
-  connected: computerCopy.availabilityConnected,
-  connecting: "Connecting…",
-  offline: computerCopy.availabilityOffline,
-};
+const statusLabel = (): Record<Exclude<DesktopServerConnectionStatus, "unknown">, string> => ({
+  connected: computerCopy().availabilityConnected,
+  connecting: t("settings.connection.connecting"),
+  offline: computerCopy().availabilityOffline,
+});
 
 const STATUS_TONE_CLASS: Record<Exclude<DesktopServerConnectionStatus, "unknown">, string> = {
   connected: "border-success text-success",
@@ -68,13 +69,13 @@ function ServerStatusPill({
   return (
     <span
       role="status"
-      aria-label={`Desktop to server: ${STATUS_LABEL[status]}`}
+      aria-label={t("settings.connection.statusLabel", { status: statusLabel()[status] })}
       className={cn(
         "inline-flex shrink-0 items-center gap-1 rounded-(--control-radius) border bg-bg-floating px-2 py-0.5 text-(length:--text-badge) font-medium",
         STATUS_TONE_CLASS[status],
       )}
     >
-      {STATUS_LABEL[status]}
+      {statusLabel()[status]}
     </span>
   );
 }
@@ -83,8 +84,8 @@ function describeProfileSaveForConnection(result: ProfileSaveWithTestResult): Sa
   if (result.ok) {
     return {
       tone: "info",
-      title: "Saved. Reconnecting…",
-      description: `Using ${result.profile.server_url}.`,
+      title: t("settings.connection.savedReconnecting"),
+      description: t("appShell.unreachable.using", { url: result.profile.server_url }),
       dismissOnReady: true,
     };
   }
@@ -99,14 +100,14 @@ function describeProfileSaveForConnection(result: ProfileSaveWithTestResult): Sa
   if (result.phase === "commit_guard") {
     return {
       tone: "error",
-      title: "Cannot save this server URL in this build.",
+      title: t("appShell.unreachable.commitGuard"),
       description: result.message,
     };
   }
   return {
     tone: "error",
-    title: "Could not write the profile.",
-    description: result.detail ?? "Check that Silverhand can write to its app data folder.",
+    title: t("appShell.unreachable.writeFailed"),
+    description: result.detail ?? t("appShell.unreachable.writeFailedDetail"),
   };
 }
 
@@ -240,8 +241,8 @@ export function ConnectionPane(): JSX.Element {
       setSavedAt(null);
       setBanner({
         tone: "error",
-        title: "Could not save.",
-        description: err instanceof Error ? err.message : "Unknown error.",
+        title: t("settings.connection.saveFailed"),
+        description: err instanceof Error ? err.message : t("common.unknownError"),
       });
     },
   });
@@ -301,11 +302,14 @@ export function ConnectionPane(): JSX.Element {
 
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-6 px-5 py-5">
-      <SettingsHeading icon={<ServerIcon className="size-4" />} title="Connection" />
+      <SettingsHeading
+        icon={<ServerIcon className="size-4" />}
+        title={t("settings.sections.connection")}
+      />
 
       <div className="flex flex-col gap-3">
         <div className="flex flex-col items-start gap-1">
-          <h3 className="text-sm font-semibold text-text-primary">Server</h3>
+          <h3 className="text-sm font-semibold text-text-primary">{t("appShell.server.label")}</h3>
           <ServerStatusPill status={connectionStatus} />
         </div>
 
@@ -330,7 +334,7 @@ export function ConnectionPane(): JSX.Element {
         )}
 
         <form onSubmit={onSubmit} className="flex flex-col gap-2">
-          <Label htmlFor="settings-server-url">Address</Label>
+          <Label htmlFor="settings-server-url">{t("settings.connection.address")}</Label>
           <div className="flex items-center gap-2">
             <Input
               id="settings-server-url"
@@ -353,9 +357,9 @@ export function ConnectionPane(): JSX.Element {
                 classification.kind === "reject"
                   ? classification.message
                   : isUnchanged
-                    ? "Already set to this value."
+                    ? t("appShell.unreachable.alreadySet")
                     : classification.kind === "empty"
-                      ? "Enter an address to save."
+                      ? t("appShell.unreachable.enterAddress")
                       : undefined
               }
             >
@@ -364,7 +368,7 @@ export function ConnectionPane(): JSX.Element {
               ) : (
                 <SaveIcon className="mr-1 size-3.5" />
               )}
-              Save
+              {t("common.save")}
             </Button>
           </div>
           {classification.kind === "reject" && (

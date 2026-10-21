@@ -1,6 +1,7 @@
 import { AgentView } from "@/features/agents/components/agent-view";
 import { HumanView } from "@/features/profile/human-view";
 import { DirectoryPlaceholder } from "@/components/layout/directory-shell";
+import { t } from "@/lib/i18n";
 
 export interface AgentNavigation {
   onMessageAgent: (agentId: string) => void;
@@ -34,5 +35,5 @@ export function AgentDetailPage({
     );
   }
 
-  return <DirectoryPlaceholder>Select an agent to see its details</DirectoryPlaceholder>;
+  return <DirectoryPlaceholder>{t("agentPage.selectAnAgentTo")}</DirectoryPlaceholder>;
 }

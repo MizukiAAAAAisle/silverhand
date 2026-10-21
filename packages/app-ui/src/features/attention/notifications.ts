@@ -15,6 +15,7 @@ import { recordChannelWorkspace } from "@/features/channels/channel-workspace-in
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import { showMentionToast } from "./mention-toast";
 import { payloadString, systemNoticeOf } from "./system-notice";
+import { t } from "@/lib/i18n";
 
 const unreadKey = ["notifications", "unread"] as const;
 const listKey = ["notifications", "list"] as const;
@@ -279,7 +280,7 @@ export function useNotificationToasts(
         showMentionToast(
           {
             sender: n.sender ?? null,
-            fallbackName: payloadString(n, "trigger_name") ?? "Someone",
+            fallbackName: payloadString(n, "trigger_name") ?? t("attention.someone"),
             conversationTitle: payloadString(n, "conversation_title"),
             excerpt: payloadString(n, "mention_excerpt"),
           },
@@ -293,7 +294,7 @@ export function useNotificationToasts(
         const toastOptions = isClickableKind(n.kind)
           ? {
               action: {
-                label: "View",
+                label: t("attention.view"),
                 onClick: () => handleClickById(n.id),
               },
             }
@@ -491,26 +492,33 @@ async function resolveTargetFromConversationId(
 
 function buildToastLabel(n: NotificationDto): string {
   if (n.kind === "agent_start_failed") {
-    const name = (n.payload?.["agent_name"] as string | undefined) ?? n.agent_id ?? "Agent";
+    const name =
+      (n.payload?.["agent_name"] as string | undefined) ?? n.agent_id ?? t("attention.agent");
     const reason = n.payload?.["reason"] as string | undefined;
-    if (reason === "init_timeout") return `@${name} timed out while starting`;
+    if (reason === "init_timeout") return t("attention.startTimeout", { name });
     if (reason === "runtime_crash") {
       const code = n.payload?.["exit_code"];
-      return `@${name} exited unexpectedly${code != null ? ` (exit ${code})` : ""}`;
+      return code != null
+        ? t("attention.exitedWithCode", { name, code: String(code) })
+        : t("attention.exited", { name });
     }
-    const error = (n.payload?.["error"] as string | undefined) ?? "unknown error";
-    return `@${name} didn't start: ${error}`;
+    const error = (n.payload?.["error"] as string | undefined) ?? t("attention.unknownError");
+    return t("attention.didntStartReason", { name, reason: error });
   }
   if (n.kind === "mention_external") {
     // `source_workspace_name` is a WORKSPACE name — a free-text label
     // (#task:1827), not `#`-addressable, so it renders bare. The `mention_self`
     // arm below reads `conversation_title` and keeps its `#`.
     const workspaceName = n.payload?.["source_workspace_name"] as string | undefined;
-    return workspaceName ? `New mention in ${workspaceName}` : "New mention";
+    return workspaceName
+      ? t("attention.newMentionIn", { project: workspaceName })
+      : t("attention.newMention");
   }
   if (n.kind === "mention_self") {
     const conversationTitle = n.payload?.["conversation_title"] as string | undefined;
-    return conversationTitle ? `You were mentioned in #${conversationTitle}` : "You were mentioned";
+    return conversationTitle
+      ? t("attention.mentionedIn", { channel: conversationTitle })
+      : t("attention.youWereMentioned");
   }
-  return "New notification";
+  return t("attention.newNotification");
 }

@@ -8,7 +8,7 @@ import { SidePanelHeader, SidePanelHeaderTitle } from "@/components/layout/side-
 import { iconMarkup } from "@/components/layout/native-page-bar";
 import { Markdown } from "@/features/messages/components/markdown";
 import {
-  FAILURE_COPY,
+  failureCopy,
   InlineFieldEditor,
   useTaskMetaRows,
   useTaskWriteSlot,
@@ -23,6 +23,7 @@ import {
   type TaskDetailView,
   type TaskJumpTarget,
 } from "@/features/tasks/model/task-detail";
+import { t } from "@/lib/i18n";
 
 export interface TaskDetailPanelProps {
   /** Task identity to show. Never a summary DTO — the pane reads the
@@ -107,8 +108,8 @@ export function TaskDetailPanel({
       data-sticker
       data-sticker-size="md"
       data-sticker-tone="neutral"
-      title="View in conversation"
-      aria-label="View in conversation"
+      title={t("tasks.viewInConversation")}
+      aria-label={t("tasks.viewInConversation")}
       onClick={() => onJump?.(jumpTarget)}
       className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
     >
@@ -125,7 +126,7 @@ export function TaskDetailPanel({
       data-panel="side"
       className="task-pane flex h-full w-full flex-col overflow-hidden"
       style={paneChrome}
-      aria-label="Task detail"
+      aria-label={t("tasks.taskDetail")}
     >
       {/* The shared side-panel header, same primitive (and same title/subtitle
           idiom) the agent / thread / attachments panes use — so the close ✕ is
@@ -137,7 +138,7 @@ export function TaskDetailPanel({
         onClose={onClose}
         actions={jumpAction}
         nativeBar={{
-          title: "Task",
+          title: t("tasks.task"),
           subtitle: painted ? `#${painted.task_number}` : undefined,
           titleAction: null,
           actions: jumpTarget
@@ -145,7 +146,7 @@ export function TaskDetailPanel({
                 [
                   {
                     id: "jump",
-                    label: "View in conversation",
+                    label: t("tasks.viewInConversation"),
                     icon: iconMarkup(OpenExternalIcon),
                   },
                 ],
@@ -164,7 +165,7 @@ export function TaskDetailPanel({
       >
         <SidePanelHeaderTitle
           icon={<TaskIcon className="size-3.5 shrink-0 text-text-muted" aria-hidden />}
-          title="Task"
+          title={t("tasks.task")}
           // The number, not the title — the task's own title lives in the body
           // with its edit pencil, so the header doesn't repeat it (shiki mockup
           // v2). Resolves with the read; blank until then, like the attachments
@@ -232,13 +233,13 @@ function PaneContent({
               reachable here — but it stays a single muted line: the body below is
               still readable, this is a footnote about its freshness. */}
           <div className="flex flex-none items-center gap-3 border-b border-border-subtle px-4.5 py-2 text-xs text-text-muted">
-            <span>Showing the last loaded version — the refresh failed.</span>
+            <span>{t("tasks.showingTheLastLoaded")}</span>
             <button
               type="button"
               onClick={onRetry}
               className="ml-auto shrink-0 rounded px-1 py-0.5 font-medium text-text-secondary underline-offset-2 hover:text-text-primary hover:underline focus-outline"
             >
-              Retry
+              {t("common.retry")}
             </button>
           </div>
           <PaneBody
@@ -268,7 +269,7 @@ function PaneStatePanel({
     return (
       <div
         role="status"
-        aria-label="Loading task"
+        aria-label={t("tasks.loadingTask")}
         className="min-h-0 flex-1 overflow-hidden px-4.5 py-4"
       >
         <div aria-hidden className="flex flex-col gap-4 motion-safe:animate-pulse">
@@ -291,7 +292,7 @@ function PaneStatePanel({
       </div>
     );
   }
-  const copy = FAILURE_COPY[failure];
+  const copy = failureCopy()[failure];
   return (
     <div className="flex flex-col gap-1.5 px-4.5 py-6">
       <p className="text-sm font-semibold leading-snug text-text-primary">{copy.header}</p>
@@ -307,7 +308,7 @@ function PaneStatePanel({
           className="mt-2 self-start"
           onClick={onRetry}
         >
-          Retry
+          {t("common.retry")}
         </Button>
       ) : null}
     </div>
@@ -353,7 +354,7 @@ function PaneBody({
           {!busy ? (
             <MiniIconButton
               icon={EditIcon}
-              label="Edit title"
+              label={t("tasks.editTitle")}
               className="mt-0.5"
               onClick={() => onEditField("title")}
             />
@@ -384,12 +385,12 @@ function PaneBody({
       <section className="flex min-w-0 flex-col gap-2">
         <div className="flex items-center gap-2">
           <h2 className="chrome-label text-(length:--text-badge) font-medium text-text-muted">
-            Description
+            {t("tasks.description")}
           </h2>
           {!busy && editingField !== "content" ? (
             <MiniIconButton
               icon={EditIcon}
-              label="Edit description"
+              label={t("tasks.editDescription")}
               onClick={() => onEditField("content")}
             />
           ) : null}
@@ -405,7 +406,7 @@ function PaneBody({
         ) : detail.content.trim() ? (
           <Markdown content={detail.content} taskReferences="raw" />
         ) : (
-          <p className="text-sm italic text-text-muted">No description.</p>
+          <p className="text-sm italic text-text-muted">{t("tasks.noDescription")}</p>
         )}
       </section>
     </div>

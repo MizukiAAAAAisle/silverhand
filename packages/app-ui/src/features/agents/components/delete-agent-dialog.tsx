@@ -10,6 +10,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { friendlyDeleteAgentError } from "../model/delete-agent-error";
 import { useDeleteAgent } from "../hooks/hooks";
+import { t } from "@/lib/i18n";
 
 interface DeleteAgentDialogProps {
   open: boolean;
@@ -40,10 +41,8 @@ export function DeleteAgentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Delete @{agent.name}?</DialogTitle>
-          <DialogDescription>
-            Removes all associated data. This can&rsquo;t be undone.
-          </DialogDescription>
+          <DialogTitle>{t("agents.deleteAgentTitle", { name: agent.name })}</DialogTitle>
+          <DialogDescription>{t("agents.deleteAgentDetail")}</DialogDescription>
         </DialogHeader>
 
         {del.isError ? (
@@ -57,10 +56,10 @@ export function DeleteAgentDialog({
             onClick={() => onOpenChange(false)}
             disabled={del.isPending}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button type="button" variant="destructive" onClick={onConfirm} disabled={del.isPending}>
-            {del.isPending ? "Deleting…" : "Delete"}
+            {del.isPending ? t("agents.deleting") : t("agents.delete")}
           </Button>
         </DialogFooter>
       </DialogContent>

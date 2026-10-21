@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { PageBarCapability, PageBarState } from "@silverhand/client";
 import { FALLBACK_ORDER, PageBarHub, type PageBarDeclaration } from "./page-bar";
+import { t } from "@/lib/i18n";
 
 vi.mock("@/platform", () => ({ getPlatform: () => ({}) }));
 
@@ -87,7 +88,7 @@ describe("PageBarHub", () => {
     hub.flush();
     hub.flush();
 
-    expect(sent.map((state) => state?.back ?? null)).toEqual([null, "Back"]);
+    expect(sent.map((state) => state?.back ?? null)).toEqual([null, t("common.back")]);
   });
 
   it("shows a large title only at a Tab root", () => {

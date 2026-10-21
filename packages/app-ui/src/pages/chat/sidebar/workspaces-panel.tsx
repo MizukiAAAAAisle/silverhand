@@ -22,6 +22,7 @@ import {
   type SelectedConversation,
 } from "@/features/workspaces/home-grouping";
 import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
+import { t } from "@/lib/i18n";
 
 export interface WorkspaceItem {
   id: string;
@@ -252,7 +253,7 @@ function WorkspaceActions({
           variant="ghost"
           size="icon"
           className="h-6 w-6"
-          aria-label={`Actions for ${title}`}
+          aria-label={t("chat.actionsFor", { name: title })}
           onMouseEnter={show}
           onMouseLeave={hide}
           onClick={(event) => {
@@ -291,7 +292,7 @@ function WorkspaceActions({
             }}
           >
             <PlusIcon className="size-3.5" />
-            Create channel
+            {t("chat.createChannel")}
           </button>
           {onSettings ? (
             <button
@@ -303,7 +304,7 @@ function WorkspaceActions({
               }}
             >
               <SettingsIcon className="size-3.5" />
-              Settings
+              {t("chat.settings")}
             </button>
           ) : null}
         </Popover.Content>

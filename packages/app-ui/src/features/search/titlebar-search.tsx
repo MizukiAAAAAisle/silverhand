@@ -40,6 +40,7 @@ import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMessageSearch } from "@/features/search/hooks";
 import { SearchResultItem, type SearchItem } from "@/features/search/search-result-item";
+import { t } from "@/lib/i18n";
 
 export interface TitlebarSearchNav {
   onJumpMessage: (params: {
@@ -64,11 +65,11 @@ type FlatRow =
 
 type FilterKind = "all" | "channels" | "people" | "messages";
 
-const FILTER_TABS: Array<{ value: FilterKind; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "people", label: "Human & Agents" },
-  { value: "channels", label: "Channels" },
-  { value: "messages", label: "Messages" },
+const filterTabs = (): Array<{ value: FilterKind; label: string }> => [
+  { value: "all", label: t("search.all") },
+  { value: "people", label: t("search.humanAgents") },
+  { value: "channels", label: t("search.channels") },
+  { value: "messages", label: t("search.messages") },
 ];
 
 /**
@@ -125,14 +126,14 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label="Search"
+          aria-label={t("common.search")}
           className={cn(
             "no-drag flex h-6 w-full items-center gap-2 rounded-(--control-radius) px-2.5 text-left text-xs outline-none",
             "bg-text-primary/10 text-text-muted transition-colors hover:bg-text-primary/[0.14]",
           )}
         >
           <SearchIcon className="size-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">Search everything</span>
+          <span className="min-w-0 flex-1 truncate">{t("search.searchEverything")}</span>
           <kbd className="shrink-0 rounded-(--chip-radius) bg-text-primary/[0.16] px-1.5 py-0.5 font-sans text-(length:--text-badge) leading-none text-text-secondary">
             ⌘K
           </kbd>
@@ -165,11 +166,11 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
               onCompositionEnd={() => {
                 composingRef.current = false;
               }}
-              placeholder="Search messages, channels, humans"
+              placeholder={t("search.searchMessagesChannelsHumans")}
               className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
             />
             {search.isFetching ? (
-              <span className="shrink-0 text-xs text-text-muted">Searching…</span>
+              <span className="shrink-0 text-xs text-text-muted">{t("search.searching")}</span>
             ) : null}
           </div>
           <TitlebarSearchResults search={search} />
@@ -409,9 +410,9 @@ function useTitlebarSearchModel(nav: TitlebarSearchNav, onDone: () => void) {
     }
     if (key === "tab" || key === "backtab") {
       if (trimmed.length === 0) return false;
-      const current = FILTER_TABS.findIndex((tab) => tab.value === filter);
+      const current = filterTabs().findIndex((tab) => tab.value === filter);
       const step = key === "backtab" ? -1 : 1;
-      const nextTab = FILTER_TABS[(current + step + FILTER_TABS.length) % FILTER_TABS.length];
+      const nextTab = filterTabs()[(current + step + filterTabs().length) % filterTabs().length];
       if (nextTab) setFilter(nextTab.value);
       return true;
     }
@@ -483,7 +484,7 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
     <>
       {trimmed.length > 0 ? (
         <div className="flex gap-1.5 px-3 py-2">
-          {FILTER_TABS.map((tab) => (
+          {filterTabs().map((tab) => (
             <button
               key={tab.value}
               type="button"
@@ -511,25 +512,23 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
 
       {search.isError ? (
         <div role="alert" className="px-3 py-2 text-sm text-text-muted">
-          Search failed.{" "}
+          {t("search.searchFailed")}{" "}
           <button type="button" onClick={() => void search.refetch()}>
-            Retry
+            {t("common.retry")}
           </button>
         </div>
       ) : null}
       {identities && (identities.humans.truncated || identities.agents.truncated) ? (
-        <p className="px-3 py-2 text-xs text-text-muted">
-          Showing up to 20 matches per people category. Refine your search for more results.
-        </p>
+        <p className="px-3 py-2 text-xs text-text-muted">{t("search.showingUpTo20")}</p>
       ) : null}
       <div
         ref={listRef}
         className="search-list scrollbar-hide max-h-[min(60vh,440px)] overflow-y-auto p-2"
       >
         {trimmed.length === 0 && sections.length === 0 ? (
-          <SearchEmptyState text="Search across your project" />
+          <SearchEmptyState text={t("search.searchAcrossYourProject")} />
         ) : sections.length === 0 && !search.isFetching && !search.isError ? (
-          <SearchEmptyState text="No results" />
+          <SearchEmptyState text={t("search.noResults")} />
         ) : (
           sections.map((section) => (
             <section key={section.key} className="mb-3 last:mb-0">
@@ -576,13 +575,16 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
         className="flex items-center justify-between gap-3 border-t border-border px-3 py-2 text-(length:--text-meta) text-text-muted"
       >
         <span className="flex items-center gap-3">
-          <FooterHint keys={[<EnterIcon className="size-3" />]} label="Open" />
+          <FooterHint keys={[<EnterIcon className="size-3" />]} label={t("search.open")} />
           <FooterHint
             keys={[<ArrowUpIcon className="size-3" />, <ArrowDownIcon className="size-3" />]}
-            label="Navigate"
+            label={t("search.navigate")}
           />
-          <FooterHint keys={[<ArrowRightToLineIcon className="size-3" />]} label="Switch type" />
-          <FooterHint keys={["esc"]} label="Close" />
+          <FooterHint
+            keys={[<ArrowRightToLineIcon className="size-3" />]}
+            label={t("search.switchType")}
+          />
+          <FooterHint keys={["esc"]} label={t("common.close")} />
         </span>
         <Button
           type="button"
@@ -593,7 +595,7 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
           data-sticker-tone="neutral"
           onClick={search.openAdvanced}
         >
-          Advanced search
+          {t("search.advancedSearch")}
         </Button>
       </div>
     </>
@@ -610,7 +612,7 @@ function recentSection(recent: readonly RecentConversation[]): Section[] {
   return [
     {
       key: "recent",
-      label: "Recent",
+      label: t("search.recent"),
       icon: <ClockIcon className="size-3" />,
       rows: recent.map((conversation): FlatRow => ({
         kind: "recent",
@@ -689,7 +691,7 @@ function RecentConversationRow({
         {!tree && conversation.kind === "channel" && conversation.visibility === "private" ? (
           <LockIcon
             role="img"
-            aria-label="Private"
+            aria-label={t("search.private")}
             className="-mx-0.5 size-3 shrink-0 self-center text-text-muted"
           />
         ) : null}
@@ -756,7 +758,7 @@ function buildSections(
   if (showPeople && identityRows.length > 0) {
     sections.push({
       key: "people",
-      label: "Human & Agents",
+      label: t("search.humanAgents"),
       icon: <MembersIcon className="size-3" />,
       rows: identityRows.map((candidate): FlatRow => ({
         kind: "identity",
@@ -769,7 +771,7 @@ function buildSections(
   if (showChannels && (channels.length > 0 || workspaces.length > 0)) {
     sections.push({
       key: "channels",
-      label: "Channels",
+      label: t("search.channels"),
       icon: <HashIcon className="size-3" />,
       rows: [
         ...channels.map((result): FlatRow => ({
@@ -789,7 +791,7 @@ function buildSections(
   if (showMessages && messages.length > 0) {
     sections.push({
       key: "messages",
-      label: "Messages",
+      label: t("search.messages"),
       icon: <MessageResultIcon className="size-3" />,
       rows: messages.map((result): FlatRow => ({
         kind: "message",

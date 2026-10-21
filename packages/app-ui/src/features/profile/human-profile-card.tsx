@@ -7,6 +7,7 @@ import { useHumanAvatar } from "./use-human-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useProfileHeroSize } from "@/features/profile/use-profile-hero-size";
+import { t } from "@/lib/i18n";
 import "@/features/agents/components/agent-profile-hero.css";
 
 interface HumanProfileCardProps {
@@ -20,7 +21,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
   return (
     <div ref={profileRef} data-profile-layout className="mx-auto flex flex-col gap-6">
       <section
-        aria-label="Human profile"
+        aria-label={t("profile.humanProfile")}
         data-compact={compactHero}
         className="agent-profile-hero"
         style={{ alignItems: "center" }}
@@ -39,7 +40,7 @@ export function HumanProfileCard({ user }: HumanProfileCardProps): JSX.Element {
       </section>
 
       <ProfileFactBand>
-        <ProfileFact icon={<ClockIcon className="size-3.5" />} label="Created">
+        <ProfileFact icon={<ClockIcon className="size-3.5" />} label={t("profile.created")}>
           <span
             className="font-medium text-text-primary"
             title={dayjs(user.created_at).format("YYYY-MM-DD HH:mm:ss")}

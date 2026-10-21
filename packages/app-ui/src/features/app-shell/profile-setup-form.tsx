@@ -7,6 +7,7 @@ import { DraftAvatarCard } from "@/features/avatar-maker/components/draft-avatar
 import { useDraftAvatar } from "@/features/avatar-maker/hooks/use-draft-avatar";
 import { rejectDisplayName } from "@/features/identity/display-name";
 import { nameFormatMessage } from "@/features/identity/use-name-availability";
+import { t } from "@/lib/i18n";
 
 export interface ProfileSetupValues {
   displayName: string;
@@ -39,7 +40,7 @@ export function ProfileSetupForm({
   const usernameError = submitted
     ? username.trim()
       ? nameFormatMessage("agent", username.trim())
-      : "Username is required."
+      : t("appShell.handleRequired")
     : null;
 
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
@@ -72,11 +73,13 @@ export function ProfileSetupForm({
         className="flex w-full max-w-90 flex-col gap-4"
         style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
       >
-        <h1 className="mb-2 text-3xl font-semibold tracking-tight">Set up your profile</h1>
+        <h1 className="mb-2 text-3xl font-semibold tracking-tight">
+          {t("appShell.profile.setUp")}
+        </h1>
         <DraftAvatarCard draft={draft} disabled={pending} />
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-display-name`} required>
-            Display name
+            {t("appShell.displayName")}
           </Label>
           <Input
             id={`${id}-display-name`}
@@ -97,7 +100,7 @@ export function ProfileSetupForm({
         </div>
         <div className="flex flex-col gap-1.5">
           <Label htmlFor={`${id}-username`} required>
-            Username
+            {t("appShell.handle")}
           </Label>
           <Input
             id={`${id}-username`}
@@ -124,12 +127,12 @@ export function ProfileSetupForm({
         ) : null}
         {onRetry ? (
           <Button type="button" variant="primary" className="mt-2 w-full" onClick={onRetry}>
-            Retry
+            {t("common.retry")}
           </Button>
         ) : (
           <Button type="submit" variant="primary" className="mt-2 w-full" disabled={pending}>
             {pending ? <SpinnerIcon className="size-4 animate-spin" aria-hidden /> : null}
-            Continue
+            {t("common.continue")}
           </Button>
         )}
       </form>

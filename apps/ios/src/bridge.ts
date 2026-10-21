@@ -34,6 +34,8 @@ export interface NativeBridge {
   navigationSync(state: NativeNavigationState): Promise<{ tabBarHeight: number }>;
   navigationReset(input: { session: string }): Promise<void>;
   navigationAvatar(input: { base64?: string }): Promise<void>;
+  /** The language the page resolved; native tabs and sheets follow it. */
+  setLocale(input: { locale: "en" | "zh" }): Promise<void>;
   /** Groups of page controls the iPhone Duo vertical bar draws. */
   /** The wide layout's native titlebar; a null state removes it. */
   titlebar(input: { state: TitlebarState | null }): Promise<void>;

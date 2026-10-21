@@ -1,24 +1,25 @@
 import type { JSX } from "react";
 import type { AppUpdateState } from "@silverhand/client";
+import { t } from "@/lib/i18n";
 
 export function describeAppUpdate(state: AppUpdateState): string {
   switch (state.status) {
     case "idle":
       return state.lastCheckedAt === null
-        ? `Silverhand ${state.currentVersion} has not checked for updates yet.`
-        : `Silverhand ${state.currentVersion} is the latest version.`;
+        ? t("appUpdate.notChecked", { version: state.currentVersion })
+        : t("appUpdate.latest", { version: state.currentVersion });
     case "checking":
-      return "Checking for updates…";
+      return t("appUpdate.checkingForUpdates");
     case "available":
-      return `Silverhand ${state.version} is available.`;
+      return t("appUpdate.available", { version: state.version });
     case "downloading":
-      return `Downloading Silverhand ${state.version}…`;
+      return t("appUpdate.downloading", { version: state.version });
     case "downloaded":
-      return `Silverhand ${state.version} is ready to install. Restart now, or install it the next time you quit.`;
+      return t("appUpdate.readyToInstall", { version: state.version });
     case "installing":
-      return `Preparing Silverhand ${state.version}…`;
+      return t("appUpdate.preparing", { version: state.version });
     case "scheduled":
-      return `Silverhand ${state.version} will be installed when you quit.`;
+      return t("appUpdate.willInstallOnQuit", { version: state.version });
     case "error":
       return state.message;
   }

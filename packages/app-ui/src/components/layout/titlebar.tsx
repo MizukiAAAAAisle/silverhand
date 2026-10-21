@@ -1,5 +1,6 @@
 import { SidebarCloseIcon, SidebarOpenIcon } from "@/icons";
 import type { ReactNode } from "react";
+import { t } from "@/lib/i18n";
 
 interface TitlebarProps {
   /** epoch ms when the workspace was archived; null for active workspaces.
@@ -103,9 +104,9 @@ export function Titlebar({
             <button
               type="button"
               onClick={onToggleWorkspaceSidebar}
-              aria-label={workspaceSidebarVisible ? "Hide sidebar" : "Show sidebar"}
+              aria-label={workspaceSidebarVisible ? t("ui.hideSidebar") : t("ui.showSidebar")}
               aria-pressed={workspaceSidebarVisible}
-              title="Sidebar (⌘\\)"
+              title={t("ui.sidebarShortcut")}
               className={toggleButton}
             >
               {workspaceSidebarVisible ? (
@@ -120,7 +121,7 @@ export function Titlebar({
 
       {isArchived ? (
         <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
-          archived
+          {t("ui.archived")}
         </span>
       ) : null}
 

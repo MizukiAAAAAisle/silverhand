@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { PickerItem } from "./composer-picker";
 import { pickerViewOf } from "./composer-picker-rows";
+import { t } from "@/lib/i18n";
 
 const agent = (id: string, inConversation: boolean, display_name: string | null = null) =>
   ({
@@ -76,7 +77,7 @@ describe("pickerViewOf", () => {
   it("reports the cap and the channel source apart", () => {
     const loading = view([], { hiddenCount: 3, channelStatus: "loading" });
     expect(loading.more).toBe("+3 more");
-    expect(loading.status).toEqual({ loading: true, label: "Loading channels" });
+    expect(loading.status).toEqual({ loading: true, label: t("messages.loadingChannels") });
     expect(view([], { channelStatus: "partial_error" }).status?.loading).toBe(false);
     expect(view([]).status).toBeNull();
   });

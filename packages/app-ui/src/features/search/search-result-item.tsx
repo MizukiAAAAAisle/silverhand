@@ -11,6 +11,7 @@ import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
 
 import { buildExcerpt, highlightText } from "@/features/search/highlight";
 import { MessageResultMeta } from "@/features/search/message-result-meta";
+import { t } from "@/lib/i18n";
 
 /** Shared search-result row for both the advanced Search page and the titlebar
  *  popover. Each host maps its own data to `SearchItem`. */
@@ -206,7 +207,7 @@ function SearchItemBody({
           ))}
           {archived ? (
             <span className="shrink-0 rounded-(--pill-radius) bg-bg-elevated px-1.5 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
-              Archived
+              {t("common.archived")}
             </span>
           ) : null}
         </span>
@@ -219,7 +220,7 @@ function SearchItemBody({
 }
 
 function workspaceMeta(result: Extract<SearchResultDto, { type: "workspace" }>): string[] {
-  return [isAgentSpace(result.workspace) ? "Agent Space" : "Project"];
+  return [isAgentSpace(result.workspace) ? t("search.agentSpace") : t("search.project")];
 }
 
 function conversationMeta(result: Extract<SearchResultDto, { type: "conversation" }>): string[] {

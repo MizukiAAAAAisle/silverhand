@@ -1,4 +1,5 @@
 import type { ProbeServerInfoResult } from "@silverhand/client";
+import { t } from "@/lib/i18n";
 
 export interface ProbeBanner {
   /** Visual tone — drives the banner chrome color. */
@@ -16,10 +17,10 @@ export function describeProbeOutcome(result: ProbeServerInfoResult): ProbeBanner
       case "system_ca_verified":
         return {
           tone: "success",
-          title: "Connected — TLS verified by your system trust store.",
+          title: t("settings.probe.trusted"),
           description: result.info.signup_enabled
-            ? "Signup is enabled on this backend. You can create a new account."
-            : "Signup is disabled on this backend. You will need an existing account.",
+            ? t("settings.probe.signupEnabledLong")
+            : t("settings.probe.signupDisabledLong"),
         };
       case "loopback_ok":
         // Loopback = embedded backend / local dev. No remote TLS path
@@ -27,10 +28,10 @@ export function describeProbeOutcome(result: ProbeServerInfoResult): ProbeBanner
         // verified" (which would be misleading on http loopback).
         return {
           tone: "success",
-          title: "Connected — local backend.",
+          title: t("settings.probe.local"),
           description: result.info.signup_enabled
-            ? "Signup is enabled on this backend."
-            : "Signup is disabled on this backend.",
+            ? t("settings.probe.signupEnabled")
+            : t("settings.probe.signupDisabled"),
         };
       case "insecure_dev_remote":
         // The dev escape hatch: http to a non-loopback host. The
@@ -38,9 +39,8 @@ export function describeProbeOutcome(result: ProbeServerInfoResult): ProbeBanner
         // and the operator MUST know.
         return {
           tone: "warn",
-          title: "Connected — UNENCRYPTED (dev mode).",
-          description:
-            "This URL uses http:// to a non-loopback host. Traffic is not encrypted. Switch to https:// for production.",
+          title: t("settings.probe.unencrypted"),
+          description: t("settings.probe.unencryptedDetail"),
         };
     }
   }
@@ -52,21 +52,20 @@ export function describeProbeOutcome(result: ProbeServerInfoResult): ProbeBanner
         case "malformed_url":
           return {
             tone: "error",
-            title: "That URL is not valid.",
+            title: t("settings.probe.invalid"),
             description: result.message,
           };
         case "unsupported_scheme":
           return {
             tone: "error",
-            title: "Only http:// and https:// URLs are accepted.",
+            title: t("settings.probe.scheme"),
             description: result.message,
           };
         case "non_origin_url":
           return {
             tone: "error",
-            title: "Backend URL must be an origin (scheme + host + port).",
-            description:
-              "Drop the path / query / fragment from the URL. Subpath deployments are not supported in this release.",
+            title: t("settings.probe.origin"),
+            description: t("settings.probe.originDetail"),
           };
         case "insecure_remote_http_disallowed":
           return {
@@ -78,15 +77,14 @@ export function describeProbeOutcome(result: ProbeServerInfoResult): ProbeBanner
         case "obfuscated_loopback_disallowed":
           return {
             tone: "error",
-            title: "Use a literal loopback address (127.0.0.1, localhost, or [::1]).",
-            description:
-              "Obfuscated forms (decimal IP, padded zeros, expanded IPv6) are rejected so the visible URL matches the host that will actually be contacted.",
+            title: t("settings.probe.loopback"),
+            description: t("settings.probe.loopbackDetail"),
           };
       }
       // Exhaustiveness — TS catches new reasons added without copy.
       return {
         tone: "error",
-        title: "URL rejected.",
+        title: t("settings.probe.rejected"),
         description: result.message,
       };
     case "tls_failed":
@@ -96,50 +94,50 @@ export function describeProbeOutcome(result: ProbeServerInfoResult): ProbeBanner
         case "host_tls_chain_invalid":
           return {
             tone: "error",
-            title: "The server's certificate is not trusted by your system CA store.",
-            description:
-              "Issue a certificate from a CA your machine already trusts (Let's Encrypt, Tailscale Funnel, or a private CA pre-installed in the system trust store). Self-signed certificates are not supported in this release.",
+            title: t("settings.probe.certUntrusted"),
+            description: t("settings.probe.certUntrustedDetail"),
           };
         case "host_tls_hostname_mismatch":
           return {
             tone: "error",
-            title: "The server's certificate does not cover this hostname.",
-            description:
-              "The certificate is trusted but its Subject Alternative Names do not include the host you typed. Reissue the certificate with the correct hostname, or use a URL that matches the certificate.",
+            title: t("settings.probe.certHostname"),
+            description: t("settings.probe.certHostnameDetail"),
           };
         case "host_tls_expired":
           return {
             tone: "error",
-            title: "The server's certificate is expired or not yet valid.",
-            description:
-              "Renew the certificate on the server, or wait for it to become valid. Check your machine's clock if the cert should be valid right now.",
+            title: t("settings.probe.certExpired"),
+            description: t("settings.probe.certExpiredDetail"),
           };
       }
       // Exhaustiveness — TS catches new codes added without copy.
       return {
         tone: "error",
-        title: "TLS handshake failed.",
+        title: t("settings.probe.tlsFailed"),
         description: result.message,
       };
     case "http_failed":
       return {
         tone: "error",
-        title: `Server responded ${result.status} ${result.statusText}.`,
+        title: t("settings.probe.httpStatus", {
+          status: result.status,
+          statusText: result.statusText,
+        }),
         description:
           result.bodyText.length > 0
-            ? `Body: ${truncate(result.bodyText, 200)}`
-            : "Check that the URL points to a Silverhand backend and that /api/server/info is reachable.",
+            ? t("settings.probe.body", { body: truncate(result.bodyText, 200) })
+            : t("settings.probe.checkUrl"),
       };
     case "network_failed":
       return {
         tone: "error",
-        title: "Could not reach that URL.",
+        title: t("settings.probe.unreachable"),
         description: result.message,
       };
     case "invalid_response":
       return {
         tone: "error",
-        title: "That URL responded, but it does not look like a Silverhand backend.",
+        title: t("settings.probe.notSilverhand"),
         description: result.message,
       };
   }

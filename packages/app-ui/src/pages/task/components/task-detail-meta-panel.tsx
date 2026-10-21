@@ -3,6 +3,7 @@ import {
   useTaskMetaRows,
   type TaskMetaWriteProps,
 } from "@/features/tasks/components/task-detail-shared";
+import { t } from "@/lib/i18n";
 
 export interface TaskDetailMetaPanelProps {
   view: TaskDetailDto;
@@ -21,7 +22,7 @@ export function TaskDetailMetaPanel(props: TaskDetailMetaPanelProps): JSX.Elemen
   return (
     <aside
       data-task-meta-panel
-      aria-label="Task metadata"
+      aria-label={t("taskPage.taskMetadata")}
       className="flex w-60 shrink-0 flex-col gap-y-3.5 overflow-y-auto border-l border-border-subtle px-4 py-4"
     >
       {rows.map((row) => (

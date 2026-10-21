@@ -2,6 +2,7 @@ import { motion, useIsPresent, useReducedMotion } from "motion/react";
 import { forwardRef, type ReactNode } from "react";
 import { AttachmentIcon, CloseIcon } from "@/icons";
 import type { CachedPendingAttachment as PendingAttachment } from "@/features/messages/composer-draft-cache";
+import { t } from "@/lib/i18n";
 
 export function PendingAttachmentTray({ children }: { children: ReactNode }): JSX.Element {
   const reducedMotion = useReducedMotion();
@@ -98,7 +99,7 @@ export function AttachmentChip({
           onClick={onPreview}
           disabled={!onPreview}
           className="block size-8 shrink-0 overflow-hidden rounded-sm border border-border-subtle focus-outline"
-          aria-label="Preview image"
+          aria-label={t("messages.previewImage")}
         >
           <img src={item.previewUrl} alt={item.filename} className="block size-full object-cover" />
         </button>
@@ -113,8 +114,8 @@ export function AttachmentChip({
               <button
                 type="button"
                 onClick={onInsertLabel}
-                title="Insert reference into message"
-                aria-label={`Insert ${item.label} into message`}
+                title={t("messages.insertReferenceIntoMessage")}
+                aria-label={t("messages.insertInto", { label: item.label })}
                 className="shrink-0 rounded-sm font-mono text-text-muted transition-colors hover:text-text-secondary hover:underline focus-outline"
               >
                 {item.label}
@@ -123,7 +124,9 @@ export function AttachmentChip({
               <span className="shrink-0 font-mono">{item.label}</span>
             )
           ) : null}
-          <span className="shrink-0">{item.state === "uploading" ? "Uploading…" : sizeLabel}</span>
+          <span className="shrink-0">
+            {item.state === "uploading" ? t("messages.uploading") : sizeLabel}
+          </span>
         </div>
       </div>
       <button
@@ -131,7 +134,7 @@ export function AttachmentChip({
         onClick={onRemove}
         disabled={removeDisabled}
         className="ml-1 inline-flex size-4 shrink-0 items-center justify-center rounded-sm text-text-muted hover:text-text-primary disabled:pointer-events-none disabled:opacity-50"
-        aria-label="Remove attachment"
+        aria-label={t("messages.removeAttachment")}
       >
         <CloseIcon className="size-3" />
       </button>

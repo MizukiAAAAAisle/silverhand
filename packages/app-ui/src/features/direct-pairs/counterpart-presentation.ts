@@ -28,6 +28,7 @@ import type {
   AuthorAvatar,
   AuthorAvatarSources,
 } from "@/features/messages/model/author-presentation";
+import { t } from "@/lib/i18n";
 
 export interface CounterpartPresentation {
   /** The name to render — the pair's whole title. */
@@ -51,7 +52,8 @@ export function presentCounterpart(counterpart: DirectPairCounterpart): Counterp
       // truth allows. "Deleted", not "Unknown": the server proved the principal
       // is gone (the endpoint column still names it), which is a stronger claim
       // than a byline's `unresolved`.
-      label: counterpart.kind === "agent" ? "Deleted agent" : "Deleted user",
+      label:
+        counterpart.kind === "agent" ? t("directPairs.deletedAgent") : t("directPairs.deletedUser"),
       kind: counterpart.kind,
       status: "deleted",
       isDeleted: true,

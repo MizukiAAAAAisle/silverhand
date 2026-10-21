@@ -39,9 +39,10 @@ beforeEach(() => {
 });
 
 describe("iOS entry", () => {
-  it("keeps the appearance preference when a session reset wipes storage", async () => {
+  it("keeps device preferences when a session reset wipes storage", async () => {
     const store = new Map<string, string>([
       ["silverhand:appearance", '{"theme":"studio-light"}'],
+      ["silverhand:locale", "zh"],
       ["silverhand:last-channel", "c1"],
     ]);
     const replace = vi.fn();
@@ -57,7 +58,10 @@ describe("iOS entry", () => {
     await vi.waitFor(() => expect(h.mount).toHaveBeenCalled());
     const reset = h.listen.mock.calls.find(([event]) => event === "sessionInvalidated")![1];
     reset();
-    expect([...store]).toEqual([["silverhand:appearance", '{"theme":"studio-light"}']]);
+    expect([...store]).toEqual([
+      ["silverhand:appearance", '{"theme":"studio-light"}'],
+      ["silverhand:locale", "zh"],
+    ]);
     expect(replace).toHaveBeenCalledWith("capacitor://localhost/");
   });
 

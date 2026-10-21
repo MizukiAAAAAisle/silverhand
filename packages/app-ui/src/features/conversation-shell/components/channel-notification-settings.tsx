@@ -10,7 +10,8 @@ import {
   useSetChannelAttentionPreference,
   useWorkspaceAttentionModes,
 } from "@/features/attention/hooks";
-import { ATTENTION_OPTIONS } from "./channel-attention-surfaces";
+import { attentionOptions } from "./channel-attention-surfaces";
+import { t } from "@/lib/i18n";
 
 /** Same viewer batch and write authority as the sidebar; no local preference copy. */
 export function ChannelNotificationSettings({
@@ -28,13 +29,13 @@ export function ChannelNotificationSettings({
   return (
     <section className="flex flex-col gap-3">
       <h3 className="text-xs font-semibold uppercase tracking-wide text-text-secondary">
-        Notifications
+        {t("conversationShell.notifications")}
       </h3>
       <Select.Root
         value={mode ?? ""}
         disabled={mode === undefined || unavailable || preference.isPending}
         onValueChange={(value) => {
-          const option = ATTENTION_OPTIONS.find((item) => item.mode === value);
+          const option = attentionOptions().find((item) => item.mode === value);
           if (
             option &&
             mode !== undefined &&
@@ -45,8 +46,13 @@ export function ChannelNotificationSettings({
             preference.mutate(option.mode);
         }}
       >
-        <Select.Trigger className={FILTER_SELECT_TRIGGER_CLASS} aria-label="Channel notifications">
-          <Select.Value placeholder={unavailable ? "Unavailable" : "Loading"} />
+        <Select.Trigger
+          className={FILTER_SELECT_TRIGGER_CLASS}
+          aria-label={t("conversationShell.channelNotifications")}
+        >
+          <Select.Value
+            placeholder={unavailable ? t("conversationShell.unavailable") : t("common.loading")}
+          />
           <Select.Icon>
             <ChevronDownIcon className="size-3.5" />
           </Select.Icon>
@@ -54,7 +60,7 @@ export function ChannelNotificationSettings({
         <Select.Portal>
           <Select.Content position="popper" sideOffset={4} className={FILTER_SELECT_CONTENT_CLASS}>
             <Select.Viewport className="p-1">
-              {ATTENTION_OPTIONS.map((option) => (
+              {attentionOptions().map((option) => (
                 <FilterSelectItem
                   key={option.mode}
                   value={option.mode}
@@ -69,13 +75,13 @@ export function ChannelNotificationSettings({
       </Select.Root>
       {unavailable ? (
         <div className="flex items-center justify-between gap-2 text-xs text-error">
-          Unable to load notification preferences.
+          {t("conversationShell.unableToLoadNotification")}
           <Button variant="neutral" size="sm" onClick={() => void modes.refetch()}>
-            Retry
+            {t("common.retry")}
           </Button>
         </div>
       ) : modes.data?.muted ? (
-        <p className="text-xs text-text-muted">Muted by project</p>
+        <p className="text-xs text-text-muted">{t("conversationShell.mutedByProject")}</p>
       ) : null}
     </section>
   );

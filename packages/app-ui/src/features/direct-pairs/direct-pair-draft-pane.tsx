@@ -45,6 +45,7 @@ import type { DirectMessageTarget } from "./target";
 import { useDraftCounterpart } from "./use-draft-counterpart";
 
 import { decideDraftHandoff, useDirectPairs, useInitiateDirectMessage } from "./hooks";
+import { t } from "@/lib/i18n";
 
 interface DirectPairDraftPaneProps {
   target: DirectMessageTarget;
@@ -112,8 +113,8 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
           title,
           titleAction: active
             ? active.kind === "agent"
-              ? "Opens activity"
-              : "Opens profile"
+              ? t("directPairs.opensActivity")
+              : t("directPairs.opensProfile")
             : null,
           titleIcon: active ? titleIcon : undefined,
           actions: [],
@@ -174,7 +175,7 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
     shown: nativeComposer && counterpart !== null,
     draftKey: `direct-draft:${target.kind}:${target.id}`,
     conversationId: null,
-    placeholder: "Message…",
+    placeholder: t("directPairs.message"),
     enabled: !sending,
     canSend: !sendDisabled,
     offersMentions: false,
@@ -335,7 +336,7 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
         className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
         style={paneChrome}
       >
-        This conversation isn&apos;t available to you.
+        {t("directPairs.thisConversationIsntAvailable")}
       </main>
     );
   }
@@ -408,8 +409,8 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
                 onPaste={onPaste}
                 onCompositionStart={() => setComposing(true)}
                 onCompositionEnd={() => setComposing(false)}
-                aria-label={`Message ${title}`}
-                placeholder="Message…"
+                aria-label={t("directPairs.messageNamed", { name: title })}
+                placeholder={t("directPairs.message")}
                 className="block max-h-48 min-h-15 w-full resize-none bg-transparent px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
               />
             </div>
@@ -428,8 +429,8 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={sending || files.length >= MAX_ATTACHMENTS}
-                title="Attach a file"
-                aria-label="Attach a file"
+                title={t("directPairs.attachAFile")}
+                aria-label={t("directPairs.attachAFile")}
                 className={COMPOSER_TOOL_CLASS}
               >
                 <AttachFileIcon className="size-4" />
@@ -439,13 +440,13 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
                 variant="default"
                 size="sm"
                 disabled={sendDisabled}
-                title="Send (Enter)"
+                title={t("directPairs.sendEnter")}
                 data-composer-action="send"
                 data-sticker
                 data-sticker-size="md"
                 className="h-7"
               >
-                {sending ? "Sending…" : "Send"}
+                {sending ? t("directPairs.sending") : t("directPairs.send")}
               </Button>
             </div>
           </div>
@@ -526,17 +527,15 @@ function useDraftFiles() {
 function friendlyInitiateError(error: Error, target: string, hasFiles: boolean): string {
   if (error instanceof ApiError) {
     if (error.kind === "backend_unreachable") {
-      return "Can’t reach the server. Check your connection and try again.";
+      return t("directPairs.cantReachTheServer");
     }
-    if (error.status === 403) return `You can’t start a direct message with ${target}.`;
-    if (error.status === 404) return `${target} is no longer available.`;
+    if (error.status === 403) return t("directPairs.cantStart", { name: target });
+    if (error.status === 404) return t("directPairs.noLongerAvailable", { name: target });
     if (error.status === 413) {
-      return hasFiles
-        ? "Attachments must be 10 MB or smaller each."
-        : "That message is too long to send.";
+      return hasFiles ? t("directPairs.attachmentsMustBe10") : t("directPairs.thatMessageIsToo");
     }
-    if (error.status === 400 && hasFiles) return "One of the attachments can’t be sent.";
-    if (error.status === 400) return "That message can’t be sent as a direct message.";
+    if (error.status === 400 && hasFiles) return t("directPairs.oneOfTheAttachments");
+    if (error.status === 400) return t("directPairs.thatMessageCantBe");
   }
-  return "Could not send. Please try again.";
+  return t("directPairs.couldNotSendPlease");
 }

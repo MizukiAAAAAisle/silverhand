@@ -6,6 +6,7 @@ import {
   type ConversationIdentity,
 } from "@/features/conversations/conversation-identity";
 import { presentCounterpart } from "@/features/direct-pairs/counterpart-presentation";
+import { t } from "@/lib/i18n";
 
 /**
  * A conversation from a WORKSPACE-SCOPED channel list — the synchronous fast
@@ -194,7 +195,7 @@ function presentIdentity(identity: ConversationIdentity): {
 }
 
 export function faceLabel(face: ConversationRefFace): string {
-  return face === "direct_line" ? "Direct message" : "Channel";
+  return face === "direct_line" ? t("messages.directMessage") : t("messages.channel");
 }
 
 export function conversationIcon(face: ConversationRefFace | undefined): JSX.Element {

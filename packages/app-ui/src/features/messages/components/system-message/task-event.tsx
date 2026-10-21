@@ -9,6 +9,7 @@ import {
 import { formatUserDisplayName } from "@/features/session/current-user";
 import { TaskRef } from "@/features/messages/components/task-ref";
 import { type RendererProps, useUserResolver } from "./shared";
+import { t } from "@/lib/i18n";
 
 // ─── task event row ───────────────────────────────────────────────────
 export function TaskEventRow({ message }: RendererProps): JSX.Element {
@@ -59,7 +60,7 @@ function TaskEventBody({
     return (
       <>
         <span className="font-medium text-text-primary">{actorLabel}</span>
-        <span className="text-text-muted">moved</span>
+        <span className="text-text-muted">{t("messages.taskVerb.moved")}</span>
         <TaskRef taskNumber={meta.task_number} />
         <span className="text-text-muted" aria-hidden>
           →
@@ -90,7 +91,9 @@ function TaskEventBody({
       <>
         <span className="font-medium text-text-primary">{actorLabel}</span>
         <span className="text-text-muted">
-          {subtype === "task_claim" ? "assigned" : "unassigned"}
+          {subtype === "task_claim"
+            ? t("messages.taskVerb.assigned")
+            : t("messages.taskVerb.unassigned")}
         </span>
         <TaskRef taskNumber={meta.task_number} />
         {subtype === "task_claim" && assignee ? (
@@ -124,19 +127,21 @@ function TaskEventBody({
   const verb =
     subtype === "task_create"
       ? filedRemotely
-        ? "filed"
-        : "created"
+        ? t("messages.taskVerb.filed")
+        : t("messages.taskVerb.created")
       : subtype === "task_claim"
-        ? "claimed"
+        ? t("messages.taskVerb.claimed")
         : subtype === "task_edit"
-          ? "edited"
-          : "unclaimed";
+          ? t("messages.taskVerb.edited")
+          : t("messages.taskVerb.unclaimed");
   return (
     <>
       <span className="font-medium text-text-primary">{actorLabel}</span>
       <span className="text-text-muted">{verb}</span>
       <TaskRef taskNumber={meta.task_number} />
-      {filedRemotely ? <span className="text-text-muted">from another conversation</span> : null}
+      {filedRemotely ? (
+        <span className="text-text-muted">{t("messages.fromAnotherConversation")}</span>
+      ) : null}
     </>
   );
 }
@@ -183,11 +188,11 @@ function TaskEventDot({ kind }: { kind: TaskEventDotKind }): JSX.Element {
  */
 function TaskStatusPill({ status }: { status: TaskStatus }): JSX.Element {
   const labels: Record<TaskStatus, string> = {
-    todo: "todo",
-    in_progress: "in progress",
-    in_review: "in review",
-    done: "done",
-    closed: "closed",
+    todo: t("messages.taskStatus.todo"),
+    in_progress: t("messages.taskStatus.inProgress"),
+    in_review: t("messages.taskStatus.inReview"),
+    done: t("messages.taskStatus.done"),
+    closed: t("messages.taskStatus.closed"),
   };
   return (
     <span
@@ -238,12 +243,12 @@ function TaskEventRowDegraded({ meta }: { meta: TaskSystemMetadataPartial }): JS
         <>
           <span className="text-text-muted">
             {meta.subtype === "task_create"
-              ? "created"
+              ? t("messages.taskVerb.created")
               : meta.subtype === "task_claim"
-                ? "claimed"
+                ? t("messages.taskVerb.claimed")
                 : meta.subtype === "task_edit"
-                  ? "edited"
-                  : "unclaimed"}
+                  ? t("messages.taskVerb.edited")
+                  : t("messages.taskVerb.unclaimed")}
           </span>
           <TaskRef taskNumber={meta.task_number} />
         </>

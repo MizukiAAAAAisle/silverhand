@@ -10,6 +10,7 @@ import {
 import { api, ApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
+import { t } from "@/lib/i18n";
 
 export function ChangePasswordForm({ userId }: { userId: string }): JSX.Element | null {
   const id = useId();
@@ -38,11 +39,11 @@ export function ChangePasswordForm({ userId }: { userId: string }): JSX.Element 
       new_password: next,
     });
     if (!parsed.success) {
-      setError("Use your current password and a new password of 8–1024 characters.");
+      setError(t("settings.password.invalid"));
       return;
     }
     if (next !== confirm) {
-      setError("New passwords do not match.");
+      setError(t("settings.password.mismatch"));
       return;
     }
     setPending(true);
@@ -60,17 +61,15 @@ export function ChangePasswordForm({ userId }: { userId: string }): JSX.Element 
       await qc.invalidateQueries({ queryKey: ["me"] });
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 403) {
-        setError("Current password was rejected or changed. Check it and try again.");
+        setError(t("settings.password.rejected"));
       } else if (cause instanceof ApiError && cause.status === 422) {
-        setError("The password does not meet the requirements.");
+        setError(t("settings.password.requirements"));
       } else {
         setUncertain(true);
         setCurrent("");
         setNext("");
         setConfirm("");
-        setError(
-          "Could not confirm the change. Do not resubmit; log out and sign in with your new password. If it was not saved, use your previous password.",
-        );
+        setError(t("settings.password.uncertain"));
       }
     } finally {
       setPending(false);
@@ -90,11 +89,11 @@ export function ChangePasswordForm({ userId }: { userId: string }): JSX.Element 
         ) : (
           <ChevronRightIcon className="size-3.5" />
         )}
-        Change password
+        {t("settings.password.change")}
       </button>
       {open ? (
         <form onSubmit={(event) => void submit(event)} className="mt-3 flex flex-col gap-3">
-          <Label htmlFor={`${id}-current`}>Current password</Label>
+          <Label htmlFor={`${id}-current`}>{t("settings.password.current")}</Label>
           <Input
             id={`${id}-current`}
             type="password"
@@ -105,7 +104,7 @@ export function ChangePasswordForm({ userId }: { userId: string }): JSX.Element 
             required
             maxLength={1024}
           />
-          <Label htmlFor={`${id}-new`}>New password</Label>
+          <Label htmlFor={`${id}-new`}>{t("appShell.recovery.newPassword")}</Label>
           <Input
             id={`${id}-new`}
             type="password"
@@ -117,7 +116,7 @@ export function ChangePasswordForm({ userId }: { userId: string }): JSX.Element 
             minLength={8}
             maxLength={1024}
           />
-          <Label htmlFor={`${id}-confirm`}>Confirm new password</Label>
+          <Label htmlFor={`${id}-confirm`}>{t("settings.password.confirmNew")}</Label>
           <Input
             id={`${id}-confirm`}
             type="password"
@@ -140,7 +139,7 @@ export function ChangePasswordForm({ userId }: { userId: string }): JSX.Element 
             className="self-start"
             disabled={pending || uncertain || !current || !next || !confirm}
           >
-            {pending ? "Saving…" : "Change password"}
+            {pending ? t("settings.saving") : t("settings.password.change")}
           </Button>
         </form>
       ) : null}

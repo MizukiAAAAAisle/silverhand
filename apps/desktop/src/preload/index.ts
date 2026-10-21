@@ -196,6 +196,10 @@ const api: DesktopBridge = {
   respondContextualClose: (reqId: string, outcome: "closed-panel" | "background-app"): void => {
     ipcRenderer.send("shortcut:contextual-close-result", reqId, outcome);
   },
+  /** The renderer's resolved language, so native menus read the same as the page. */
+  setLocale: (locale: "en" | "zh"): void => {
+    ipcRenderer.send("app:set-locale", locale);
+  },
   showSystemNotification: (opts: {
     title: string;
     subtitle?: string;

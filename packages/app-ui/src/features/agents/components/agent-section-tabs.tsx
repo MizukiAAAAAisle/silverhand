@@ -8,6 +8,7 @@ import {
   UserIcon,
 } from "@/icons";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 export type AgentSection = "profile" | "workspace" | "mcp" | "activity" | "schedules" | "chats";
 
@@ -23,43 +24,43 @@ interface SectionItem {
   ownerOnly?: boolean;
 }
 
-export const AGENT_SECTIONS: ReadonlyArray<SectionItem> = [
+export const agentSections = (): ReadonlyArray<SectionItem> => [
   {
     id: "profile",
-    label: "Profile",
+    label: t("agents.profile"),
     icon: UserIcon,
-    hint: "Identity, runtime, model.",
+    hint: t("agents.identityRuntimeModel"),
   },
   {
     id: "schedules",
-    label: "Schedules",
+    label: t("agents.schedules"),
     icon: AlarmIcon,
     hint: "Cron / interval / one-shot wakeups.",
   },
   {
     id: "chats",
-    label: "Chats",
+    label: t("agents.chats"),
     icon: ChatsIcon,
-    hint: "Owner-only, read-only audit of this agent’s conversations.",
+    hint: t("agents.ownerOnlyReadOnly"),
     ownerOnly: true,
   },
   {
     id: "workspace",
-    label: "Workspace",
+    label: t("agents.workspace"),
     icon: FolderEditIcon,
-    hint: "L1 system prompt, MEMORY, notes.",
+    hint: t("agents.l1SystemPromptMemory"),
   },
   {
     id: "mcp",
     label: "MCP",
     icon: IntegrationIcon,
-    hint: "Profile MCP servers — raw config + summary.",
+    hint: t("agents.profileMcpServersRaw"),
   },
   {
     id: "activity",
-    label: "Activity",
+    label: t("agents.activity"),
     icon: ActivityIcon,
-    hint: "Per-channel execution trace.",
+    hint: t("agents.perChannelExecutionTrace"),
   },
 ];
 
@@ -78,7 +79,7 @@ export function AgentSectionTabs<T extends string>({
   onChange: (section: T) => void;
 }): JSX.Element {
   return (
-    <nav aria-label="Agent sections" className="agent-section-tabs scrollbar-hide">
+    <nav aria-label={t("agents.agentSections")} className="agent-section-tabs scrollbar-hide">
       {sections.map((item) => {
         const selected = item.id === active;
         const Icon = item.icon;

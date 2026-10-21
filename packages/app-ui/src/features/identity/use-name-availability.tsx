@@ -9,6 +9,7 @@ import {
 } from "@silverhand/shared";
 import { api } from "@/lib/api";
 import { SpinnerIcon } from "@/icons";
+import { t } from "@/lib/i18n";
 
 export type NameCheckKind = "agent" | "workspace";
 
@@ -22,35 +23,36 @@ export type NameCheckStatus =
 
 type FormatIssue = "charset" | "length";
 
-const NAME_RULE = {
-  agent: {
-    schema: ParticipantNameSchema,
-    message: {
-      charset: "Must start with a letter; letters, numbers, - and _ only.",
-      length: `Must be ${ENTITY_NAME_MAX_LENGTH} characters or fewer.`,
+const nameRule = () =>
+  ({
+    agent: {
+      schema: ParticipantNameSchema,
+      message: {
+        charset: t("identity.mustStartWithA"),
+        length: t("identity.nameTooLong", { max: ENTITY_NAME_MAX_LENGTH }),
+      },
     },
-  },
-  workspace: {
-    schema: WorkspaceNameSchema,
-    message: {
-      // A workspace name is a label, so almost everything is legal and the
-      // only reachable non-length rejection is a code point the field cannot
-      // render — pasted zero-width joiners, BOM, bidi overrides. Naming the
-      // invisible cause is the whole value of this line; "invalid name" would
-      // leave the user staring at text that looks correct.
-      charset: "Control and invisible characters are not allowed.",
-      length: `Must be ${ENTITY_NAME_MAX_LENGTH} characters or fewer.`,
+    workspace: {
+      schema: WorkspaceNameSchema,
+      message: {
+        // A workspace name is a label, so almost everything is legal and the
+        // only reachable non-length rejection is a code point the field cannot
+        // render — pasted zero-width joiners, BOM, bidi overrides. Naming the
+        // invisible cause is the whole value of this line; "invalid name" would
+        // leave the user staring at text that looks correct.
+        charset: t("identity.controlAndInvisibleCharacters"),
+        length: t("identity.nameTooLong", { max: ENTITY_NAME_MAX_LENGTH }),
+      },
     },
-  },
-} satisfies Record<
-  NameCheckKind,
-  {
-    schema: typeof ParticipantNameSchema | typeof WorkspaceNameSchema;
-    message: Record<FormatIssue, string>;
-  }
->;
+  }) satisfies Record<
+    NameCheckKind,
+    {
+      schema: typeof ParticipantNameSchema | typeof WorkspaceNameSchema;
+      message: Record<FormatIssue, string>;
+    }
+  >;
 
-const TAKEN_MESSAGE = "This name is already taken.";
+const takenMessage = () => t("identity.thisNameIsAlready");
 
 export interface NameCheckView {
   status: NameCheckStatus;
@@ -66,14 +68,14 @@ export interface NameCheckView {
  *  if both fail, length remains the more actionable verdict. */
 export function nameFormatIssue(kind: NameCheckKind, name: string): FormatIssue | null {
   if (name.length === 0) return null;
-  const parsed = NAME_RULE[kind].schema.safeParse(name);
+  const parsed = nameRule()[kind].schema.safeParse(name);
   if (parsed.success) return null;
   return parsed.error.issues.some((issue) => issue.code === "too_big") ? "length" : "charset";
 }
 
 export function nameFormatMessage(kind: NameCheckKind, name: string): string | null {
   const issue = nameFormatIssue(kind, name);
-  return issue ? NAME_RULE[kind].message[issue] : null;
+  return issue ? nameRule()[kind].message[issue] : null;
 }
 
 /** Pure presentation core — no React, no fetching. Maps the resolved facts to
@@ -96,7 +98,7 @@ export function nameAvailabilityView(input: {
   if (formatIssue) {
     return {
       status: "invalid",
-      message: NAME_RULE[kind].message[formatIssue],
+      message: nameRule()[kind].message[formatIssue],
       blocking: true,
     };
   }
@@ -108,7 +110,7 @@ export function nameAvailabilityView(input: {
   if (data) {
     return data.available
       ? { status: "available", message: null, blocking: false }
-      : { status: "taken", message: TAKEN_MESSAGE, blocking: true };
+      : { status: "taken", message: takenMessage(), blocking: true };
   }
   // No settled verdict yet: debounce still catching up, or the initial probe is
   // in flight. Non-blocking — create backstops a fast submit.
@@ -240,7 +242,7 @@ export function NameCheckingIcon({ check }: { check: NameCheckView }): JSX.Eleme
   return (
     <SpinnerIcon
       role="status"
-      aria-label="Checking availability"
+      aria-label={t("identity.checkingAvailability")}
       className="pointer-events-none absolute right-2.5 top-1/2 size-3.5 -translate-y-1/2 animate-spin text-text-muted"
     />
   );

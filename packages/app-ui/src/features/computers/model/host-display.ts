@@ -1,4 +1,5 @@
 import type { HostAvailability, HostDto } from "@silverhand/shared";
+import { t } from "@/lib/i18n";
 
 /**
  * The single place the renderer turns a computer into a user-facing name:
@@ -15,7 +16,7 @@ export function hostDisplayName(host: HostDto): string {
  * Restrained fallback when an agent references a computer that isn't in the
  * owned-computers list — deleted, revoked, or not owned by the viewer.
  */
-export const UNKNOWN_COMPUTER_LABEL = "Unknown computer";
+export const unknownComputerLabel = () => t("computers.unknownComputer");
 
 /**
  * Resolve a computer name from an optional host DTO, falling back to the
@@ -23,7 +24,7 @@ export const UNKNOWN_COMPUTER_LABEL = "Unknown computer";
  * the agent profile so the two never drift.
  */
 export function resolveComputerName(host: HostDto | undefined): string {
-  return host ? hostDisplayName(host) : UNKNOWN_COMPUTER_LABEL;
+  return host ? hostDisplayName(host) : unknownComputerLabel();
 }
 
 /**
@@ -54,12 +55,12 @@ export function computerUnavailableLabel(
     case "available":
       return null;
     case "disconnected":
-      return "Offline";
+      return t("computers.offline");
     case "unreachable":
-      return "Unreachable";
+      return t("computers.unreachable");
     case "revoked":
-      return "Revoked";
+      return t("computers.revoked");
     case undefined:
-      return "Checking…";
+      return t("common.checking");
   }
 }

@@ -12,6 +12,7 @@ import {
   FILTER_SELECT_TRIGGER_CLASS,
   FILTER_SELECT_CONTENT_CLASS,
 } from "@/components/ui/filter-select";
+import { t } from "@/lib/i18n";
 
 /**
  * Shared "filter by workspace" dropdown. One component, one data source
@@ -35,10 +36,10 @@ export function WorkspaceFilterSelect({
   value,
   workspaces,
   onChange,
-  allLabel = "All projects",
+  allLabel = t("workspaces.allProjects"),
   allIcon,
   showArchivedSuffix = false,
-  ariaLabel = "Project filter",
+  ariaLabel = t("workspaces.projectFilter"),
 }: {
   value: WorkspaceFilterValue;
   /** Full list — every workspace the viewer can see is offered. */
@@ -96,7 +97,7 @@ export function WorkspaceFilterSelect({
             {agentSpaces.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
-                  Agent Spaces
+                  {t("workspaces.agentSpaces")}
                 </Select.Label>
                 {agentSpaces.map((workspace) => (
                   <FilterSelectItem
@@ -111,7 +112,7 @@ export function WorkspaceFilterSelect({
                     }
                     suffix={
                       showArchivedSuffix && workspace.archived_at !== null
-                        ? "archived project"
+                        ? t("workspaces.archivedProject")
                         : undefined
                     }
                   >
@@ -123,7 +124,7 @@ export function WorkspaceFilterSelect({
             {peopleOwned.length > 0 ? (
               <Select.Group>
                 <Select.Label className="px-2 pb-1 pt-2 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted">
-                  Projects
+                  {t("workspaces.projects")}
                 </Select.Label>
                 {peopleOwned.map((workspace) => (
                   <FilterSelectItem
@@ -137,7 +138,7 @@ export function WorkspaceFilterSelect({
                     }
                     suffix={
                       showArchivedSuffix && workspace.archived_at !== null
-                        ? "archived project"
+                        ? t("workspaces.archivedProject")
                         : undefined
                     }
                   >
@@ -170,7 +171,7 @@ function workspaceFilterLabel(
     // PLACEHOLDER, not a claim about ownership — a generic word and the neutral
     // badge, never the vanished workspace's identity.
     return {
-      label: "Project",
+      label: t("workspaces.project"),
       icon: <WorkspaceIcon ownerAgentId={null} ownerAgentAvatarUrls={agentAvatarUrls} />,
     };
   }

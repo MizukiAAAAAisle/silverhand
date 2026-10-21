@@ -31,6 +31,7 @@ import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { collectCounterpartAvatarSources } from "@/features/direct-pairs/counterpart-presentation";
 import { DirectLineRowView, DirectPairStarMenuItem } from "./direct-messages-panel";
 import { directRowBadge } from "../model/sidebar-row-badges";
+import { t } from "@/lib/i18n";
 
 /** One STARRED row: a starred channel or a starred direct pair, one sort group. */
 type StarredRow =
@@ -156,7 +157,7 @@ export function FavoritesGroup(props: {
 
   return (
     <SidebarSection
-      label="STARRED"
+      label={t("chat.starred")}
       labelClassName="text-xs"
       icon={<StarIcon className="size-3.5" />}
       count={rows.length}
@@ -180,10 +181,10 @@ export function FavoritesGroup(props: {
       {ordered.length === 0 ? (
         isLoading ? (
           <li>
-            <SidebarRowsSkeleton label="Loading starred conversations" nested />
+            <SidebarRowsSkeleton label={t("chat.loadingStarredConversations")} nested />
           </li>
         ) : (
-          <SidebarEmptyRow>No starred conversations</SidebarEmptyRow>
+          <SidebarEmptyRow>{t("chat.noStarredConversations")}</SidebarEmptyRow>
         )
       ) : null}
       <SortableGroup

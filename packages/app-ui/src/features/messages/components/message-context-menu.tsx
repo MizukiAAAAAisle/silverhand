@@ -14,6 +14,7 @@ import {
   AppContextMenuItem,
   AppContextMenuSeparator,
 } from "@/components/menus/app-context-menu";
+import { t } from "@/lib/i18n";
 
 /**
  * Right-click context menu for a single MessageItem row. Wraps the row
@@ -131,7 +132,7 @@ export function MessageContextMenu({
             setSelecting(true);
           }}
         >
-          Select text
+          {t("messages.selectText")}
         </AppContextMenuItem>
       ) : null}
       {onCopyMarkdown ? (
@@ -139,7 +140,7 @@ export function MessageContextMenu({
           icon={<CopyMarkdownIcon className="size-3.5" />}
           onSelect={onCopyMarkdown}
         >
-          Copy markdown
+          {t("messages.copyMarkdown")}
         </AppContextMenuItem>
       ) : null}
       {onToggleSave ? (
@@ -153,14 +154,14 @@ export function MessageContextMenu({
           }
           onSelect={onToggleSave}
         >
-          {saved ? "Unsave" : "Save message"}
+          {saved ? t("messages.unsave") : t("messages.saveMessage")}
         </AppContextMenuItem>
       ) : null}
       {onShare ? (
         <>
           <AppContextMenuSeparator />
           <AppContextMenuItem icon={<ShareLinkIcon className="size-3.5" />} onSelect={onShare}>
-            Share
+            {t("messages.share")}
           </AppContextMenuItem>
         </>
       ) : null}
@@ -171,7 +172,7 @@ export function MessageContextMenu({
             icon={<BellOffIcon className="size-3.5" />}
             onSelect={onUnfollowThread}
           >
-            Unfollow thread
+            {t("messages.unfollowThread")}
           </AppContextMenuItem>
         </>
       ) : null}

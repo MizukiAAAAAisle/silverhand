@@ -1,6 +1,7 @@
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { SkeletonBlock } from "@/components/layout/skeleton";
 import { AVATAR_PX } from "@/components/avatar-scale";
+import { t } from "@/lib/i18n";
 
 // Stable examples, not inferred message data. Continuations preserve the avatar
 // column but omit repeated identity, as MessageItem does for grouped messages.
@@ -24,7 +25,7 @@ export function MessageRowsSkeleton({
   return (
     <div
       role="status"
-      aria-label="Loading messages"
+      aria-label={t("conversationShell.loadingMessages")}
       className={`overflow-hidden ${className}`}
       data-conversation-rows-skeleton
     >

@@ -7,6 +7,7 @@ import {
   FILTER_SELECT_CONTENT_CLASS,
 } from "@/components/ui/filter-select";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 /**
  * Shared "filter by recency" dropdown, converged on the option semantics
@@ -22,11 +23,11 @@ export type DateFilterValue = "all" | "30d" | "14d" | "7d";
 // Ordered near → far: the natural recency progression, shared across every
 // consumer. Editing this order changes all three surfaces at once — that
 // single source is the point; there is no per-instance override.
-export const DATE_FILTER_OPTIONS: Array<{ value: DateFilterValue; label: string }> = [
-  { value: "all", label: "All time" },
-  { value: "7d", label: "Last 1 week" },
-  { value: "14d", label: "Last 2 weeks" },
-  { value: "30d", label: "Last 30 days" },
+export const dateFilterOptions = (): Array<{ value: DateFilterValue; label: string }> => [
+  { value: "all", label: t("ui.allTime") },
+  { value: "7d", label: t("ui.last1Week") },
+  { value: "14d", label: t("ui.last2Weeks") },
+  { value: "30d", label: t("ui.last30Days") },
 ];
 
 /** Lower-bound epoch-ms cutoff for a date filter, or `null` for "all time".
@@ -43,7 +44,7 @@ export function dateFilterSince(value: DateFilterValue, nowMs?: number): number 
 export function DateFilterSelect({
   value,
   onChange,
-  ariaLabel = "Date filter",
+  ariaLabel = t("ui.dateFilter"),
   triggerClassName,
 }: {
   value: DateFilterValue;
@@ -52,7 +53,7 @@ export function DateFilterSelect({
   /** Merged onto the trigger — e.g. `w-auto` for a content-width bar. */
   triggerClassName?: string;
 }): JSX.Element {
-  const selected = DATE_FILTER_OPTIONS.find((o) => o.value === value)?.label ?? "All time";
+  const selected = dateFilterOptions().find((o) => o.value === value)?.label ?? t("ui.allTime");
   return (
     <Select.Root value={value} onValueChange={(v) => onChange(v as DateFilterValue)}>
       <Select.Trigger
@@ -75,7 +76,7 @@ export function DateFilterSelect({
           className={FILTER_SELECT_CONTENT_CLASS}
         >
           <Select.Viewport className="p-1">
-            {DATE_FILTER_OPTIONS.map((option) => (
+            {dateFilterOptions().map((option) => (
               <FilterSelectItem
                 key={option.value}
                 value={option.value}

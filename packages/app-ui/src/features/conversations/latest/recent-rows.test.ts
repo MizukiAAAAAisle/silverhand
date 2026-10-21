@@ -7,6 +7,7 @@ import {
   recentTimeLabel,
   type RecentOrderable,
 } from "./recent-rows";
+import { t } from "@/lib/i18n";
 
 const latest = (overrides: Partial<ConversationLatest>): ConversationLatest =>
   ({
@@ -59,7 +60,9 @@ describe("orderRecentRows", () => {
 describe("recentPreviewText", () => {
   it("prefers the text, then counts the attachments", () => {
     expect(recentPreviewText(latest({ preview: "hi", attachment_count: 2 }))).toBe("hi");
-    expect(recentPreviewText(latest({ attachment_count: 1 }))).toBe("Attachment");
+    expect(recentPreviewText(latest({ attachment_count: 1 }))).toBe(
+      t("common.attachmentCount", { count: 1 }),
+    );
     expect(recentPreviewText(latest({ attachment_count: 3 }))).toBe("3 attachments");
     expect(recentPreviewText(latest({}))).toBe("");
   });

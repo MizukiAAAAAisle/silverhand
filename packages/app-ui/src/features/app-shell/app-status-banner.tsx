@@ -5,6 +5,7 @@ import { useBackendUnreachableSnitch } from "./use-backend-unreachable-snitch";
 import { describeProtocolSkew } from "./protocol-skew-presentation";
 import { selectAppStatusBanner } from "./app-status-banner-model";
 import { openAppUpdateDialog, useAppUpdateState } from "@/features/app-update/app-update-store";
+import { t } from "@/lib/i18n";
 
 interface BannerShellProps {
   title: string;
@@ -62,8 +63,8 @@ export function AppStatusBanner(): JSX.Element | null {
   if (model.kind === "backend_unreachable") {
     return (
       <BannerShell
-        title="Server unreachable"
-        action={{ label: "Retry", onClick: unreachable.retry }}
+        title={t("appShell.serverUnreachable")}
+        action={{ label: t("common.retry"), onClick: unreachable.retry }}
       />
     );
   }
@@ -72,7 +73,9 @@ export function AppStatusBanner(): JSX.Element | null {
     <BannerShell
       title={model.view.title}
       detail={model.view.detail}
-      action={appBehind && appUpdate ? { label: "Update", onClick: openAppUpdateDialog } : null}
+      action={
+        appBehind && appUpdate ? { label: t("common.update"), onClick: openAppUpdateDialog } : null
+      }
     />
   );
 }

@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { TitlebarCapability } from "@silverhand/client";
 import { NativeTitlebarSearch, type TitlebarSearchNav } from "@/features/search/titlebar-search";
+import { t, useLocale } from "@/lib/i18n";
 
 /**
  * The wide layout's titlebar when the platform draws it natively (iOS). The
@@ -24,6 +25,7 @@ export function NativeTitlebar({
   searchNav: TitlebarSearchNav;
   darkFrame: boolean;
 }): JSX.Element {
+  const locale = useLocale();
   const toggleRef = useRef(onToggleSidebar);
   toggleRef.current = onToggleSidebar;
 
@@ -33,14 +35,17 @@ export function NativeTitlebar({
         sidebar:
           sidebarShown === null
             ? null
-            : { shown: sidebarShown, label: sidebarShown ? "Hide sidebar" : "Show sidebar" },
-        status: archived ? "Archived" : null,
-        searchPlaceholder: "Search everything",
-        searchShortcut: "Search",
+            : {
+                shown: sidebarShown,
+                label: sidebarShown ? t("appShell.hideSidebar") : t("appShell.showSidebar"),
+              },
+        status: archived ? t("common.archived") : null,
+        searchPlaceholder: t("appShell.searchEverything"),
+        searchShortcut: t("common.search"),
         dark: darkFrame,
       })
       .catch(() => {});
-  }, [titlebar, sidebarShown, archived, darkFrame]);
+  }, [locale, titlebar, sidebarShown, archived, darkFrame]);
 
   useEffect(() => {
     const listening = titlebar.subscribe((event) => {

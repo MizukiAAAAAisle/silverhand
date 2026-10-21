@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import type { MessageAuthorDto, ThreadReplyPreviewRow } from "@silverhand/shared";
 import { AttachmentIcon } from "@/icons";
+import { t } from "@/lib/i18n";
 
 /**
  * The wire row is the SHARED contract (`@silverhand/shared`), not a renderer
@@ -229,7 +230,9 @@ export function ThreadReplyPreview({
               // widens the type scale).
               <span className="flex min-w-0 max-w-[40%] items-center gap-1">
                 <AttachmentIcon className="size-3 shrink-0" />
-                <span className="truncate">{row.first_attachment_label ?? "Attachment"}</span>
+                <span className="truncate">
+                  {row.first_attachment_label ?? t("messages.attachment")}
+                </span>
                 {row.attachment_count > 1 ? (
                   <span className="shrink-0">+{row.attachment_count - 1}</span>
                 ) : null}

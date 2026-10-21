@@ -2,6 +2,7 @@ import { getPlatform } from "@/platform";
 import { toast } from "sonner";
 import type { AttachmentSnapshot } from "@silverhand/shared";
 import { fetchAttachmentBytes } from "@/lib/api";
+import { t } from "@/lib/i18n";
 
 /**
  * Open-with-OS flow for a non-image chat attachment. Fetches bytes through
@@ -69,20 +70,20 @@ async function openBytesExternally(
  *  exceptions identically. */
 export function formatOpenException(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
-  return `Can't open the attachment: ${msg}`;
+  return t("messages.openFailed", { reason: msg });
 }
 
 /** Translate the IPC failure reason into a user-facing string. Kept short —
  *  used both as a toast body and a tile's `title` hint. */
 export function describeOpenFailure(reason: string): string {
   if (reason === "unsafe_extension") {
-    return "This file type can't be opened from Silverhand.";
+    return t("messages.thisFileTypeCant");
   }
   if (reason.startsWith("open_failed")) {
-    return "macOS could not open this file.";
+    return t("messages.macosCouldNotOpen");
   }
   if (reason === "empty_payload" || reason === "invalid_payload") {
-    return "The attachment data is invalid.";
+    return t("messages.theAttachmentDataIs");
   }
   return reason;
 }
@@ -128,9 +129,7 @@ const defaultDeps: OpenAttachmentDeps = {
   fetchBytes: (id) => fetchAttachmentBytes(id),
   open: async (input) => {
     const open = getPlatform().files.openAttachmentExternal;
-    return open
-      ? open(input)
-      : { ok: false, reason: "Opening attachments in external apps is unavailable." };
+    return open ? open(input) : { ok: false, reason: t("messages.openingAttachmentsInExternal") };
   },
   toastError: (msg) => {
     toast.error(msg);

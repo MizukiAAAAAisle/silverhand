@@ -37,6 +37,7 @@ import { useToggleReaction } from "@/features/channels/reaction-hooks";
 import { useMessageLayoutMode } from "../hooks/use-message-layout-mode";
 import { MessageTaskTag } from "./message-task-tag";
 import { AttachmentList } from "./message-attachments";
+import { t } from "@/lib/i18n";
 
 // Idempotent — the reply badge's "{time} ago" label uses dayjs.fromNow().
 // Other modules (useRelativeTime) extend the same plugin; re-extending is a
@@ -434,7 +435,7 @@ function ActorMessageItem({
   const replyBadgeLabel =
     threadReplyCount === undefined
       ? ""
-      : `${threadReplyCount} ${threadReplyCount === 1 ? "Reply" : "Replies"}`;
+      : `${threadReplyCount} ${threadReplyCount === 1 ? t("messages.reply") : t("messages.replies")}`;
 
   // P1 (#task:1073): when the enriched summary is present, the badge upgrades
   // to avatars + count + last-reply time. `repliers.length > 0` guards the
@@ -461,9 +462,9 @@ function ActorMessageItem({
   // enriched chip appends the last-reply time, the fallback stays bare.
   const replyBadgeTitle =
     threadUnreadCount > 0
-      ? `${replyBadgeLabel} ${threadUnreadCount} new — jump to first unread`
+      ? t("messages.replyBadgeUnread", { label: replyBadgeLabel, count: threadUnreadCount })
       : enrichedReply
-        ? `${replyBadgeLabel} last reply ${replyRelativeTime}`
+        ? t("messages.replyBadgeLast", { label: replyBadgeLabel, time: replyRelativeTime })
         : replyBadgeLabel;
   // Thread repliers now arrive as the SAME server-authoritative
   // {@link MessageAuthorDto} the byline uses (#task:1791/#task:1792), so their
@@ -596,7 +597,7 @@ function ActorMessageItem({
   const threadUnreadNode =
     threadUnreadCount > 0 ? (
       <span className="shrink-0 whitespace-nowrap font-medium text-(--unread)">
-        {threadUnreadCount > 99 ? "99+" : threadUnreadCount} new
+        {t("messages.newCount", { count: threadUnreadCount > 99 ? "99+" : threadUnreadCount })}
       </span>
     ) : null;
   // The badge and the preview lines are ONE object when there are lines to head
@@ -907,8 +908,8 @@ function ActorMessageItem({
               trigger={
                 <button
                   type="button"
-                  title="React"
-                  aria-label="React"
+                  title={t("messages.react")}
+                  aria-label={t("messages.react")}
                   className="flex items-center rounded-sm text-text-muted transition-colors hover:text-text-primary focus-outline"
                 >
                   <AddReactionIcon className="size-3.5" />
@@ -919,7 +920,7 @@ function ActorMessageItem({
           {onStartThread && threadReplyCount === undefined && canParticipate ? (
             <ActionButton
               icon={<ThreadIcon className="size-3.5" />}
-              label="Thread"
+              label={t("messages.thread2")}
               onClick={() => onStartThread(message)}
               alwaysVisible
               hovered={hover}
@@ -928,7 +929,7 @@ function ActorMessageItem({
           {onSave ? (
             <ActionButton
               icon={<BookmarkIcon className={"size-3.5 " + (saved ? "fill-current" : "")} />}
-              label={saved ? "Saved" : "Save"}
+              label={saved ? t("messages.saved") : t("common.save")}
               active={saved}
               onClick={() => onSave(message)}
               alwaysVisible
@@ -1187,7 +1188,7 @@ function SelectionCheckbox({
       type="button"
       role="checkbox"
       aria-checked={checked}
-      aria-label={checked ? "Deselect message" : "Select message"}
+      aria-label={checked ? t("messages.deselectMessage") : t("messages.selectMessage")}
       onClick={onChange}
       className={
         "mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-(--control-radius) border transition-colors focus-outline " +

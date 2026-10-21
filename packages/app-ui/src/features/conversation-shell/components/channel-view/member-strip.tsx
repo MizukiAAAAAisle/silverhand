@@ -25,6 +25,7 @@ import {
 } from "@/features/session/hooks";
 import { useConversationMembers } from "@/features/conversations/use-conversation-members";
 import { useNav } from "@/router";
+import { t } from "@/lib/i18n";
 
 // ── Member strip ────────────────────────────────────────────────────────
 
@@ -288,8 +289,8 @@ function MemberOverflowChip({
     <button
       type="button"
       onClick={onOpenMembers}
-      aria-label={`+${overflow.length} more members`}
-      title="Members"
+      aria-label={t("conversationShell.moreMembers", { count: overflow.length })}
+      title={t("conversationShell.members")}
       data-member-chip="overflow"
       data-member-total={totalVisible}
       data-avatar-ground

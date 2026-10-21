@@ -1,4 +1,5 @@
 import type { ReactionAggregateDto } from "@silverhand/shared";
+import { t } from "@/lib/i18n";
 
 /**
  * The single source of truth for how a message's reactions LOOK, plus the pure
@@ -64,7 +65,7 @@ export function ReactionChipBody({ agg }: { agg: ReactionAggregateDto }): JSX.El
 /** Accessible label for a single chip (also asserted by the screenshot parity
  *  test, so it stays in sync across surfaces). */
 export function reactionChipCountLabel(agg: ReactionAggregateDto): string {
-  return `${agg.emoji}, ${agg.count} reaction${agg.count === 1 ? "" : "s"}`;
+  return t("messages.reactionCount", { emoji: agg.emoji, count: agg.count });
 }
 
 /**
@@ -88,7 +89,9 @@ export function ReactionChipRow({
         <div
           key={agg.emoji}
           data-reaction-chip
-          aria-label={reactionChipCountLabel(agg) + (agg.viewer_reacted ? ", you reacted" : "")}
+          aria-label={
+            reactionChipCountLabel(agg) + (agg.viewer_reacted ? t("messages.youReacted") : "")
+          }
           className={reactionChipClass(agg, false)}
         >
           <ReactionChipBody agg={agg} />

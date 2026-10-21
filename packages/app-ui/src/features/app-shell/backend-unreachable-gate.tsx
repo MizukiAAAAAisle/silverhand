@@ -39,6 +39,7 @@ import type { SaveServerUrlBanner } from "@/features/settings/model/describe-sav
 import { validateServerUrlDraft } from "@/features/settings/model/server-url-validation";
 import { describeProbeOutcome } from "@/features/settings/model/describe-probe-outcome";
 import type { ProfileSaveWithTestResult } from "@silverhand/client";
+import { t } from "@/lib/i18n";
 
 export interface BackendUnreachableGateProps {
   /** The active backend's origin (e.g. `https://backend.example.test`)
@@ -117,8 +118,8 @@ export function BackendUnreachableGate({
     } catch (err) {
       setBanner({
         tone: "error",
-        title: "Could not save the address.",
-        description: err instanceof Error ? err.message : "Unknown error.",
+        title: t("appShell.unreachable.saveFailed"),
+        description: err instanceof Error ? err.message : t("common.unknownError"),
       });
     } finally {
       setSaving(false);
@@ -146,10 +147,12 @@ export function BackendUnreachableGate({
               one 20px mark (shiki #task:1833 「warning icon 不要给背景色」).
               Same bare-glyph shape as AppStatusBanner. */}
           <WarningIcon className="size-5 shrink-0 text-warning" />
-          <h1 className="text-base font-semibold leading-tight">Can&apos;t reach this server</h1>
+          <h1 className="text-base font-semibold leading-tight">
+            {t("appShell.unreachable.title")}
+          </h1>
         </header>
         <p className="mb-3 text-xs leading-relaxed text-text-muted">
-          Silverhand has a saved server profile pointing at:
+          {t("appShell.unreachable.savedProfile")}
         </p>
 
         {editing ? (
@@ -188,10 +191,10 @@ export function BackendUnreachableGate({
                   classification.kind === "reject"
                     ? classification.message
                     : isUnchanged
-                      ? "Already set to this value."
+                      ? t("appShell.unreachable.alreadySet")
                       : classification.kind === "empty"
-                        ? "Enter an address to save."
-                        : "Save address"
+                        ? t("appShell.unreachable.enterAddress")
+                        : t("appShell.unreachable.saveAddress")
                 }
               >
                 {saving ? (
@@ -206,7 +209,7 @@ export function BackendUnreachableGate({
                 variant="ghost"
                 onClick={cancelEdit}
                 disabled={saving}
-                title="Cancel"
+                title={t("common.cancel")}
               >
                 <CloseIcon className="size-3.5" />
               </Button>
@@ -225,7 +228,7 @@ export function BackendUnreachableGate({
               size="icon"
               variant="ghost"
               onClick={startEdit}
-              title="Edit server address"
+              title={t("appShell.unreachable.editAddress")}
             >
               <EditIcon className="size-3.5" />
             </Button>
@@ -256,8 +259,7 @@ export function BackendUnreachableGate({
         )}
 
         <p className="mb-2 text-xs leading-relaxed text-text-muted">
-          The connection failed before signup or login could be attempted. The server may be down,
-          the network may be unreachable.
+          {t("appShell.unreachable.detail")}
         </p>
         {message ? (
           <pre className="mb-4 overflow-x-auto rounded-(--control-radius) border border-border-subtle bg-bg-inset px-2 py-1.5 font-mono text-(length:--text-meta) leading-snug text-text-muted">
@@ -266,7 +268,7 @@ export function BackendUnreachableGate({
         ) : null}
         <Button type="button" variant="primary" className="w-full justify-center" onClick={onRetry}>
           <RefreshIcon className="size-3.5" />
-          Retry connection
+          {t("appShell.unreachable.retryConnection")}
         </Button>
       </div>
     </main>
@@ -277,8 +279,8 @@ export function describeProfileSaveForGate(result: ProfileSaveWithTestResult): S
   if (result.ok) {
     return {
       tone: "success",
-      title: "Saved. Retrying connection…",
-      description: `Using ${result.profile.server_url}.`,
+      title: t("appShell.unreachable.savedRetrying"),
+      description: t("appShell.unreachable.using", { url: result.profile.server_url }),
     };
   }
   if (result.phase === "test") {
@@ -292,13 +294,13 @@ export function describeProfileSaveForGate(result: ProfileSaveWithTestResult): S
   if (result.phase === "commit_guard") {
     return {
       tone: "error",
-      title: "Cannot save this server URL in this build.",
+      title: t("appShell.unreachable.commitGuard"),
       description: result.message,
     };
   }
   return {
     tone: "error",
-    title: "Could not write the profile.",
-    description: result.detail ?? "Check that Silverhand can write to its app data folder.",
+    title: t("appShell.unreachable.writeFailed"),
+    description: result.detail ?? t("appShell.unreachable.writeFailedDetail"),
   };
 }

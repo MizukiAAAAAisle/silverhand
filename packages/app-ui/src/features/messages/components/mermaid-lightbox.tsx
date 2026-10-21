@@ -4,6 +4,7 @@ import * as DialogPrimitive from "@/components/ui/modal";
 import { CloseIcon, ZoomInIcon, ZoomOutIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
+import { t } from "@/lib/i18n";
 
 interface MermaidLightboxProps {
   open: boolean;
@@ -167,7 +168,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
         <DialogPrimitive.Content
           data-modal-shell
           onKeyDown={onKeyDown}
-          aria-label="Diagram preview"
+          aria-label={t("messages.diagramPreview")}
           className="fixed inset-0 z-(--z-lightbox-chrome) m-auto flex flex-col overflow-hidden rounded-(--floating-radius,var(--radius-md)) bg-bg-floating shadow-xl focus:outline-none"
           style={{ width: "min(1100px, 92vw)", height: "86vh" }}
         >
@@ -176,10 +177,10 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
             className="flex shrink-0 items-center gap-2 border-b-(length:--control-border-width) border-border-subtle px-3 py-2"
           >
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
-              Diagram
+              {t("messages.diagram")}
             </DialogPrimitive.Title>
             <DialogPrimitive.Close
-              aria-label="Close"
+              aria-label={t("common.close")}
               data-sticker-close
               data-sticker
               data-sticker-size="md"
@@ -233,7 +234,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
                 variant="neutral"
                 size="icon"
                 className="size-[22px] shrink-0"
-                aria-label="Zoom out"
+                aria-label={t("messages.zoomOut")}
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
                 data-zoom-stepper
@@ -248,7 +249,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
                 max={MAX_SCALE * 100}
                 step="any"
                 value={scale * 100}
-                aria-label="Zoom level"
+                aria-label={t("messages.zoomLevel")}
                 onChange={(e) => setZoom(Number(e.target.value) / 100)}
               />
               <Button
@@ -256,7 +257,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
                 variant="neutral"
                 size="icon"
                 className="size-[22px] shrink-0"
-                aria-label="Zoom in"
+                aria-label={t("messages.zoomIn")}
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
                 data-zoom-stepper
@@ -268,7 +269,7 @@ export function MermaidLightbox({ open, onOpenChange, svg }: MermaidLightboxProp
                   with −). A visually-hidden "Zoom " prefix gives screen readers
                   "Zoom 150%", not a bare percentage. */}
               <span className="flex h-7 min-w-13 items-center justify-center px-1.5 tabular-nums text-text-secondary">
-                <span className="sr-only">Zoom </span>
+                <span className="sr-only">{t("messages.zoom")} </span>
                 {Math.round(scale * 100)}%
               </span>
             </div>

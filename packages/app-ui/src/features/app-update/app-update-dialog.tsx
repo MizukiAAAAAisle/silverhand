@@ -16,6 +16,7 @@ import {
   useAppUpdateState,
 } from "./app-update-store";
 import { AppUpdateProgress, describeAppUpdate } from "./app-update-parts";
+import { t } from "@/lib/i18n";
 
 export function AppUpdateDialog(): JSX.Element | null {
   const state = useAppUpdateState();
@@ -25,7 +26,7 @@ export function AppUpdateDialog(): JSX.Element | null {
     <Dialog open={open} onOpenChange={(next) => !next && closeAppUpdateDialog()}>
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>Software update</DialogTitle>
+          <DialogTitle>{t("appUpdate.softwareUpdate")}</DialogTitle>
           <DialogDescription className="flex items-center gap-2">
             {state.status === "checking" ? (
               <SpinnerIcon aria-hidden className="size-3.5 shrink-0 motion-safe:animate-spin" />
@@ -38,24 +39,24 @@ export function AppUpdateDialog(): JSX.Element | null {
           {state.status === "downloaded" ? (
             <>
               <Button variant="neutral" onClick={() => void appUpdateActions.install("on-quit")}>
-                Install on Quit
+                {t("appUpdate.installOnQuit")}
               </Button>
               <Button variant="primary" onClick={() => void appUpdateActions.install("now")}>
-                Restart and Install
+                {t("appUpdate.restartAndInstall")}
               </Button>
             </>
           ) : state.status === "scheduled" ? (
             <Button variant="primary" onClick={() => void appUpdateActions.install("now")}>
-              Restart Now
+              {t("appUpdate.restartNow")}
             </Button>
           ) : state.status === "available" || (state.status === "error" && state.version) ? (
             <Button variant="primary" onClick={() => void appUpdateActions.download()}>
-              {state.status === "error" ? "Retry download" : "Download"}
+              {state.status === "error" ? t("appUpdate.retryDownload") : t("appUpdate.download")}
             </Button>
           ) : state.status === "error" ? (
             <>
               <Button variant="neutral" onClick={() => void appUpdateActions.check()}>
-                Try Again
+                {t("appUpdate.tryAgain")}
               </Button>
               <Button variant="primary" onClick={closeAppUpdateDialog}>
                 OK
@@ -63,7 +64,7 @@ export function AppUpdateDialog(): JSX.Element | null {
             </>
           ) : state.status === "idle" && state.lastCheckedAt === null ? (
             <Button variant="primary" onClick={() => void appUpdateActions.check()}>
-              Check for Updates
+              {t("appUpdate.checkForUpdates")}
             </Button>
           ) : state.status === "idle" ? (
             <Button variant="primary" onClick={closeAppUpdateDialog}>

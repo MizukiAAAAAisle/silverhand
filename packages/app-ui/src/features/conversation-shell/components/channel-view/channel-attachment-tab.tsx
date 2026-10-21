@@ -14,6 +14,7 @@ import { Markdown } from "@/features/messages/components/markdown";
 import { AttachmentHtmlPreview } from "@/features/messages/components/attachment-html-preview";
 import { openAttachmentExternally } from "@/features/messages/model/open-attachment";
 import { saveAttachmentToDisk } from "@/features/messages/model/save-attachment";
+import { t } from "@/lib/i18n";
 
 /**
  * The in-app previewer tab for a `.md` / `.html` attachment, keyed on the
@@ -154,7 +155,11 @@ export function ChannelAttachmentTab({
           {filename}
         </span>
         {readyKind === "html" ? (
-          <div className="flex shrink-0 items-center gap-1.5" role="group" aria-label="Zoom">
+          <div
+            className="flex shrink-0 items-center gap-1.5"
+            role="group"
+            aria-label={t("conversationShell.zoom")}
+          >
             <button
               type="button"
               data-sticker
@@ -163,8 +168,8 @@ export function ChannelAttachmentTab({
               className="flex size-7 shrink-0 items-center justify-center rounded-(--chip-radius) text-text-secondary hover:text-text-primary focus-outline disabled:opacity-40"
               onClick={() => zoomTo(htmlZoom / HTML_ZOOM_STEP)}
               disabled={atMinZoom}
-              aria-label="Zoom out"
-              title="Zoom out"
+              aria-label={t("conversationShell.zoomOut")}
+              title={t("conversationShell.zoomOut")}
             >
               <ZoomOutIcon className="size-3.5" />
             </button>
@@ -174,7 +179,7 @@ export function ChannelAttachmentTab({
               max={HTML_ZOOM_MAX * 100}
               step="any"
               value={htmlZoom * 100}
-              aria-label="Zoom level"
+              aria-label={t("conversationShell.zoomLevel")}
               onChange={(e) => zoomTo(Number(e.target.value) / 100)}
             />
             <button
@@ -185,13 +190,13 @@ export function ChannelAttachmentTab({
               className="flex size-7 shrink-0 items-center justify-center rounded-(--chip-radius) text-text-secondary hover:text-text-primary focus-outline disabled:opacity-40"
               onClick={() => zoomTo(htmlZoom * HTML_ZOOM_STEP)}
               disabled={atMaxZoom}
-              aria-label="Zoom in"
-              title="Zoom in"
+              aria-label={t("conversationShell.zoomIn")}
+              title={t("conversationShell.zoomIn")}
             >
               <ZoomInIcon className="size-3.5" />
             </button>
             <span className="min-w-11 text-center text-xs tabular-nums text-text-secondary">
-              <span className="sr-only">Zoom </span>
+              <span className="sr-only">{t("conversationShell.zoom")} </span>
               {Math.round(htmlZoom * 100)}%
             </span>
           </div>
@@ -204,10 +209,10 @@ export function ChannelAttachmentTab({
             data-sticker-size="md"
             data-sticker-tone="neutral"
             className="flex shrink-0 items-center gap-1.5 rounded-(--chip-radius) px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
-            title="Open in default app"
+            title={t("conversationShell.openInDefaultApp")}
           >
             <OpenExternalIcon className="size-3.5" />
-            Open
+            {t("conversationShell.open")}
           </button>
         ) : null}
         <button
@@ -217,10 +222,10 @@ export function ChannelAttachmentTab({
           data-sticker-size="md"
           data-sticker-tone="neutral"
           className="flex shrink-0 items-center gap-1.5 rounded-(--chip-radius) px-2 py-1 text-xs text-text-secondary hover:text-text-primary focus-outline"
-          title="Download"
+          title={t("conversationShell.download")}
         >
           <DownloadIcon className="size-3.5" />
-          Download
+          {t("conversationShell.download")}
         </button>
       </div>
       <AttachmentTabBody
@@ -248,7 +253,7 @@ function AttachmentTabBody({
   onPinch: (deltaY: number) => void;
 }): JSX.Element {
   if (state.status === "loading") {
-    return <DocumentSkeleton label="Loading attachment preview" />;
+    return <DocumentSkeleton label={t("conversationShell.loadingAttachmentPreview")} />;
   }
   if (state.status === "error") {
     return <TabStatus>{state.message}</TabStatus>;
@@ -276,7 +281,7 @@ function AttachmentTabBody({
   // Unreachable in normal flow — only md/html mint a previewer tab — but a
   // revised attachment could change type under a persisted tab; degrade to a
   // plain note rather than a blank pane (the header still offers open/download).
-  return <TabStatus>No in-app preview for this file.</TabStatus>;
+  return <TabStatus>{t("conversationShell.noInAppPreview")}</TabStatus>;
 }
 
 function TabStatus({ children }: { children: React.ReactNode }): JSX.Element {

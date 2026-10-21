@@ -12,6 +12,7 @@ import { DraftAvatarCard } from "@/features/avatar-maker/components/draft-avatar
 import { useDraftAvatar } from "@/features/avatar-maker/hooks/use-draft-avatar";
 import { useLoginUser, useSignupUser, useUploadDraftViewerAvatar } from "../session/hooks";
 import { PasswordRecoveryForm } from "./password-recovery-form";
+import { t } from "@/lib/i18n";
 
 export interface RegistrationGateProps {
   signupEnabled: boolean;
@@ -152,7 +153,7 @@ export function RegistrationGate({
           style={{ WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <header className="mb-7 flex flex-col gap-1.5">
-            <h1 className="text-3xl font-semibold tracking-tight">Reset password</h1>
+            <h1 className="text-3xl font-semibold tracking-tight">{t("appShell.resetPassword")}</h1>
           </header>
           <PasswordRecoveryForm
             enabled={passwordRecovery === "enabled"}
@@ -162,7 +163,7 @@ export function RegistrationGate({
               setEmail(recoveredEmail);
               setPassword("");
               setError(null);
-              setNotice("Your password has been reset. Log in with your new password.");
+              setNotice(t("appShell.auth.passwordReset"));
               setRecovering(false);
             }}
           />
@@ -183,10 +184,10 @@ export function RegistrationGate({
       >
         <header className="mb-7 flex flex-col gap-1.5">
           <h1 className="text-3xl font-semibold tracking-tight">
-            {isSignup ? "Sign up" : "Log in"}
+            {isSignup ? t("appShell.auth.signUp") : t("appShell.auth.logIn")}
           </h1>
           <p className="text-sm text-text-muted">
-            {isSignup ? "Create your account." : "Welcome back."}
+            {isSignup ? t("appShell.auth.createAccount") : t("appShell.auth.welcomeBack")}
           </p>
         </header>
 
@@ -194,7 +195,7 @@ export function RegistrationGate({
           {isSignup ? <DraftAvatarCard draft={draftAvatar} disabled={submitting} /> : null}
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="auth-email">Email</Label>
+            <Label htmlFor="auth-email">{t("appShell.email")}</Label>
             <Input
               ref={emailInputRef}
               id="auth-email"
@@ -210,7 +211,7 @@ export function RegistrationGate({
           {isSignup ? (
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="auth-handle" required>
-                Username
+                {t("appShell.handle")}
               </Label>
               <Input
                 ref={handleInputRef}
@@ -228,7 +229,7 @@ export function RegistrationGate({
                 }}
                 autoComplete="username"
                 spellCheck={false}
-                placeholder="username"
+                placeholder={t("appShell.auth.handlePlaceholder")}
               />
               {/* One line, always occupied: the problem when there is one, the
                   irreversibility note otherwise. Same height either way, so
@@ -236,27 +237,27 @@ export function RegistrationGate({
               <p
                 className={cn("text-xs leading-4", handleError ? "text-error" : "text-text-muted")}
               >
-                {handleError ?? "Your username is permanent and cannot be changed."}
+                {handleError ?? t("appShell.auth.handlePermanent")}
               </p>
             </div>
           ) : null}
 
           {isSignup ? (
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="auth-display">Display name</Label>
+              <Label htmlFor="auth-display">{t("appShell.displayName")}</Label>
               <Input
                 id="auth-display"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 autoComplete="name"
-                placeholder="Optional"
+                placeholder={t("appShell.auth.optional")}
               />
             </div>
           ) : null}
 
           <div className="flex flex-col gap-1.5">
             <div className="flex items-baseline justify-between gap-3">
-              <Label htmlFor="auth-password">Password</Label>
+              <Label htmlFor="auth-password">{t("appShell.password")}</Label>
               {!isSignup && passwordRecovery && connectionReady ? (
                 <button
                   type="button"
@@ -268,7 +269,7 @@ export function RegistrationGate({
                     setRecovering(true);
                   }}
                 >
-                  Forgot password?
+                  {t("appShell.auth.forgotPassword")}
                 </button>
               ) : null}
             </div>
@@ -278,20 +279,20 @@ export function RegistrationGate({
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               autoComplete={isSignup ? "new-password" : "current-password"}
-              placeholder={isSignup ? "At least 8 characters" : "Password"}
+              placeholder={isSignup ? t("appShell.passwordMin") : t("appShell.password")}
             />
           </div>
 
           {isSignup ? (
             <div className="flex flex-col gap-1.5">
-              <Label htmlFor="auth-confirm">Confirm password</Label>
+              <Label htmlFor="auth-confirm">{t("appShell.confirmPassword")}</Label>
               <Input
                 id="auth-confirm"
                 type="password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 autoComplete="new-password"
-                placeholder="Repeat password"
+                placeholder={t("appShell.repeatPassword")}
               />
             </div>
           ) : null}
@@ -308,25 +309,25 @@ export function RegistrationGate({
             {submitting ? (
               <>
                 <SpinnerIcon className="size-3.5 animate-spin" />
-                {isSignup ? "Creating..." : "Signing in..."}
+                {isSignup ? t("appShell.auth.creating") : t("appShell.auth.signingIn")}
               </>
             ) : isSignup ? (
-              "Create account"
+              t("appShell.auth.createAccountButton")
             ) : (
-              "Log in"
+              t("appShell.auth.logIn")
             )}
           </Button>
           {isSignup && password.length > 0 && password !== confirmPassword ? (
             // `text-error` — the theme token. `text-status-error`, which these
             // two lines used, is not defined in any theme, so both rendered in
             // the default text colour.
-            <p className="text-xs text-error">Passwords do not match.</p>
+            <p className="text-xs text-error">{t("appShell.passwordMismatch")}</p>
           ) : null}
           {formError ? <p className="text-xs text-error">{formError}</p> : null}
           {notice && !formError ? <p className="text-xs text-text-muted">{notice}</p> : null}
           {signupEnabled ? (
             <p className="text-sm text-text-muted">
-              {isSignup ? "Already have an account?" : "No account?"}{" "}
+              {isSignup ? t("appShell.auth.haveAccount") : t("appShell.auth.noAccount")}{" "}
               <button
                 type="button"
                 className="font-medium text-text-primary underline underline-offset-3 hover:text-text-secondary focus-outline"
@@ -336,7 +337,7 @@ export function RegistrationGate({
                   setNotice(null);
                 }}
               >
-                {isSignup ? "Log in" : "Sign up"}
+                {isSignup ? t("appShell.auth.logIn") : t("appShell.auth.signUp")}
               </button>
             </p>
           ) : null}
@@ -347,7 +348,7 @@ export function RegistrationGate({
             href={PRIVACY_POLICY_URL}
             className="underline underline-offset-3 hover:text-text-secondary"
           >
-            Privacy Policy
+            {t("appShell.privacyPolicy")}
           </ExternalLink>
         </p>
 
@@ -385,16 +386,16 @@ function authErrorMessage(err: unknown): AuthError {
     // not JSON — fall through.
   }
   if (parsed.error_code === AUTH_HANDLE_TAKEN_CODE || parsed.code === AUTH_HANDLE_TAKEN_CODE) {
-    return { field: "handle", message: "This username is already taken." };
+    return { field: "handle", message: t("appShell.handleTaken") };
   }
   if (parsed.error_code === "auth_failed" || parsed.code === "auth_failed") {
-    return { field: null, message: "Email or password is incorrect." };
+    return { field: null, message: t("appShell.auth.incorrect") };
   }
   if (parsed.error === "invalid input") {
-    return { field: null, message: "Check the email and password fields." };
+    return { field: null, message: t("appShell.checkFields") };
   }
   return {
     field: null,
-    message: parsed.error ?? apiErr.message ?? "Authentication failed.",
+    message: parsed.error ?? apiErr.message ?? t("appShell.auth.failed"),
   };
 }

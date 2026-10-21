@@ -25,6 +25,7 @@ import { activityItemSource } from "@/features/attention/observe";
 import { ActivityListSkeleton } from "./activity-list-skeleton";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
+import { t } from "@/lib/i18n";
 
 /**
  * Activity — the human's "queue waiting on me" (#task:1227). Read-side
@@ -81,10 +82,10 @@ import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 type FilterKey = "all" | "mention" | "thread";
 
-const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "mention", label: "Mentions" },
-  { key: "thread", label: "Threads" },
+const filterTabs = (): { key: FilterKey; label: string }[] => [
+  { key: "all", label: t("activity.all") },
+  { key: "mention", label: t("activity.mentions") },
+  { key: "thread", label: t("activity.threads") },
 ];
 
 /** Namespaced key into Activity's ONE avatar object-url batch. A face's identity
@@ -428,14 +429,14 @@ export function ActivityView({
 
   return (
     <PaneShell width={width}>
-      <PaneHeader icon={<ActivityIcon className="size-3.5" />} title="Activity" />
+      <PaneHeader icon={<ActivityIcon className="size-3.5" />} title={t("activity.activity")} />
 
       {/* Filter chips. Selected chips use the theme selection token, never a
           semantic hue (they must not steal the items' volume budget). (The
           "Mark all read" action was removed from the UI — #task:1446 — pending a
           new home; `useMarkActivityAllRead` + the observe machinery are kept.) */}
       <div className="flex shrink-0 items-center gap-1.5 px-4 py-2">
-        {FILTERS.map((f) => {
+        {filterTabs().map((f) => {
           const on = f.key === filter;
           return (
             <button
@@ -467,16 +468,16 @@ export function ActivityView({
           // empty queue.
           <div className="flex flex-col items-center gap-1.5 py-16 text-center">
             <span className="font-serif text-base font-semibold text-text-secondary">
-              Couldn't load Activity
+              {t("activity.couldntLoadActivity")}
             </span>
-            <span className="text-sm text-text-muted">Check your connection and retry</span>
+            <span className="text-sm text-text-muted">{t("activity.checkYourConnectionAnd")}</span>
           </div>
         ) : filtered.length === 0 ? (
           items.length === 0 ? (
             // The whole queue is empty — genuinely caught up.
             <div className="flex flex-col items-center gap-1.5 py-16 text-center">
               <span className="font-serif text-base font-semibold text-text-secondary">
-                All caught up
+                {t("activity.allCaughtUp")}
               </span>
             </div>
           ) : (
@@ -484,7 +485,7 @@ export function ActivityView({
             // whole queue is empty.
             <div className="flex flex-col items-center gap-1.5 py-16 text-center">
               <span className="font-serif text-base font-semibold text-text-secondary">
-                No {FILTERS.find((f) => f.key === filter)?.label.toLowerCase()}
+                {t(`activity.emptyFilter.${filter}`)}
               </span>
             </div>
           )
@@ -492,7 +493,7 @@ export function ActivityView({
           <div className="flex flex-col gap-5">
             {directed.length > 0 ? (
               <ActivitySection
-                label="Requires attention"
+                label={t("activity.requiresAttention")}
                 items={directed}
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
@@ -503,7 +504,7 @@ export function ActivityView({
             ) : null}
             {ambient.length > 0 ? (
               <ActivitySection
-                label="Subscribed"
+                label={t("activity.subscribed")}
                 items={ambient}
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
@@ -640,7 +641,7 @@ function ActivityRow({
   const countEl =
     item.unread_count != null && item.unread_count > 0 ? (
       <span className="shrink-0 rounded-(--control-radius) bg-accent-soft px-1.5 py-px text-xs font-medium leading-tight tabular-nums text-accent">
-        {item.unread_count > 99 ? "99+" : item.unread_count} new
+        {t("activity.newCount", { n: item.unread_count > 99 ? "99+" : item.unread_count })}
       </span>
     ) : null;
 
@@ -761,8 +762,8 @@ function ActivityRow({
           // whole item's vertical center regardless of text-row count.
           <button
             type="button"
-            title="Mark as read"
-            aria-label="Mark as read"
+            title={t("activity.markAsRead")}
+            aria-label={t("activity.markAsRead")}
             onClick={(e) => {
               e.stopPropagation();
               clearItem.mutate(clearSource);

@@ -57,6 +57,7 @@ export function createDesktopPlatform(
       retryPartialApply: () => bridge.retryPartialApply(),
       pickDirectory: (input) => bridge.pickDirectory(input),
     },
+    setLocale: (locale) => bridge.setLocale(locale),
     shell: {
       setPinchZoom: (enabled) => bridge.setPinchZoom(enabled),
       onShutdownProgress: (handler) => bridge.onShutdownProgress(handler),

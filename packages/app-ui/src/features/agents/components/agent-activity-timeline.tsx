@@ -32,6 +32,7 @@ import {
 } from "../model/activity-presentation";
 import { mergeActivityById, useAgentActivityFeed } from "../hooks/use-agent-activity-feed";
 import { useAgentStreamActivity } from "../hooks/use-agent-stream-activity";
+import { t } from "@/lib/i18n";
 
 // Re-exported so the existing reconcile contract test keeps its import path.
 export { mergeActivityById };
@@ -187,11 +188,11 @@ function ActivityTimeline({
         {phase === "loading" ? (
           <AgentActivitySkeleton />
         ) : phase === "error" ? (
-          <p className="py-8 text-center text-xs text-text-muted">Couldn’t load activity.</p>
-        ) : events.length === 0 ? (
           <p className="py-8 text-center text-xs text-text-muted">
-            No activity yet in this channel.
+            {t("agents.couldntLoadActivity")}
           </p>
+        ) : events.length === 0 ? (
+          <p className="py-8 text-center text-xs text-text-muted">{t("agents.noActivityYetIn")}</p>
         ) : (
           <>
             {nextBeforeId !== null ? (
@@ -202,7 +203,7 @@ function ActivityTimeline({
                 className="mx-auto mb-1 flex items-center gap-1 px-2 py-1.5 text-(length:--text-meta) text-text-muted transition-colors hover:text-text-primary disabled:opacity-50"
               >
                 <ChevronUpIcon className="size-3" />
-                {isLoadingMore ? "Loading…" : "Load earlier"}
+                {isLoadingMore ? t("agents.loading") : t("agents.loadEarlier")}
               </button>
             ) : null}
             <ol ref={setListRef} className="flex flex-col">
@@ -425,7 +426,7 @@ function ClampedBlock({ children }: { children: React.ReactNode }): JSX.Element 
             setExpanded((value) => !value);
           }}
         >
-          {expanded ? "Show less" : "Show all"}
+          {expanded ? t("agents.showLess") : t("agents.showAll")}
         </button>
       ) : null}
     </div>

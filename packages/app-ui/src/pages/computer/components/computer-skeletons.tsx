@@ -1,7 +1,8 @@
 import { SkeletonBlock as Block, SkeletonRegion as Region } from "@/components/layout/skeleton";
+import { t } from "@/lib/i18n";
 export function ComputerRowsSkeleton(): JSX.Element {
   return (
-    <Region label="Loading computers">
+    <Region label={t("computers.loadingComputers")}>
       {["w-24", "w-20", "w-28", "w-16"].map((width) => (
         <div
           key={width}
@@ -25,10 +26,16 @@ export function ComputerRowsSkeleton(): JSX.Element {
 
 export function ComputerStatusSkeleton(): JSX.Element {
   return (
-    <Region label="Loading host status">
-      <h3 className="mb-4 text-xs font-semibold text-text-muted">Info</h3>
+    <Region label={t("computers.loadingHostStatus")}>
+      <h3 className="mb-4 text-xs font-semibold text-text-muted">{t("computers.info")}</h3>
       <div className="space-y-2.5">
-        {["OS", "Daemon version", "Process id", "Uptime", "Created"].map((label) => (
+        {[
+          t("computers.os"),
+          t("computers.daemonVersion"),
+          t("computers.processId"),
+          t("computers.uptime"),
+          t("computers.created"),
+        ].map((label) => (
           <div key={label} className="flex items-center gap-4">
             <span className="w-28 shrink-0 text-xs text-text-muted">{label}</span>
             <Block className="h-3 w-2/5" />
@@ -51,7 +58,7 @@ export function ComputerStatusSkeleton(): JSX.Element {
 export function ComputerDetailSkeleton(): JSX.Element {
   return (
     <div className="mx-auto w-full max-w-2xl px-6 py-6">
-      <Region label="Loading computer">
+      <Region label={t("computers.loadingComputer")}>
         <div className="mb-8 flex items-center gap-4">
           <Block className="size-20" />
           <div className="flex-1 space-y-3">
@@ -67,14 +74,14 @@ export function ComputerDetailSkeleton(): JSX.Element {
 
 export function ProxySkeleton(): JSX.Element {
   return (
-    <Region label="Loading proxy settings">
+    <Region label={t("computers.loadingProxySettings")}>
       <div className="grid gap-5">
         <div className="space-y-2">
-          <p className="text-xs text-text-muted">Proxy URL</p>
+          <p className="text-xs text-text-muted">{t("computers.proxyUrl")}</p>
           <Block className="h-8 w-full" />
         </div>
         <div className="space-y-3">
-          <p className="text-xs text-text-muted">Enabled runtimes</p>
+          <p className="text-xs text-text-muted">{t("computers.enabledRuntimes")}</p>
           {[0, 1, 2].map((i) => (
             <div key={i} className="flex gap-2">
               <Block className="size-3.5" />

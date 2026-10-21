@@ -2,13 +2,14 @@ import { AlarmIcon } from "@/icons";
 import { readScheduleFireMetadata } from "@silverhand/shared";
 import { useRelativeTime } from "@/features/messages/hooks/use-relative-time";
 import type { RendererProps } from "./shared";
+import { localeTag, t, tRich } from "@/lib/i18n";
 
 export function ScheduleFireRow({ message }: RendererProps): JSX.Element {
   const meta = readScheduleFireMetadata(message.metadata);
-  const title = meta?.title?.trim() || "Scheduled wake";
+  const title = meta?.title?.trim() || t("messages.scheduledWake");
   const firedAt = meta?.actual_fire_at ?? message.created_at;
   const { absolute } = useRelativeTime(firedAt);
-  const time = new Date(firedAt).toLocaleTimeString(undefined, {
+  const time = new Date(firedAt).toLocaleTimeString(localeTag, {
     hour: "2-digit",
     minute: "2-digit",
   });
@@ -20,8 +21,13 @@ export function ScheduleFireRow({ message }: RendererProps): JSX.Element {
     >
       <div className="flex min-w-0 flex-wrap items-center justify-center gap-x-2 gap-y-0.5">
         <AlarmIcon aria-hidden className="size-4 shrink-0 text-success" />
-        <span className="min-w-0 wrap-anywhere font-semibold text-text-primary">{title}</span>
-        <span>triggered</span>
+        <span>
+          {tRich("messages.scheduleTriggered", {
+            title: (
+              <span className="min-w-0 wrap-anywhere font-semibold text-text-primary">{title}</span>
+            ),
+          })}
+        </span>
         <time
           className="text-(length:--text-meta) tabular-nums"
           dateTime={new Date(firedAt).toISOString()}
@@ -32,7 +38,7 @@ export function ScheduleFireRow({ message }: RendererProps): JSX.Element {
       </div>
       {meta && meta.missed_count > 0 ? (
         <div className="mt-0.5 text-(length:--text-meta) text-warning">
-          Skipped {meta.missed_count} {meta.missed_count === 1 ? "occurrence" : "occurrences"}
+          {t("messages.skippedOccurrences", { count: meta.missed_count })}
         </div>
       ) : null}
     </div>

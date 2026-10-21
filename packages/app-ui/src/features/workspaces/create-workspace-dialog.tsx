@@ -25,6 +25,7 @@ import {
 import { useUsers } from "@/features/users/hooks";
 import { MemberPicker, type MemberPickerCandidate } from "./agent-picker";
 import { useCreateWorkspace } from "./hooks";
+import { t } from "@/lib/i18n";
 
 interface CreateWorkspaceDialogProps {
   open: boolean;
@@ -128,7 +129,7 @@ export function CreateWorkspaceDialog({
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError("Please enter a project name");
+      setError(t("workspaces.pleaseEnterAProject"));
       return;
     }
     // Final format pass — arms the inline hint even on a field never blurred.
@@ -159,13 +160,13 @@ export function CreateWorkspaceDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>New Project</DialogTitle>
+          <DialogTitle>{t("workspaces.newProject")}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ch-name" required className="font-semibold">
-              Name
+              {t("workspaces.name")}
             </Label>
             <div className="relative">
               <Input
@@ -174,7 +175,7 @@ export function CreateWorkspaceDialog({
                 onChange={(e) => setName(e.target.value)}
                 onBlur={nameCheck.markTouched}
                 aria-invalid={nameCheck.blocking || undefined}
-                placeholder="my-frontend"
+                placeholder={t("workspaces.myFrontend")}
                 autoFocus
                 className="pr-8"
               />
@@ -185,13 +186,15 @@ export function CreateWorkspaceDialog({
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ch-add-member" className="font-semibold">
-              Initial members
+              {t("workspaces.initialMembers")}
               <span className="ml-1 text-text-muted">
                 ({selectedMembers.length} / {memberCandidates.length})
               </span>
             </Label>
             {memberCandidates.length === 0 ? (
-              <span className="text-xs text-text-muted">No members available yet.</span>
+              <span className="text-xs text-text-muted">
+                {t("workspaces.noMembersAvailableYet")}
+              </span>
             ) : (
               <MemberPicker
                 selectId="ch-add-member"
@@ -199,9 +202,11 @@ export function CreateWorkspaceDialog({
                 value={selectedMembers}
                 onChange={setSelectedMembers}
                 placeholder={
-                  selectedMembers.length === 0 ? "Select initial members…" : "Add more members…"
+                  selectedMembers.length === 0
+                    ? t("workspaces.selectInitialMembers")
+                    : t("workspaces.addMoreMembers")
                 }
-                allSelectedText="All members added"
+                allSelectedText={t("workspaces.allMembersAdded")}
               />
             )}
           </div>
@@ -210,14 +215,14 @@ export function CreateWorkspaceDialog({
 
           <DialogFooter className="mt-2">
             <Button type="button" variant="cancel" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="submit"
               variant="primary"
               disabled={createWorkspace.isPending || nameCheck.blocking}
             >
-              {createWorkspace.isPending ? "Creating…" : "Create"}
+              {createWorkspace.isPending ? t("workspaces.creating") : t("workspaces.create")}
             </Button>
           </DialogFooter>
         </form>
@@ -226,24 +231,23 @@ export function CreateWorkspaceDialog({
   );
 }
 
-const WORKSPACE_CREATE_ERROR_MESSAGES: Record<string, string> = {
+const workspaceCreateErrorMessages = (): Record<string, string> => ({
   // #task:1681 — the picker only offers the viewer's own agents, so this is a
   // backstop for a stale pool (an agent transferred or deleted mid-dialog).
   // Same wording as the two member pickers: enrollment is creator-only, so the
   // line names the creator and no role (#task:1682).
-  agent_not_owned:
-    "You can only add agents you created. Someone else's can be brought in only by its creator.",
+  agent_not_owned: t("workspaces.youCanOnlyAdd"),
   // No host-placement arms: a workspace is not stored on a computer, so create
   // sends no computer and the route resolves none. The `local_host_*` / `host_*`
   // refusals belong to create-AGENT, which keeps its own wording (an agent IS
   // placed on a computer).
-};
+});
 
 function friendlyCreateWorkspaceError(err: unknown): string {
   return describeApiError(err, {
-    actionLabel: "Couldn't create the project",
-    backendUnreachableMessage: "Can't reach the backend. Check your connection and try again.",
-    fallbackMessage: "Couldn't create the project. Please try again.",
-    knownCodeMessages: WORKSPACE_CREATE_ERROR_MESSAGES,
+    actionLabel: t("workspaces.couldntCreateTheProject"),
+    backendUnreachableMessage: t("workspaces.cantReachTheBackend"),
+    fallbackMessage: t("workspaces.couldntCreateTheProject2"),
+    knownCodeMessages: workspaceCreateErrorMessages(),
   });
 }

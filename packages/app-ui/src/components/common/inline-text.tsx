@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { cn } from "@/lib/cn";
 import { CancelButton, SaveButton } from "./edit-toolbar-buttons";
+import { t } from "@/lib/i18n";
 
 /**
  * Inline edit field for a required non-null string, controlled by the
@@ -122,7 +123,7 @@ export function InlineText({
       await onCommit(decision.next);
       onExitEdit();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save.");
+      setError(err instanceof Error ? err.message : t("ui.couldNotSave"));
     } finally {
       setPending(false);
     }

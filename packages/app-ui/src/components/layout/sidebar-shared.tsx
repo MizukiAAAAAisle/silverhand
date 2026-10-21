@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
 import { useSidebarBranchDrag } from "./sidebar-branch-drag";
+import { t } from "@/lib/i18n";
 
 export function SidebarChevron({ expanded }: { expanded: boolean }): JSX.Element {
   return (
@@ -28,7 +29,7 @@ export function SidebarChevron({ expanded }: { expanded: boolean }): JSX.Element
 export async function copyConversationName(name: string): Promise<void> {
   try {
     await navigator.clipboard.writeText(name);
-    toast.success("Name copied");
+    toast.success(t("ui.nameCopied"));
   } catch {
     toast.error("Couldn't copy the name");
   }
@@ -385,7 +386,9 @@ export function UnreadBadge({
 }
 
 export function MutedMarker(): JSX.Element {
-  return <BellOffIcon className="size-3 shrink-0 opacity-60" role="img" aria-label="Muted" />;
+  return (
+    <BellOffIcon className="size-3 shrink-0 opacity-60" role="img" aria-label={t("ui.muted")} />
+  );
 }
 
 interface RowProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "onClick" | "title"> {

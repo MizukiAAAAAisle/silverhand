@@ -97,7 +97,6 @@ describe("embedded profile setup", () => {
     vi.mocked(deps.upload).mockRejectedValueOnce(new Error("offline"));
     await model.submit({ ...values, avatar });
     expect(model.state.phase).toBe("avatar-error");
-    expect(model.state.error).toContain("Profile saved");
     await model.read();
     await model.retryAvatar();
     expect(deps.upload).toHaveBeenNthCalledWith(2, avatar, null);

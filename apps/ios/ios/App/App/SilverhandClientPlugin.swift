@@ -13,7 +13,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "bannerShow", "sharePng", "saveAttachment", "avatarMakerEdit",
+    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "bannerShow", "sharePng", "saveAttachment", "avatarMakerEdit",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -180,6 +180,14 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     host.onIntent = { [weak self] intent in self?.notifyListeners("navigation", data: intent) }
   }
 
+  @objc public func setLocale(_ call: CAPPluginCall) {
+    Task { @MainActor in
+      if NativeCopy.set(call.getString("locale")) {
+        navigationHost?.applyLocale()
+      }
+      call.resolve()
+    }
+  }
   @objc public func navigationBadges(_ call: CAPPluginCall) {
     Task { @MainActor in
       navigationHost?.badges(call)

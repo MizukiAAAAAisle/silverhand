@@ -1,4 +1,5 @@
 import { AGENT_CAPABILITIES, type AgentCapability } from "@silverhand/shared";
+import { t } from "@/lib/i18n";
 
 /**
  * UI-only presentation metadata for the agent capability editor.
@@ -29,85 +30,88 @@ export interface CapabilityGroup {
 }
 
 /** Functional-domain grouping. Keys MUST be members of `AGENT_CAPABILITIES`. */
-const GROUP_DEFS: { id: string; label: string; keys: AgentCapability[] }[] = [
+const groupDefs = (): { id: string; label: string; keys: AgentCapability[] }[] => [
   {
     id: "message",
-    label: "Message",
+    label: t("workspaces.message"),
     keys: ["read_messages", "send_messages"],
   },
   {
     id: "task",
-    label: "Task",
+    label: t("workspaces.task"),
     keys: ["read_tasks", "create_tasks", "write_tasks"],
   },
   {
     id: "channel",
-    label: "Channel",
+    label: t("workspaces.channel"),
     keys: ["create_channels"],
   },
   {
     id: "thread",
-    label: "Thread",
+    label: t("workspaces.thread"),
     keys: ["create_threads"],
   },
   {
     id: "members",
-    label: "Members",
+    label: t("workspaces.members"),
     keys: ["manage_conversation_members"],
   },
   {
     id: "attachments",
-    label: "Attachments",
+    label: t("workspaces.attachments"),
     keys: ["read_attachments", "upload_attachments"],
   },
   {
     id: "schedules",
-    label: "Schedules",
+    label: t("workspaces.schedules"),
     keys: ["manage_schedules"],
   },
 ];
 
 /** Per-key labels + one-line explanations. */
-const CAPABILITY_LABELS: Record<AgentCapability, { label: string; hint: string }> = {
+const capabilityLabels = (): Record<AgentCapability, { label: string; hint: string }> => ({
   read_messages: {
-    label: "Read messages",
-    hint: "View conversation history and search messages.",
+    label: t("workspaces.readMessages"),
+    hint: t("workspaces.viewConversationHistoryAnd"),
   },
   send_messages: {
-    label: "Send messages",
-    hint: "Send messages and mention members in conversations.",
+    label: t("workspaces.sendMessages"),
+    hint: t("workspaces.sendMessagesAndMention"),
   },
-  read_tasks: { label: "Read tasks", hint: "View tasks across conversations." },
-  create_tasks: { label: "Create tasks", hint: "Create new tasks." },
+  read_tasks: {
+    label: t("workspaces.readTasks"),
+    hint: t("workspaces.viewTasksAcrossConversations"),
+  },
+  create_tasks: { label: t("workspaces.createTasks"), hint: t("workspaces.createNewTasks") },
   write_tasks: {
-    label: "Update tasks",
-    hint: "Update task assignment and status.",
+    label: t("workspaces.updateTasks"),
+    hint: t("workspaces.updateTaskAssignmentAnd"),
   },
   read_attachments: {
-    label: "Read attachments",
-    hint: "View and download attachments.",
+    label: t("workspaces.readAttachments"),
+    hint: t("workspaces.viewAndDownloadAttachments"),
   },
   upload_attachments: {
-    label: "Upload attachments",
-    hint: "Upload attachments to conversations.",
+    label: t("workspaces.uploadAttachments"),
+    hint: t("workspaces.uploadAttachmentsToConversations"),
   },
   create_threads: {
-    label: "Manage threads",
-    hint: "Create and close threads.",
+    label: t("workspaces.manageThreads"),
+    hint: t("workspaces.createAndCloseThreads"),
   },
-  create_channels: { label: "Create channels", hint: "Create channels." },
+  create_channels: { label: t("workspaces.createChannels"), hint: t("workspaces.createChannels2") },
   manage_conversation_members: {
-    label: "Manage members",
-    hint: "Add project members to channels and threads.",
+    label: t("workspaces.manageMembers"),
+    hint: t("workspaces.addProjectMembersTo"),
   },
   manage_schedules: {
-    label: "Manage schedules",
-    hint: "Create and cancel scheduled runs.",
+    label: t("workspaces.manageSchedules"),
+    hint: t("workspaces.createAndCancelScheduled"),
   },
-};
+});
 
 function metaFor(key: AgentCapability): CapabilityMeta {
-  const m = CAPABILITY_LABELS[key];
+  const m = capabilityLabels()[key];
   return { key, label: m.label, hint: m.hint };
 }
 
@@ -118,7 +122,7 @@ function metaFor(key: AgentCapability): CapabilityMeta {
  */
 export function buildCapabilityGroups(): CapabilityGroup[] {
   const seen = new Set<AgentCapability>();
-  const groups: CapabilityGroup[] = GROUP_DEFS.map((def) => {
+  const groups: CapabilityGroup[] = groupDefs().map((def) => {
     const items = def.keys.map((k) => {
       seen.add(k);
       return metaFor(k);
@@ -130,11 +134,11 @@ export function buildCapabilityGroups(): CapabilityGroup[] {
   if (uncovered.length > 0) {
     groups.push({
       id: "other",
-      label: "Other",
+      label: t("workspaces.otherGroup"),
       items: uncovered.map((k) => ({
         key: k,
-        label: CAPABILITY_LABELS[k]?.label ?? k,
-        hint: CAPABILITY_LABELS[k]?.hint ?? k,
+        label: capabilityLabels()[k]?.label ?? k,
+        hint: capabilityLabels()[k]?.hint ?? k,
       })),
     });
   }

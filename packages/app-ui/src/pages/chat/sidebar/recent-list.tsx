@@ -56,6 +56,7 @@ import {
 import { ChannelRowMenuItems } from "./channel-row-menu-items";
 import { ProjectFilterStrip } from "./project-filter-strip";
 import type { WorkspaceItem } from "./workspaces-panel";
+import { t } from "@/lib/i18n";
 
 type RecentListRow =
   | {
@@ -235,7 +236,7 @@ export function RecentList(props: {
         </div>
       ) : null}
 
-      {loading ? <SidebarRowsSkeleton label="Loading conversations" /> : null}
+      {loading ? <SidebarRowsSkeleton label={t("chat.loadingConversations")} /> : null}
 
       <ul className="flex flex-col">
         {visible.map((row, index) => (
@@ -300,11 +301,11 @@ function ProjectBar(props: {
         {props.workspace.name}
       </span>
       <div className="flex shrink-0 items-center">
-        <ProjectBarButton label="New channel" onClick={props.onCreateChannel}>
+        <ProjectBarButton label={t("chat.newChannel")} onClick={props.onCreateChannel}>
           <PlusIcon className="size-4" />
         </ProjectBarButton>
         {props.onOpenSettings ? (
-          <ProjectBarButton label="Project settings" onClick={props.onOpenSettings}>
+          <ProjectBarButton label={t("chat.projectSettings")} onClick={props.onOpenSettings}>
             <SettingsIcon className="size-4" />
           </ProjectBarButton>
         ) : null}
@@ -376,7 +377,7 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
     !sender || !latest
       ? null
       : sender.navigableId !== null && sender.navigableId === viewerId
-        ? "You"
+        ? t("chat.you")
         : row.kind === "channel"
           ? sender.label
           : null;
@@ -428,7 +429,7 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
           {row.kind === "channel" && row.visibility === "private" ? (
             <LockIcon
               role="img"
-              aria-label="Private"
+              aria-label={t("chat.private")}
               className="-mx-0.5 size-3 shrink-0 self-center text-text-muted"
             />
           ) : null}
@@ -440,7 +441,7 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
           {pinned ? (
             <StarIcon
               role="img"
-              aria-label="Starred"
+              aria-label={t("chat.starred2")}
               className="ml-auto size-3 shrink-0 self-center fill-current text-text-muted opacity-60"
             />
           ) : null}
@@ -459,7 +460,7 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
             {latest?.thread_root_id ? (
               <ThreadIcon
                 role="img"
-                aria-label="In a thread"
+                aria-label={t("chat.inAThread")}
                 className="mr-1 inline size-3 align-[-2px]"
               />
             ) : null}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DATE_FILTER_OPTIONS, dateFilterSince } from "./date-filter-select";
+import { dateFilterOptions, dateFilterSince } from "./date-filter-select";
 
 /**
  * The recency-filter order is ONE global source (global contract): Attachments,
@@ -10,7 +10,7 @@ import { DATE_FILTER_OPTIONS, dateFilterSince } from "./date-filter-select";
  */
 describe("DATE_FILTER_OPTIONS — canonical near→far order", () => {
   it("is exactly all → 7d → 14d → 30d", () => {
-    expect(DATE_FILTER_OPTIONS.map((o) => o.value)).toEqual(["all", "7d", "14d", "30d"]);
+    expect(dateFilterOptions().map((o) => o.value)).toEqual(["all", "7d", "14d", "30d"]);
   });
 });
 

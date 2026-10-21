@@ -74,12 +74,6 @@ enum SilverhandAvatarMaker {
 
 private let backgroundTab = "background"
 
-// Matches the web editor's labels.
-private let categoryLabels: [String: String] = [
-  "eyebrows": "Brows", "eyes": "Eyes", "nose": "Nose", "mouth": "Mouth", "hair": "Hair",
-  "glasses": "Glasses", "headwear": "Headwear", "status": "Mood", "gesture": "Gesture",
-  "buddy": "Buddy", backgroundTab: "Color",
-]
 
 private struct AvatarMakerView: View {
   let library: AvatarLibrary
@@ -108,18 +102,18 @@ private struct AvatarMakerView: View {
         AvatarCanvas { context, side in library.draw(config, in: context, side: side) }
           .frame(width: 160, height: 160)
           .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-          .accessibilityLabel("Avatar preview")
+          .accessibilityLabel(NativeCopy.avatarPreview)
 
         HStack(spacing: 12) {
           Button {
             config = library.randomConfig()
           } label: {
-            Label("Random", systemImage: "shuffle")
+            Label(NativeCopy.random, systemImage: "shuffle")
           }
           Button {
             config = library.defaultConfig()
           } label: {
-            Label("Reset", systemImage: "arrow.counterclockwise")
+            Label(NativeCopy.reset, systemImage: "arrow.counterclockwise")
           }
         }
         .buttonStyle(.bordered)
@@ -130,17 +124,17 @@ private struct AvatarMakerView: View {
         grid
       }
       .padding(.top, 8)
-      .navigationTitle("Make an avatar")
+      .navigationTitle(NativeCopy.makeAvatar)
       .navigationBarTitleDisplayMode(.inline)
       .toolbar {
         ToolbarItem(placement: .principal) {
-          Text("Make an avatar").font(.headline)
+          Text(NativeCopy.makeAvatar).font(.headline)
         }
         ToolbarItem(placement: .cancellationAction) {
-          Button("Cancel", action: onCancel)
+          Button(NativeCopy.cancel, action: onCancel)
         }
         ToolbarItem(placement: .confirmationAction) {
-          Button("Use") { onSave(config) }.font(.body.weight(.semibold))
+          Button(NativeCopy.use) { onSave(config) }.font(.body.weight(.semibold))
         }
       }
     }
@@ -155,7 +149,7 @@ private struct AvatarMakerView: View {
           Button {
             tab = id
           } label: {
-            Text(categoryLabels[id] ?? id)
+            Text(NativeCopy.avatarCategory(id))
               .font(.subheadline.weight(selected ? .semibold : .regular))
               .foregroundColor(selected ? .primary : .secondary)
               .padding(.horizontal, 12)
@@ -178,7 +172,7 @@ private struct AvatarMakerView: View {
       LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 12)], spacing: 12) {
         if tab == backgroundTab {
           ForEach(library.backgrounds.indices, id: \.self) { index in
-            tile(label: "Color \(index + 1)", selected: config.bg == index) {
+            tile(label: "\(NativeCopy.avatarCategory(backgroundTab)) \(index + 1)", selected: config.bg == index) {
               config.bg = index
             } content: {
               Circle()
@@ -188,9 +182,9 @@ private struct AvatarMakerView: View {
             }
           }
         } else if let category = library.categories.first(where: { $0.id == tab }) {
-          let label = categoryLabels[category.id] ?? category.id
+          let label = NativeCopy.avatarCategory(category.id)
           if category.optional {
-            tile(label: "None", selected: config.parts[category.id] == -1) {
+            tile(label: NativeCopy.none, selected: config.parts[category.id] == -1) {
               config.parts[category.id] = -1
             } content: {
               Image(systemName: "nosign").font(.title3).foregroundColor(Color(white: 0.55))

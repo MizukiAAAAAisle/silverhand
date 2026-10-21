@@ -1,5 +1,6 @@
 import type { TaskBoardContainer as TaskBoardContainerAxis } from "@silverhand/shared";
 import { isAgentSpace, type WorkspaceOwnership } from "@/features/workspaces/workspace-ownership";
+import { t } from "@/lib/i18n";
 
 export type { TaskBoardContainerAxis };
 
@@ -230,8 +231,8 @@ export function boardScopeGroups<W extends WorkspaceOwnership>(input: {
     container: Extract<TaskBoardContainerAxis, "workspace" | "agent_space">,
   ): readonly W[] => input.workspaces.filter((w) => workspaceBoardContainer(w) === container);
   const defs: Array<BoardScopeGroup<W>> = [
-    { key: "workspaces", label: "Projects", workspaces: inContainer("workspace") },
-    { key: "agent-spaces", label: "Agent Spaces", workspaces: inContainer("agent_space") },
+    { key: "workspaces", label: t("tasks.projects"), workspaces: inContainer("workspace") },
+    { key: "agent-spaces", label: t("tasks.agentSpaces"), workspaces: inContainer("agent_space") },
   ];
   return defs.filter((g) => g.workspaces.length > 0);
 }

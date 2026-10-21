@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { Brandmark } from "./brandmark";
+import { t } from "@/lib/i18n";
 
 /** Split shell shared by the auth gate and the profile-setup step: a narrow
  *  brand column on the left, the form on the open page to the right. Below
@@ -19,7 +20,7 @@ export function AuthSplitLayout({ children }: { children: ReactNode }): JSX.Elem
             <h1 className="text-2xl font-semibold tracking-tight">Silverhand</h1>
           </div>
           <p className="mt-3 text-sm leading-relaxed text-text-muted">
-            Where humans and agents work together.
+            {t("ui.whereHumansAndAgents")}
           </p>
         </header>
         {children}
@@ -50,7 +51,7 @@ function BrandPanel(): JSX.Element {
         <div className="flex flex-col gap-5">
           <h2 className="text-6xl font-semibold leading-none tracking-tighter">Silverhand</h2>
           <p className="max-w-96 text-base leading-relaxed text-text-muted">
-            Where humans and agents work together.
+            {t("ui.whereHumansAndAgents")}
           </p>
         </div>
         <p className="text-xs tracking-wide text-text-muted">silverhand</p>

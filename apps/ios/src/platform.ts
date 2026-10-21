@@ -58,6 +58,7 @@ export function createIOSPlatform(
   };
 
   return {
+    setLocale: (locale) => void bridge.setLocale({ locale }),
     navigation: createIOSNavigation(bridge),
     titlebar: createIOSTitlebar(bridge),
     pageBar: createIOSPageBar(bridge),

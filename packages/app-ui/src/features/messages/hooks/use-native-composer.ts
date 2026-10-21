@@ -15,6 +15,7 @@ import type { PickerItem } from "../model/composer-picker";
 import { avatarUrlOf, type PickerView } from "../model/composer-picker-rows";
 import { useOpenAgentActivity } from "./use-open-agent-activity";
 import { useNativeComposerActivity } from "./use-native-composer-activity";
+import { t } from "@/lib/i18n";
 
 /** Whether the compact composer is drawn natively (iOS). */
 export function useNativeComposerPlatform(): boolean {
@@ -51,13 +52,13 @@ interface NativeComposerOptions {
 
 function addMenu(offersMentions: boolean, offersChannels: boolean): ComposerMenuItem[] {
   return [
-    { id: "photos", label: "Photos", icon: iconMarkup(ImageIcon), pick: "photos" },
-    { id: "files", label: "Files", icon: iconMarkup(AttachFileIcon), pick: "files" },
+    { id: "photos", label: t("messages.photos"), icon: iconMarkup(ImageIcon), pick: "photos" },
+    { id: "files", label: t("messages.files"), icon: iconMarkup(AttachFileIcon), pick: "files" },
     ...(offersMentions
-      ? [{ id: "mention", label: "Mention a member", icon: iconMarkup(MentionIcon) }]
+      ? [{ id: "mention", label: t("messages.mentionAMember"), icon: iconMarkup(MentionIcon) }]
       : []),
     ...(offersChannels
-      ? [{ id: "channel", label: "Reference a channel", icon: iconMarkup(HashIcon) }]
+      ? [{ id: "channel", label: t("messages.referenceAChannel"), icon: iconMarkup(HashIcon) }]
       : []),
   ];
 }
@@ -108,8 +109,8 @@ export function useNativeComposer(options: NativeComposerOptions): {
     placeholder: options.placeholder,
     enabled: options.enabled,
     canSend: options.canSend,
-    sendLabel: "Send",
-    addLabel: "Add",
+    sendLabel: t("messages.send"),
+    addLabel: t("messages.add"),
     add: addMenu(options.offersMentions, options.offersChannels),
     accessoryHeight: options.accessoryHeight,
     picker: picker

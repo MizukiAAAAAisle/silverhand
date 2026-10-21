@@ -21,6 +21,7 @@ import {
   presentCounterpart,
 } from "@/features/direct-pairs/counterpart-presentation";
 import type { ConversationPaneCapabilities } from "@/features/conversations/pane-mode";
+import { t } from "@/lib/i18n";
 
 const TITLE_CLASS =
   "min-w-0 truncate font-serif text-base leading-4.5 font-semibold text-text-primary";
@@ -165,8 +166,8 @@ function CounterpartIdentity({
             focusAgentSideSection(agentId, "activity");
             openAgentPanel(agentId);
           }}
-          aria-label={`Open ${presentation.label} activity`}
-          title={`Open ${presentation.label} activity`}
+          aria-label={t("conversationShell.openActivity", { name: presentation.label })}
+          title={t("conversationShell.openActivity", { name: presentation.label })}
           className="focus-outline inline-flex shrink-0 rounded-none transition-[filter] duration-100 hover:brightness-90"
         >
           {face}
@@ -175,8 +176,8 @@ function CounterpartIdentity({
         <button
           type="button"
           onClick={() => openHumanPanel(counterpart.id)}
-          aria-label={`Open ${presentation.label} profile`}
-          title={`Open ${presentation.label} profile`}
+          aria-label={t("conversationShell.openProfile", { name: presentation.label })}
+          title={t("conversationShell.openProfile", { name: presentation.label })}
           className="focus-outline inline-flex shrink-0 rounded-none transition-[filter] duration-100 hover:brightness-90"
         >
           {face}
@@ -245,7 +246,7 @@ function HumanPresenceDot({ userId }: { userId: string }): JSX.Element {
   return (
     <span
       data-status-pip
-      title={online ? "Online" : "Offline"}
+      title={online ? t("conversationShell.online") : t("conversationShell.offline")}
       className={`${PRESENCE_DOT_CLASS} ${online ? "bg-success" : "bg-text-muted/40"}`}
     />
   );

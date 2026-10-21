@@ -1,5 +1,6 @@
 import { useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
+import { t } from "@/lib/i18n";
 
 /**
  * Curated quick-reaction set for v1. Rendered with the OS-native emoji font
@@ -63,7 +64,7 @@ export function ReactionPicker({
                   handleOpen(false);
                   onPick(emoji);
                 }}
-                aria-label={`React ${emoji}`}
+                aria-label={t("messages.reactWith", { emoji })}
                 className="flex size-7 items-center justify-center rounded-(--floating-item-radius) text-base leading-none transition-colors hover:bg-bg-hover focus-outline"
               >
                 {emoji}

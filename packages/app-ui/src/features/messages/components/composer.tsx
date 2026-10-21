@@ -33,6 +33,7 @@ import {
   PendingAttachmentMotion,
   PendingAttachmentTray,
 } from "./pending-attachment-tray";
+import { t } from "@/lib/i18n";
 
 export { effectiveContentType } from "../hooks/use-composer-draft";
 
@@ -133,12 +134,12 @@ export function Composer({
   const [accessoryHeight, setAccessoryHeight] = useState(0);
   const accessoryRef = useRef<HTMLDivElement>(null);
   const placeholder = archived
-    ? "This conversation is archived"
+    ? t("messages.thisConversationIsArchived")
     : readOnly
       ? "This conversation is read-only"
       : disabled
-        ? "This conversation is closed"
-        : "Message…";
+        ? t("messages.thisConversationIsClosed")
+        : t("messages.message");
   const nativeComposer = useNativeComposer({
     shown: native && !covered,
     draftKey,
@@ -500,7 +501,7 @@ export function Composer({
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={disabled || pending.length >= MAX_ATTACHMENTS}
-                title="Attach a file"
+                title={t("messages.attachAFile")}
                 className={COMPOSER_TOOL_CLASS}
               >
                 <AttachFileIcon className="size-4" />
@@ -510,8 +511,8 @@ export function Composer({
                   type="button"
                   onClick={() => insertTrigger("@")}
                   disabled={disabled}
-                  title="Mention a member"
-                  aria-label="Mention a member"
+                  title={t("messages.mentionAMember")}
+                  aria-label={t("messages.mentionAMember")}
                   data-composer-tool="mention"
                   className={COMPOSER_TOOL_CLASS}
                 >
@@ -523,8 +524,8 @@ export function Composer({
                   type="button"
                   onClick={() => insertTrigger("#")}
                   disabled={disabled}
-                  title="Reference a channel"
-                  aria-label="Reference a channel"
+                  title={t("messages.referenceAChannel")}
+                  aria-label={t("messages.referenceAChannel")}
                   data-composer-tool="channel"
                   className={COMPOSER_TOOL_CLASS}
                 >
@@ -537,13 +538,13 @@ export function Composer({
               variant="default"
               size="sm"
               disabled={sendDisabled}
-              title="Send (Enter)"
+              title={t("messages.sendEnter")}
               data-composer-action="send"
               data-sticker
               data-sticker-size="md"
               className="h-7"
             >
-              Send
+              {t("messages.send")}
             </Button>
           </div>
         </div>

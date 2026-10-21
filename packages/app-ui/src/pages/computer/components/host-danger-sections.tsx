@@ -27,6 +27,7 @@ import {
 } from "../model/delete-computer-phase";
 import { computerCopy } from "../../../features/computers/model/computer-copy";
 import { HostSection } from "./host-section";
+import { t } from "@/lib/i18n";
 
 /* ─── Refresh credentials (app-managed, current-machine only) ──── */
 
@@ -57,14 +58,14 @@ export function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Elem
       setSaved(true);
       window.setTimeout(() => setSaved(false), 1500);
     } catch (err) {
-      setError(err instanceof Error ? err.message : computerCopy.refreshCredentialsFailed);
+      setError(err instanceof Error ? err.message : computerCopy().refreshCredentialsFailed);
     }
   };
 
   return (
-    <HostSection title={computerCopy.refreshCredentialsTitle}>
+    <HostSection title={computerCopy().refreshCredentialsTitle}>
       <div className="flex flex-col gap-3">
-        <p className="text-sm text-text-muted">{computerCopy.refreshCredentialsBody}</p>
+        <p className="text-sm text-text-muted">{computerCopy().refreshCredentialsBody}</p>
         <div data-host-actions className="flex items-center gap-3">
           <Button
             size={compact ? "md" : "sm"}
@@ -79,13 +80,13 @@ export function RefreshCredentialsSection({ host }: { host: HostDto }): JSX.Elem
               <RefreshIcon className="size-3.5" />
             )}
             {rotate.isPending
-              ? computerCopy.refreshingCredentials
-              : computerCopy.refreshCredentials}
+              ? computerCopy().refreshingCredentials
+              : computerCopy().refreshCredentials}
           </Button>
           {saved ? (
             <span className="inline-flex items-center gap-1.5 text-xs text-success">
               <SuccessIcon className="size-3.5" />
-              {computerCopy.refreshCredentialsSuccess}
+              {computerCopy().refreshCredentialsSuccess}
             </span>
           ) : null}
         </div>
@@ -146,7 +147,7 @@ export function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element 
     <>
       <Button variant="destructive-outline" className="gap-2 w-full" onClick={openConfirm}>
         <ShieldOffIcon className="size-3.5" />
-        {computerCopy.revokeComputer}
+        {computerCopy().revokeComputer}
       </Button>
 
       <Dialog
@@ -158,33 +159,33 @@ export function RevokeComputerSection({ host }: { host: HostDto }): JSX.Element 
       >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>{computerCopy.revokeConfirmTitle}</DialogTitle>
+            <DialogTitle>{computerCopy().revokeConfirmTitle}</DialogTitle>
             <DialogDescription asChild>
               <ul className="mt-1 flex list-disc flex-col gap-1 pl-4">
-                {computerCopy.revokeConfirmFacts.map((fact) => (
+                {computerCopy().revokeConfirmFacts.map((fact) => (
                   <li key={fact}>{fact}</li>
                 ))}
               </ul>
             </DialogDescription>
           </DialogHeader>
-          {failed ? <p className="text-xs text-error">{computerCopy.revokeFailed}</p> : null}
+          {failed ? <p className="text-xs text-error">{computerCopy().revokeFailed}</p> : null}
           <DialogFooter>
             <Button variant="cancel" onClick={() => setOpen(false)} disabled={revoke.isPending}>
-              {computerCopy.cancel}
+              {computerCopy().cancel}
             </Button>
             <Button
               variant="destructive"
               className="gap-2"
               onClick={() => void handleRevoke()}
               disabled={revoke.isPending}
-              aria-label={`${computerCopy.revokeComputer}: ${label}`}
+              aria-label={`${computerCopy().revokeComputer}: ${label}`}
             >
               {revoke.isPending ? (
                 <SpinnerIcon className="size-3.5 animate-spin" />
               ) : (
                 <ShieldOffIcon className="size-3.5" />
               )}
-              {revoke.isPending ? computerCopy.revoking : computerCopy.revokeConfirm}
+              {revoke.isPending ? computerCopy().revoking : computerCopy().revokeConfirm}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -264,7 +265,7 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
     <>
       <Button variant="destructive-outline" className="gap-2 w-full" onClick={openConfirm}>
         <DeleteIcon className="size-3.5" />
-        {computerCopy.deleteComputer}
+        {computerCopy().deleteComputer}
       </Button>
 
       <Dialog
@@ -280,12 +281,12 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
           {failure === "pending" ? (
             <>
               <DialogHeader>
-                <DialogTitle>{computerCopy.deletePendingTitle}</DialogTitle>
-                <DialogDescription>{computerCopy.deletePendingBody}</DialogDescription>
+                <DialogTitle>{computerCopy().deletePendingTitle}</DialogTitle>
+                <DialogDescription>{computerCopy().deletePendingBody}</DialogDescription>
               </DialogHeader>
               <DialogFooter>
                 <Button variant="cancel" onClick={() => setOpen(false)} disabled={del.isPending}>
-                  {computerCopy.cancel}
+                  {computerCopy().cancel}
                 </Button>
                 <Button
                   variant="primary"
@@ -294,19 +295,19 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
                   disabled={del.isPending}
                 >
                   {del.isPending ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
-                  {computerCopy.deleteRetry}
+                  {computerCopy().deleteRetry}
                 </Button>
               </DialogFooter>
             </>
           ) : phase.kind === "unavailable" ? (
             <>
               <DialogHeader>
-                <DialogTitle>{computerCopy.deleteConfirmTitle}</DialogTitle>
-                <DialogDescription>{computerCopy.deleteImpactUnavailable}</DialogDescription>
+                <DialogTitle>{computerCopy().deleteConfirmTitle}</DialogTitle>
+                <DialogDescription>{computerCopy().deleteImpactUnavailable}</DialogDescription>
               </DialogHeader>
               <DialogFooter>
                 <Button variant="cancel" onClick={() => setOpen(false)}>
-                  {computerCopy.cancel}
+                  {computerCopy().cancel}
                 </Button>
                 <Button
                   variant="primary"
@@ -315,29 +316,29 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
                   disabled={resources.isFetching}
                 >
                   {resources.isFetching ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
-                  {computerCopy.deleteRetry}
+                  {computerCopy().deleteRetry}
                 </Button>
               </DialogFooter>
             </>
           ) : (
             <>
               <DialogHeader>
-                <DialogTitle>{computerCopy.deleteConfirmTitle}</DialogTitle>
+                <DialogTitle>{computerCopy().deleteConfirmTitle}</DialogTitle>
                 {/* shiki interaction gate (2026-07-07): the impact does NOT
                     replace the standard delete copy — it keeps it and adds the
                     blocks below, so the user reads the same base consequence
                     plus exactly what else goes. */}
-                <DialogDescription>{computerCopy.deleteConfirmBody}</DialogDescription>
+                <DialogDescription>{computerCopy().deleteConfirmBody}</DialogDescription>
               </DialogHeader>
               {phase.kind === "confirm" && phase.agents.length > 0 ? (
                 <CascadeImpact agents={phase.agents} />
               ) : null}
               {failure === "generic" ? (
-                <p className="text-xs text-error">{computerCopy.deleteFailed}</p>
+                <p className="text-xs text-error">{computerCopy().deleteFailed}</p>
               ) : null}
               <DialogFooter>
                 <Button variant="cancel" onClick={() => setOpen(false)} disabled={del.isPending}>
-                  {computerCopy.cancel}
+                  {computerCopy().cancel}
                 </Button>
                 <Button
                   variant="destructive"
@@ -347,14 +348,14 @@ export function DeleteComputerSection({ host }: { host: HostDto }): JSX.Element 
                   // renders this same confirm, so this guard is what stops a
                   // confirm of an impact the user has not seen.
                   disabled={phase.kind !== "confirm" || del.isPending}
-                  aria-label={`${computerCopy.deleteComputer}: ${label}`}
+                  aria-label={`${computerCopy().deleteComputer}: ${label}`}
                 >
                   {del.isPending || phase.kind === "loading" ? (
                     <SpinnerIcon className="size-3.5 animate-spin" />
                   ) : (
                     <DeleteIcon className="size-3.5" />
                   )}
-                  {del.isPending ? computerCopy.deleting : computerCopy.deleteConfirm}
+                  {del.isPending ? computerCopy().deleting : computerCopy().deleteConfirm}
                 </Button>
               </DialogFooter>
             </>
@@ -389,9 +390,9 @@ export function CascadeImpact({ agents }: { agents: HostAgentResource[] }): JSX.
   return (
     <div className="rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5">
       <p className="text-(length:--text-meta) font-semibold uppercase tracking-wider text-warning">
-        {computerCopy.deleteCascadeImpactTitle}
+        {computerCopy().deleteCascadeImpactTitle}
       </p>
-      <ul className="mt-2 flex flex-col gap-1.5" aria-label="Agents to be removed">
+      <ul className="mt-2 flex flex-col gap-1.5" aria-label={t("computers.agentsToBeRemoved")}>
         {agents.map((agent) => {
           const knownRuntime = RuntimeKindSchema.safeParse(agent.runtime);
           return (

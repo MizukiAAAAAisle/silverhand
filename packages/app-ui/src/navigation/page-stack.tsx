@@ -21,6 +21,7 @@ import { useCompactLayout } from "./layout";
 import { usePageBarSwipe } from "./page-bar";
 import { showsTabBar } from "./presentation";
 import { NavigationContext, useNavigationDriver, type Driver } from "./provider";
+import { useLocale } from "@/lib/i18n";
 
 const PageLive = createContext(true);
 
@@ -303,6 +304,7 @@ const PageFrame = memo(function PageFrame({
   stacked: boolean;
   children: ReactNode;
 }) {
+  useLocale();
   const parent = useNavigationDriver();
   const node = useRef<HTMLDivElement | null>(null);
   const value = useMemo(() => ({ location, navigationType }), [location, navigationType]);

@@ -16,6 +16,7 @@ import { cn } from "@/lib/cn";
 import { buildCapabilityGroups, CAPABILITY_COUNT } from "./capability-meta";
 import { canEditAgentCapabilities } from "./agent-permissions";
 import { useAgentCapabilities, useUpdateAgentCapabilities, useWorkspaceMemberLists } from "./hooks";
+import { t } from "@/lib/i18n";
 
 const GROUPS = buildCapabilityGroups();
 
@@ -34,12 +35,12 @@ function setEq(a: Set<string>, b: Set<string>): boolean {
  *  (400) — both must be visible even though the front-end also gates. */
 function describeSaveError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.kind === "backend_unreachable") return "Save failed: cannot reach backend";
-    if (err.status === 403) return "You don't have edit permission for this agent";
-    if (err.status === 400) return "Save failed: submitted an unknown capability";
-    return `Save failed (${err.status})`;
+    if (err.kind === "backend_unreachable") return t("workspaces.saveFailedCannotReach");
+    if (err.status === 403) return t("workspaces.youDontHaveEdit");
+    if (err.status === 400) return t("workspaces.saveFailedSubmittedAn");
+    return t("workspaces.saveFailedStatus", { status: err.status });
   }
-  return "Save failed";
+  return t("workspaces.saveFailed");
 }
 
 export interface AgentPermissionsPanelProps {
@@ -89,7 +90,9 @@ export function AgentPermissionsPanel({
   }
   if (agents.length === 0) {
     return (
-      <PanelEmpty icon={<EmptyIcon className="size-6" />}>No agents in this project</PanelEmpty>
+      <PanelEmpty icon={<EmptyIcon className="size-6" />}>
+        {t("workspaces.noAgentsInThis")}
+      </PanelEmpty>
     );
   }
 
@@ -110,10 +113,7 @@ export function AgentPermissionsPanel({
           {!canEdit ? (
             <div className="flex items-start gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
               <ErrorIcon className="mt-0.5 size-3.5 shrink-0" />
-              <span>
-                You can view this agent's permissions; editing requires owner / admin, or being the
-                agent's creator.
-              </span>
+              <span>{t("workspaces.permissionsReadOnly")}</span>
             </div>
           ) : null}
           <AgentCapabilityEditor
@@ -164,7 +164,7 @@ function AgentSelect({
             <span className="truncate text-text-muted">@{selected.name}</span>
           </span>
         ) : (
-          <span className="text-text-muted">Select an agent</span>
+          <span className="text-text-muted">{t("workspaces.selectAnAgent")}</span>
         )}
         <Select.Icon>
           <ChevronDownIcon className="size-3.5 shrink-0 text-text-muted" />
@@ -243,7 +243,7 @@ function AgentCapabilityEditor({
         capabilities: [...effective],
       });
       setDraft(null);
-      toast.success(`Updated permissions for ${agent.display_name || agent.name}`);
+      toast.success(t("workspaces.permissionsUpdated", { name: agent.display_name || agent.name }));
     } catch (err) {
       // Roll the optimistic draft back to server truth and refetch.
       setDraft(null);
@@ -255,7 +255,7 @@ function AgentCapabilityEditor({
   if (capsQuery.isLoading) {
     return (
       <SkeletonRegion
-        label="Loading permissions"
+        label={t("workspaces.loadingPermissions")}
         className="rounded-(--control-radius) border-(length:--control-border-width) border-border p-4"
       >
         <div className="columns-2 gap-x-6">
@@ -282,9 +282,9 @@ function AgentCapabilityEditor({
   if (capsQuery.isError) {
     return (
       <div className="flex items-center gap-2 text-xs text-error">
-        Failed to load permissions.
+        {t("workspaces.failedToLoadPermissions")}
         <Button variant="ghost" size="sm" onClick={() => void capsQuery.refetch()}>
-          Retry
+          {t("common.retry")}
         </Button>
       </div>
     );
@@ -294,7 +294,7 @@ function AgentCapabilityEditor({
     <div className="flex flex-col gap-4 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-floating p-3.5">
       <div className="flex items-center justify-end">
         <span className="text-xs tabular-nums text-text-muted">
-          Granted {grantedCount}/{CAPABILITY_COUNT}
+          {t("workspaces.grantedCount", { granted: grantedCount, total: CAPABILITY_COUNT })}
         </span>
       </div>
 
@@ -352,7 +352,7 @@ function AgentCapabilityEditor({
             onClick={() => void onSave()}
             disabled={!dirty || update.isPending}
           >
-            {update.isPending ? "Saving…" : "Save"}
+            {update.isPending ? t("workspaces.saving") : t("common.save")}
           </Button>
           <Button
             variant="cancel"
@@ -360,7 +360,7 @@ function AgentCapabilityEditor({
             onClick={() => setDraft(null)}
             disabled={!dirty || update.isPending}
           >
-            Cancel
+            {t("common.cancel")}
           </Button>
         </div>
       ) : null}

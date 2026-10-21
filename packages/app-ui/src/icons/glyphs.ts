@@ -48,6 +48,7 @@ import {
   Hourglass,
   IdCard,
   Inbox,
+  Languages,
   Info,
   Layers,
   Link2,
@@ -336,6 +337,7 @@ export const FolderOpenIcon = icon("folder-open", [
 export const GeneralSettingsIcon = icon("general-settings", Settings2);
 export const GlobeIcon = icon("globe", Globe);
 export const HashIcon = icon("hash", Hash);
+export const LanguageIcon = icon("language", Languages);
 export const HistoryIcon = icon("history", RotateCcwClock);
 export const InboxIcon = icon("inbox", Inbox);
 export const InfoIcon = icon("info", Info);

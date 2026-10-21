@@ -1,8 +1,9 @@
 import { SkeletonBlock as Block, SkeletonRegion as Region } from "@/components/layout/skeleton";
 import { COLLECTION_CARD_CLASS } from "@/components/layout/collection-item-card";
+import { t } from "@/lib/i18n";
 export function ActivityListSkeleton(): JSX.Element {
   return (
-    <Region label="Loading activity">
+    <Region label={t("activity.loadingActivity")}>
       <div className="space-y-5">
         {[0, 1].map((group) => (
           <section key={group}>

@@ -1,0 +1,90 @@
+# Literals the scan reports that are not copy: format examples and sample values.
+# `<path>: <text>` allows one file; `*: <text>` allows every file.
+*: placeholder="http://127.0.0.1:8765"
+*: placeholder="you@example.com"
+*: placeholder="Ada Lovelace"
+*: placeholder="ada"
+# Theme names are brand-like and stay as they are in both languages.
+pages/settings/settings-shell.tsx: Studio Light
+pages/settings/settings-shell.tsx: Poster
+pages/settings/settings-shell.tsx: Slack Dark
+pages/settings/settings-shell.tsx: Iris
+pages/settings/settings-shell.tsx: Glass
+*: sample="const size = 12"
+*: px
+# Tool names shown as verbs in activity rows.
+features/agents/model/activity-presentation.ts: Shell
+features/agents/model/activity-presentation.ts: Bash
+features/agents/model/activity-presentation.ts: Grep
+features/agents/model/activity-presentation.ts: Glob
+features/conversation-shell/components/side-unresolved-placeholder.tsx: #conv:
+# Language and product names.
+features/messages/components/mermaid-diagram.tsx: mermaid
+features/messages/components/mermaid-diagram.tsx: Mermaid
+features/tasks/components/task-detail-shared.tsx: YYYY-MM-DD HH:mm
+features/tasks/hooks/hooks.ts: Not Found
+features/tasks/hooks/hooks.ts: malformed task pointer
+*: silverhand
+features/computers/hooks/hooks.ts: backend:info returned no snapshot (no backend handle yet)
+features/computers/hooks/hooks.ts: BackendInfoUnavailableError
+features/computers/hooks/hooks.ts: ComputerHasPendingAgentsError
+*: placeholder="http://127.0.0.1:7897"
+# Stored message body seen by every member; stays in English.
+features/channels/send-message.ts: `Sent the long body as a text attachment (…, … KB)`
+features/profile/message-counts.ts: Asia/Shanghai
+*: 180ms cubic-bezier(0.4, 0, 0.2, 1)
+*: linear-gradient(to top, #000 10%, transparent 75%)
+lib/api.ts: The operation was aborted.
+lib/api.ts: AbortError
+lib/api.ts: Network Error
+features/avatar-maker/model/avatar-config.ts: `<rect width="…" height="…" fill="…"/>`
+# Font family names and CSS stacks.
+features/appearance/font-presets.ts: Georgia
+features/appearance/font-presets.ts: Georgia, serif
+features/appearance/font-presets.ts: LXGW WenKai
+features/appearance/font-presets.ts: "LXGW WenKai", "LXGW WenKai Screen", serif
+features/appearance/font-presets.ts: Songti SC
+features/appearance/font-presets.ts: "Songti SC", SimSun, serif
+features/appearance/font-presets.ts: Menlo
+features/appearance/font-presets.ts: Menlo, Consolas, monospace
+features/appearance/font-presets.ts: SF Mono
+features/appearance/font-presets.ts: "SF Mono", "SFMono-Regular", Menlo, monospace
+features/appearance/font-presets.ts: JetBrains Mono
+features/appearance/font-presets.ts: "JetBrains Mono", Menlo, monospace
+features/appearance/font-presets.ts: Fira Code
+features/appearance/font-presets.ts: "Fira Code", Menlo, monospace
+features/appearance/font-presets.ts: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif
+# Agent run activity (tool verbs, thinking, output, run status) reads as the agent's own transcript; English in every locale.
+features/agents/components/agent-activity-timeline.tsx: `… dropped (too large)`
+features/agents/components/agent-activity-timeline.tsx: aria-label="cancelled"
+features/agents/components/agent-activity-timeline.tsx: aria-label="completed"
+features/agents/components/agent-activity-timeline.tsx: aria-label="failed"
+features/agents/components/agent-activity-timeline.tsx: aria-label="finished"
+features/agents/components/agent-activity-timeline.tsx: aria-label="in progress"
+features/agents/components/agent-activity-timeline.tsx: aria-label="succeeded"
+features/agents/components/agent-activity-timeline.tsx: Compacting context…
+features/agents/components/agent-activity-timeline.tsx: Context compacted
+features/agents/components/agent-activity-timeline.tsx: Error
+features/agents/components/agent-activity-timeline.tsx: Event dropped (too large)
+features/agents/components/agent-activity-timeline.tsx: Message received
+features/agents/components/agent-activity-timeline.tsx: Message send stale
+features/agents/components/agent-activity-timeline.tsx: Provider response
+features/agents/components/agent-activity-timeline.tsx: Session started
+features/agents/components/agent-activity-timeline.tsx: Thinking
+features/agents/model/activity-presentation.ts: Edit
+features/agents/model/activity-presentation.ts: Fetch
+features/agents/model/activity-presentation.ts: Read
+features/agents/model/activity-presentation.ts: Search
+features/agents/model/activity-presentation.ts: Skill
+features/agents/model/activity-presentation.ts: Task
+features/agents/model/activity-presentation.ts: Task update
+features/agents/model/activity-presentation.ts: Write
+features/messages/components/composer-activity-header.tsx: Compacting…
+features/messages/components/composer-activity-header.tsx: Running
+features/messages/model/composer-activity.ts: Compacting
+features/messages/model/composer-activity.ts: Notice
+features/messages/model/composer-activity.ts: Starting…
+features/messages/model/composer-activity.ts: Thinking
+features/messages/model/composer-activity.ts: Thinking…
+features/messages/model/composer-activity.ts: Waiting…
+features/messages/model/composer-activity.ts: Writing

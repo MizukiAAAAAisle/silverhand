@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
 import { SelectionActionButton } from "./selection-toolbar";
+import { t } from "@/lib/i18n";
 
 interface LightboxProps {
   open: boolean;
@@ -313,7 +314,7 @@ export function Lightbox({
       const result = await (shareImage ?? getPlatform().files.copyPngExport)({ pngBytes: bytes });
       if (generation !== exportGeneration.current) return;
       if (result.ok) {
-        if (!shareImage) toast.success("Image copied to clipboard");
+        if (!shareImage) toast.success(t("messages.imageCopiedToClipboard"));
       } else if ("error" in result) {
         toast.error(result.error);
       }
@@ -368,10 +369,10 @@ export function Lightbox({
             className="flex shrink-0 items-center gap-2 border-b-(length:--control-border-width) border-border-subtle px-3 py-2"
           >
             <DialogPrimitive.Title className="min-w-0 flex-1 truncate text-sm font-semibold text-text-primary">
-              Image Preview
+              {t("messages.imagePreview")}
             </DialogPrimitive.Title>
             <DialogPrimitive.Close
-              aria-label="Close"
+              aria-label={t("common.close")}
               data-sticker-close
               data-sticker
               data-sticker-size="md"
@@ -450,7 +451,7 @@ export function Lightbox({
                 variant="neutral"
                 size="icon"
                 className="size-[22px] shrink-0"
-                aria-label="Zoom out"
+                aria-label={t("messages.zoomOut")}
                 disabled={scale <= MIN_SCALE}
                 onClick={() => setZoom(scale / STEP)}
                 data-zoom-stepper
@@ -464,7 +465,7 @@ export function Lightbox({
                 max={MAX_SCALE * 100}
                 step="any"
                 value={scale * 100}
-                aria-label="Zoom level"
+                aria-label={t("messages.zoomLevel")}
                 onChange={(e) => setZoom(Number(e.target.value) / 100)}
               />
               <Button
@@ -472,7 +473,7 @@ export function Lightbox({
                 variant="neutral"
                 size="icon"
                 className="size-[22px] shrink-0"
-                aria-label="Zoom in"
+                aria-label={t("messages.zoomIn")}
                 disabled={scale >= MAX_SCALE}
                 onClick={() => setZoom(scale * STEP)}
                 data-zoom-stepper
@@ -484,14 +485,14 @@ export function Lightbox({
                   with −). A visually-hidden "Zoom " prefix gives screen readers
                   "Zoom 150%", not a bare percentage. */}
               <span className="flex h-7 min-w-13 items-center justify-center px-1.5 tabular-nums text-text-secondary">
-                <span className="sr-only">Zoom </span>
+                <span className="sr-only">{t("messages.zoom")} </span>
                 {Math.round(scale * 100)}%
               </span>
             </div>
             <div className="flex items-center gap-2">
               <SelectionActionButton
                 rank={onDownload && !shareImage ? "secondary" : "primary"}
-                label={shareImage ? "Share" : "Copy"}
+                label={shareImage ? t("messages.share") : t("messages.copy")}
                 icon={shareImage ? <ShareIcon className="size-3.5" /> : undefined}
                 disabled={busy}
                 onClick={onExport}
@@ -500,7 +501,7 @@ export function Lightbox({
                 <SelectionActionButton
                   rank="primary"
                   icon={<DownloadIcon className="size-3.5" />}
-                  label="Download"
+                  label={t("messages.download")}
                   disabled={downloading}
                   onClick={() => void onSave()}
                 />

@@ -3,6 +3,7 @@ import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import { useNav } from "@/router";
 import { SearchResultItem } from "@/features/search/search-result-item";
 import type { AgentDto, SearchIdentities } from "@silverhand/shared";
+import { t } from "@/lib/i18n";
 
 const EMPTY_AVATARS: ReadonlyMap<string, string | null> = new Map();
 const NO_AGENTS: ReadonlyMap<string, AgentDto> = new Map();
@@ -21,9 +22,9 @@ export function IdentitySearchResults({ identities }: { identities: SearchIdenti
   if (candidates.length === 0) return null;
 
   return (
-    <section className="mb-5" aria-label="Human & Agents">
+    <section className="mb-5" aria-label={t("search.humanAgents")}>
       <header className="mb-2 flex items-center gap-2 px-1 text-(length:--text-meta) font-medium uppercase leading-none tracking-wider text-text-muted">
-        <span>Human &amp; Agents</span>
+        <span>{t("search.humanAgents")}</span>
         <span>{total}</span>
       </header>
       <ul className="space-y-2">
@@ -53,7 +54,7 @@ export function IdentitySearchResults({ identities }: { identities: SearchIdenti
       </ul>
       {truncated ? (
         <p className="mt-2 text-xs text-text-muted">
-          Showing {candidates.length} of {total}. Refine the name to find more.
+          {t("search.showingSome", { shown: candidates.length, total })}
         </p>
       ) : null}
     </section>

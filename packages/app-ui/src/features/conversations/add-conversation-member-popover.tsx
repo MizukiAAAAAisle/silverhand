@@ -10,6 +10,7 @@ import { useConversationMembers } from "./use-conversation-members";
 import { useAddConversationMember } from "./use-add-conversation-member";
 import { useAgents } from "@/features/agents/hooks/hooks";
 import { useUsers } from "@/features/users/hooks";
+import { t, useLocale } from "@/lib/i18n";
 
 export interface AddConversationMemberPopoverProps {
   workspaceId: string;
@@ -83,8 +84,8 @@ export function AddConversationMemberPopover({
         {trigger ?? (
           <button
             type="button"
-            aria-label="Add member to this conversation"
-            title="Add member"
+            aria-label={t("conversations.addMemberToThis")}
+            title={t("conversations.addMember")}
             data-member-chip="add"
             className="inline-flex size-6 shrink-0 items-center justify-center rounded-(--control-radius) border-0 bg-transparent p-0 text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary focus-outline"
           >
@@ -161,23 +162,24 @@ export function ConversationMemberSearch({
   // who is NOT yet in this conversation. Query narrowing is the picker's job,
   // not ours — a kind with no candidates drops out so its header never sits
   // above an empty list. Mirrors the workspace picker's AGENTS / HUMANS groups.
+  const locale = useLocale();
   const groups = useMemo<MemberCandidateGroup[]>(
     () =>
       [
         {
-          label: "AGENTS",
+          label: t("conversations.agents"),
           items: pickableAgents
             .filter((a) => !inConversation.has(`agent:${a.id}`))
             .map((a) => ({ kind: "agent" as const, agent: a })),
         },
         {
-          label: "HUMANS",
+          label: t("conversations.humans"),
           items: pickableHumans
             .filter((u) => !inConversation.has(`human:${u.id}`))
             .map((u) => ({ kind: "human" as const, user: u })),
         },
       ].filter((g) => g.items.length > 0),
-    [pickableAgents, pickableHumans, inConversation],
+    [locale, pickableAgents, pickableHumans, inConversation],
   );
 
   const onPick = async (c: MemberCandidate): Promise<void> => {
@@ -205,15 +207,15 @@ export function ConversationMemberSearch({
     <MemberCandidatePicker
       mode={mode}
       onQueryChange={onQueryChange}
-      placeholder={onQueryChange ? "Search members or add someone" : undefined}
+      placeholder={onQueryChange ? t("conversations.searchMembersOrAdd") : undefined}
       groups={groups}
       onPick={(c) => void onPick(c)}
       rowsDisabled={addMember.isPending}
       autoFocus={autoFocus}
-      ariaLabel="Add member"
+      ariaLabel={t("conversations.addMember")}
       loading={isLoading}
       emptyHint={
-        canAddOthers ? "Everyone is already in this conversation" : "You have no agents left to add"
+        canAddOthers ? t("conversations.everyoneIsAlreadyIn") : t("conversations.youHaveNoAgents")
       }
       footer={
         error ? (
@@ -249,7 +251,7 @@ function formatError(err: unknown): string {
         // `addConversationMember`. It survives only for a non-human principal
         // (the CLI), so the line states the rule rather than prescribing the
         // manual step the product does for you.
-        return "Only the person who created this agent can bring it into the project.";
+        return t("conversations.onlyThePersonWho");
       case "agent_not_owned":
         // #task:1683 — the picker offers a plain member only their own agents,
         // so this is a backstop for a stale pool. Two targets land here and the
@@ -260,29 +262,29 @@ function formatError(err: unknown): string {
         // `addWorkspaceAgentMember`'s creator gate). Naming admin flatly would
         // send the user to someone who hits the same 403; the creator is the
         // one exit that holds in both cases, so it comes first.
-        return "You can only add agents you created. Someone else's needs its creator, or a project admin once it is in this project.";
+        return t("conversations.youCanOnlyAdd");
       case "host_attach_pending":
-        return "Its computer is not connected yet.";
+        return t("conversations.itsComputerIsNot");
       case "candidate_not_found":
-        return "This candidate no longer exists.";
+        return t("conversations.thisCandidateNoLonger");
       case "handle_ambiguous":
-        return "Several candidates share this handle.";
+        return t("conversations.severalCandidatesShareThis");
       case "conversation_member_add_unsupported":
         // States the CAPABILITY, not a guess at which kind of conversation this
         // is (#task:2044): the same code covers a direct pair AND a fixed-roster
         // channel in an agent space, so naming either one would be wrong half
         // the time — and "DM" is exactly the word that stopped being unambiguous.
-        return "This conversation's members are fixed and can't be changed.";
+        return t("conversations.thisConversationsMembersAre");
       case "conversation_closed":
-        return "This conversation is closed. Members can't be added.";
+        return t("conversations.thisConversationIsClosed");
       default:
         break;
     }
-    if (err.status === 403) return "You don't have permission to add members here.";
-    if (err.status === 404) return "This conversation no longer exists.";
-    return `Can't add the member (HTTP ${err.status}).`;
+    if (err.status === 403) return t("conversations.youDontHavePermission");
+    if (err.status === 404) return t("conversations.thisConversationNoLonger");
+    return t("conversations.addFailedStatus", { status: err.status });
   }
-  return "Can't add the member. Try again.";
+  return t("conversations.cantAddTheMember");
 }
 
 function parseCode(body: string): string | null {

@@ -14,6 +14,7 @@ import { ChannelIcon } from "@/components/channel-icon";
 import { FILTER_SELECT_TRIGGER_CLASS } from "@/components/ui/filter-select";
 import { useRovingList, isImeComposing } from "@/features/tasks/model/task-filter-keyboard";
 import { OptionRow, type ChannelOption } from "@/features/tasks/components/task-filter-bar";
+import { t } from "@/lib/i18n";
 
 /**
  * The create dialog's channel picker — a searchable combobox, NOT the plain
@@ -109,7 +110,7 @@ export function CreateTaskChannelPicker({
   const trigger = (
     <button
       type="button"
-      aria-label="Channel"
+      aria-label={t("tasks.channel")}
       // Bordered field surface, like the dialog's Title input: poster paints
       // the poster ink frame + drop shadow off `[data-input]` (SSOT comment
       // in poster-components.css). NOT `role='combobox'` — the inner search
@@ -125,7 +126,7 @@ export function CreateTaskChannelPicker({
             <span className="truncate">{selected.label}</span>
           </>
         ) : (
-          <span className="text-text-muted">Select a channel</span>
+          <span className="text-text-muted">{t("tasks.selectAChannel")}</span>
         )}
       </span>
       <ChevronDownIcon className="size-3.5 shrink-0 text-text-muted" />
@@ -160,7 +161,7 @@ export function CreateTaskChannelPicker({
           aria-expanded={open}
           aria-controls={listId}
           aria-activedescendant={flatOptions.length > 0 ? optionId(roving.activeIndex) : undefined}
-          placeholder="Search channels…"
+          placeholder={t("tasks.searchChannels")}
           className="w-full bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
         />
       </div>
@@ -204,7 +205,7 @@ export function CreateTaskChannelPicker({
         ))}
         {flatOptions.length === 0 ? (
           <p className="px-2 py-3 text-center text-(length:--text-meta) italic text-text-muted">
-            No matches
+            {t("tasks.noMatches")}
           </p>
         ) : null}
       </div>
@@ -228,7 +229,7 @@ export function CreateTaskChannelPicker({
           }}
         >
           <DialogTitle ref={headingRef} tabIndex={-1} className="shrink-0 outline-none">
-            Select a channel
+            {t("tasks.selectAChannel")}
           </DialogTitle>
           {content}
         </DialogContent>

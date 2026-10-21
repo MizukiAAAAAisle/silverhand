@@ -1,0 +1,33 @@
+import type { search as en } from "../en/search";
+import type { Translation } from "../../translate";
+
+export const search: Translation<typeof en> = {
+  humanAgents: "成员与 agent",
+  system: "系统",
+  agentSpace: "Agent 空间",
+  project: "项目",
+  loadingSearchResults: "正在加载搜索结果",
+  senderFilter: "发送者筛选",
+  allSenders: "所有发送者",
+  humans: "人类",
+  unavailable: "不可用",
+  agents: "Agent",
+  noAgents: "没有 agent",
+  all: "全部",
+  channels: "频道",
+  messages: "消息",
+  searchEverything: "搜索全部",
+  searchMessagesChannelsHumans: "搜索消息、频道、成员",
+  searching: "正在搜索…",
+  searchFailed: "搜索失败。",
+  showingUpTo20: "每类最多显示 20 条匹配，细化搜索可查看更多结果。",
+  searchAcrossYourProject: "在项目中搜索",
+  noResults: "无结果",
+  open: "打开",
+  navigate: "切换",
+  switchType: "切换类型",
+  advancedSearch: "高级搜索",
+  recent: "最近",
+  private: "私有",
+  showingSome: "显示 {total} 个中的 {shown} 个，细化名称可查看更多。",
+};

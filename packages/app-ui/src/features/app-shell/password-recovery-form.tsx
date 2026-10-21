@@ -7,6 +7,7 @@ import { SpinnerIcon } from "@/icons";
 import { Input, Label } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { getPlatform } from "@/platform";
+import { t } from "@/lib/i18n";
 
 type Step = "email" | "reset";
 
@@ -69,12 +70,12 @@ export function PasswordRecoveryForm({
       if (!alive.current) return;
       if (result.status === 202) {
         setStep("reset");
-        setNotice("If this email belongs to an account, a 6-digit code has been sent to it.");
+        setNotice(t("appShell.recovery.codeSent"));
       } else {
         setError(failureMessage(result.status, result.code));
       }
     } catch {
-      if (alive.current) setError("Could not reach the server. Try again.");
+      if (alive.current) setError(t("common.unreachable"));
     } finally {
       if (alive.current) setPending(false);
     }
@@ -84,7 +85,7 @@ export function PasswordRecoveryForm({
     event.preventDefault();
     if (pending) return;
     if (password !== confirm) {
-      setError("Passwords do not match.");
+      setError(t("appShell.passwordMismatch"));
       return;
     }
     const input = PasswordRecoveryResetInputSchema.safeParse({
@@ -93,7 +94,7 @@ export function PasswordRecoveryForm({
       new_password: password,
     });
     if (!input.success) {
-      setError("Enter the 6-digit code and a new password of at least 8 characters.");
+      setError(t("appShell.recovery.enterCode"));
       return;
     }
     setPending(true);
@@ -104,7 +105,7 @@ export function PasswordRecoveryForm({
       if (result.status === 200) onDone(emailTrimmed);
       else setError(failureMessage(result.status, result.code));
     } catch {
-      if (alive.current) setError("Could not reach the server. Try again.");
+      if (alive.current) setError(t("common.unreachable"));
     } finally {
       if (alive.current) setPending(false);
     }
@@ -116,17 +117,14 @@ export function PasswordRecoveryForm({
       className="font-medium text-text-primary underline underline-offset-3 hover:text-text-secondary focus-outline"
       onClick={onCancel}
     >
-      Back to log in
+      {t("appShell.recovery.backToLogin")}
     </button>
   );
 
   if (!enabled) {
     return (
       <div className="flex flex-col gap-4">
-        <p className="text-sm text-text-secondary">
-          Password recovery is not enabled on this server. Contact your administrator to reset your
-          password.
-        </p>
+        <p className="text-sm text-text-secondary">{t("appShell.recovery.disabledReset")}</p>
         <p className="text-sm text-text-muted">{back}</p>
       </div>
     );
@@ -134,11 +132,9 @@ export function PasswordRecoveryForm({
 
   return step === "email" ? (
     <form onSubmit={(event) => void requestCode(event)} className="flex flex-col gap-4">
-      <p className="text-sm text-text-muted">
-        Enter the email of your account. We will send a code to reset your password.
-      </p>
+      <p className="text-sm text-text-muted">{t("appShell.recovery.intro")}</p>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="recovery-email">Email</Label>
+        <Label htmlFor="recovery-email">{t("appShell.email")}</Label>
         <Input
           id="recovery-email"
           type="email"
@@ -158,7 +154,7 @@ export function PasswordRecoveryForm({
         disabled={pending || emailTrimmed.length === 0}
       >
         {pending ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
-        Send code
+        {t("appShell.recovery.sendCode")}
       </Button>
       {error ? <p className="text-xs text-error">{error}</p> : null}
       <p className="text-sm text-text-muted">{back}</p>
@@ -167,37 +163,37 @@ export function PasswordRecoveryForm({
     <form onSubmit={(event) => void reset(event)} className="flex flex-col gap-4">
       {notice ? <p className="text-sm text-text-muted">{notice}</p> : null}
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="recovery-code">Code</Label>
+        <Label htmlFor="recovery-code">{t("appShell.recovery.code")}</Label>
         <Input
           id="recovery-code"
           value={code}
           onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
           inputMode="numeric"
           autoComplete="one-time-code"
-          placeholder="6-digit code"
+          placeholder={t("appShell.recovery.codePlaceholder")}
           autoFocus
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="recovery-password">New password</Label>
+        <Label htmlFor="recovery-password">{t("appShell.recovery.newPassword")}</Label>
         <Input
           id="recovery-password"
           type="password"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           autoComplete="new-password"
-          placeholder="At least 8 characters"
+          placeholder={t("appShell.passwordMin")}
         />
       </div>
       <div className="flex flex-col gap-1.5">
-        <Label htmlFor="recovery-confirm">Confirm password</Label>
+        <Label htmlFor="recovery-confirm">{t("appShell.confirmPassword")}</Label>
         <Input
           id="recovery-confirm"
           type="password"
           value={confirm}
           onChange={(event) => setConfirm(event.target.value)}
           autoComplete="new-password"
-          placeholder="Repeat password"
+          placeholder={t("appShell.repeatPassword")}
         />
       </div>
       <Button
@@ -208,7 +204,7 @@ export function PasswordRecoveryForm({
         disabled={pending || code.length !== 6 || password.length < 8 || confirm.length === 0}
       >
         {pending ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
-        Reset password
+        {t("appShell.resetPassword")}
       </Button>
       {error ? <p className="text-xs text-error">{error}</p> : null}
       <p className="text-sm text-text-muted">
@@ -218,7 +214,7 @@ export function PasswordRecoveryForm({
           disabled={pending}
           onClick={() => void requestCode()}
         >
-          Send a new code
+          {t("appShell.recovery.sendNewCode")}
         </button>
         <span className="mx-2">·</span>
         {back}
@@ -230,15 +226,15 @@ export function PasswordRecoveryForm({
 function failureMessage(status: number, code: string | undefined): string {
   switch (code) {
     case "invalid_or_expired_code":
-      return "The code is invalid or has expired. Request a new code.";
+      return t("appShell.recovery.codeInvalid");
     case "password_recovery_disabled":
-      return "Password recovery is not enabled on this server. Contact your administrator.";
+      return t("appShell.recovery.disabled");
     case "password_recovery_busy":
     case "rate_limited":
-      return "Too many requests. Try again in a minute.";
+      return t("appShell.recovery.tooMany");
   }
-  if (status === 409) return "The server connection changed. Start again.";
-  if (status === 0) return "Could not reach the server. Try again.";
-  if (status === 422) return "Check the email and password fields.";
-  return "Something went wrong. Try again.";
+  if (status === 409) return t("appShell.recovery.serverChanged");
+  if (status === 0) return t("common.unreachable");
+  if (status === 422) return t("appShell.checkFields");
+  return t("common.somethingWrong");
 }

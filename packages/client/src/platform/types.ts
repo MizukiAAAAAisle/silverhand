@@ -146,6 +146,8 @@ export interface ClientPlatform {
   avatarMaker?: AvatarMakerCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
+  /** Native chrome (menus, tabs, sheets) follows the language the page resolved. */
+  setLocale?(locale: "en" | "zh"): void;
   /** The store page this build is installed from, offered when the server requires a newer app. */
   storeUrl?: string;
   /** The running build's release version; omitted where the host has none. */

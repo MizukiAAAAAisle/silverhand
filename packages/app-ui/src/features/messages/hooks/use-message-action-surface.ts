@@ -8,6 +8,7 @@ import {
 import { buildMarkdownTranscript } from "@/features/messages/model/markdown-transcript";
 import { type CachedMessage, isCommittedMessage } from "@/features/channels/pending-message";
 import { useSavedMessageIds, useToggleSave } from "@/features/messages/saved";
+import { t } from "@/lib/i18n";
 
 /** Per-row action props spread onto `MessageItem` / `ChannelMessageItem`.
  *  A single bundle so neither call site can silently drop one — that
@@ -118,7 +119,7 @@ export function useMessageActionSurface(deps: {
     if (!isCommittedMessage(msg)) return;
     try {
       await navigator.clipboard.writeText(msg.content);
-      toast.success("Copied to clipboard");
+      toast.success(t("messages.copiedToClipboard"));
     } catch (err) {
       toast.error("Couldn't copy: " + (err instanceof Error ? err.message : String(err)));
     }
@@ -137,7 +138,7 @@ export function useMessageActionSurface(deps: {
     const text = buildMarkdownTranscript(snapshots);
     try {
       await navigator.clipboard.writeText(text);
-      toast.success(`Copied ${snapshots.length} messages`);
+      toast.success(t("messages.copiedMessages", { count: snapshots.length }));
       selection.exit();
     } catch (err) {
       toast.error("Couldn't copy: " + (err instanceof Error ? err.message : String(err)));

@@ -6,6 +6,7 @@ import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { useUsersById } from "@/features/users/hooks";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
+import { t } from "@/lib/i18n";
 
 export function memberPreviewCapacity(
   width: number,
@@ -75,7 +76,9 @@ export function ChannelMembersPreview({
             type="button"
             onClick={onOpen}
             title={member.display_name || member.name}
-            aria-label={`View member ${member.display_name || member.name}`}
+            aria-label={t("conversationShell.viewMember", {
+              name: member.display_name || member.name,
+            })}
             className="size-8"
           >
             {member.kind === "agent" ? (
@@ -100,8 +103,8 @@ export function ChannelMembersPreview({
           <button
             type="button"
             onClick={onAdd}
-            aria-label="Add member"
-            title="Add member"
+            aria-label={t("conversationShell.addMember")}
+            title={t("conversationShell.addMember")}
             className="flex size-8 items-center justify-center bg-bg-hover border-dashed border-(length:--border-avatar-width) border-border-avatar text-text-secondary hover:text-text-primary transition-colors"
           >
             <PlusIcon className="size-4" />

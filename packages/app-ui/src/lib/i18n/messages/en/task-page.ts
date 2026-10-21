@@ -1,0 +1,15 @@
+export const taskPage = {
+  viewInConversation: "View in conversation",
+  showingTheLastLoaded: "Showing the last loaded version — the refresh failed.",
+  taskDetail: "Task detail",
+  loadingTask: "Loading task",
+  editTaskTitle: "Edit task title",
+  editTitle: "Edit title",
+  noDescription: "No description.",
+  editDescription: "Edit description",
+  taskMetadata: "Task metadata",
+  tasks: "Tasks",
+  newTask: "New task",
+  all: "All",
+  tasksIn: "Tasks in #{channel}",
+} as const;

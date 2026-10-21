@@ -32,6 +32,7 @@ import {
   SidebarEmptyRow,
   UnreadBadge,
 } from "../../../components/layout/sidebar-shared";
+import { t } from "@/lib/i18n";
 
 export function DirectMessagesGroup(props: {
   /** The open conversation — the ONLY thing that highlights a row here. */
@@ -84,7 +85,7 @@ export function DirectMessagesGroup(props: {
 
   return (
     <SidebarSection
-      label="DIRECT MESSAGES"
+      label={t("chat.directMessages")}
       labelClassName="text-xs"
       icon={<DirectMessageIcon className="size-3.5" />}
       // The count is the number of lines the section shows, draft included —
@@ -112,10 +113,10 @@ export function DirectMessagesGroup(props: {
       {rows.length === 0 ? (
         pairsQuery.isLoading ? (
           <li>
-            <SidebarRowsSkeleton label="Loading direct messages" nested />
+            <SidebarRowsSkeleton label={t("chat.loadingDirectMessages")} nested />
           </li>
         ) : (
-          <SidebarEmptyRow>No direct messages</SidebarEmptyRow>
+          <SidebarEmptyRow>{t("chat.noDirectMessages")}</SidebarEmptyRow>
         )
       ) : null}
       {rows.map((row) => (
@@ -192,7 +193,7 @@ export function DirectPairStarMenuItem(props: {
         star.mutate({ conversationId: props.conversationId, starred: !props.starred })
       }
     >
-      {props.starred ? "Unstar" : "Star"}
+      {props.starred ? t("chat.unstar") : t("chat.star")}
     </AppContextMenuItem>
   );
 }

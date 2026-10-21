@@ -5,6 +5,7 @@ import { AccountEmail } from "./components/account-email";
 import { AccountSkeleton } from "./components/account-skeleton";
 import { ChangePasswordForm } from "./components/change-password-form";
 import { DeleteAccountSection } from "./components/delete-account-section";
+import { LanguagePane } from "./components/language-pane";
 import { RangeInput } from "@/components/ui/range-input";
 import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import {
@@ -13,6 +14,7 @@ import {
   CodeFontIcon,
   FontIcon,
   InfoIcon,
+  LanguageIcon,
   LeaveIcon,
   ServerIcon,
   SettingsIcon,
@@ -25,6 +27,7 @@ import { Button } from "@/components/ui/button";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
 import { CONTROL_HOVER_LIFT } from "@/components/common/control-ink-border";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 import { useAppearance } from "@/features/appearance/use-appearance";
 import {
   SIDEBAR_STYLES,
@@ -55,8 +58,8 @@ import {
   type ThemeId,
 } from "@/features/appearance/types";
 import {
-  CODE_FONT_PRESETS,
-  PROSE_FONT_PRESETS,
+  codeFontPresets,
+  proseFontPresets,
   type FontPreset,
 } from "@/features/appearance/font-presets";
 import {
@@ -146,7 +149,7 @@ export function SettingsShell(): JSX.Element {
 
   const content = (
     <PaneShell>
-      <PaneHeader icon={SECTION_CHROME[section].icon} title={SECTION_CHROME[section].label} />
+      <PaneHeader icon={sectionChrome()[section].icon} title={sectionChrome()[section].label} />
 
       <div className="flex min-h-0 min-w-0 flex-1 justify-center">
         <div className="flex min-h-0 w-full min-w-0 max-w-196 flex-col">
@@ -161,6 +164,8 @@ export function SettingsShell(): JSX.Element {
             />
           ) : section === "account" ? (
             <AccountPane />
+          ) : section === "language" ? (
+            <LanguagePane />
           ) : section === "about" ? (
             <AboutPane />
           ) : (
@@ -183,7 +188,7 @@ export function SettingsShell(): JSX.Element {
   return (
     <Sidebar
       name="settings"
-      label="Settings sections"
+      label={t("settings.sectionsLabel")}
       width="var(--sidebar-width)"
       sidebar={<SettingsRailNav section={section} onSelect={setSection} />}
     >
@@ -192,12 +197,22 @@ export function SettingsShell(): JSX.Element {
   );
 }
 
-const SECTION_CHROME: Record<SettingsSection, { label: string; icon: ReactNode }> = {
-  account: { label: "Account", icon: <UserIcon className="size-3.5" /> },
-  appearance: { label: "Appearance", icon: <AppearanceIcon className="size-3.5" /> },
-  connection: { label: "Connection", icon: <ServerIcon className="size-3.5" /> },
-  about: { label: "About", icon: <InfoIcon className="size-3.5" /> },
-};
+const sectionChrome = (): Record<SettingsSection, { label: string; icon: ReactNode }> => ({
+  account: { label: t("settings.sections.account"), icon: <UserIcon className="size-3.5" /> },
+  language: {
+    label: t("settings.sections.language"),
+    icon: <LanguageIcon className="size-3.5" />,
+  },
+  appearance: {
+    label: t("settings.sections.appearance"),
+    icon: <AppearanceIcon className="size-3.5" />,
+  },
+  connection: {
+    label: t("settings.sections.connection"),
+    icon: <ServerIcon className="size-3.5" />,
+  },
+  about: { label: t("settings.sections.about"), icon: <InfoIcon className="size-3.5" /> },
+});
 
 function SettingsRailNav({
   section,
@@ -211,7 +226,7 @@ function SettingsRailNav({
   onSelect: (next: SettingsSection) => void;
 }): JSX.Element {
   const rows = SETTINGS_SECTIONS.map((id) => {
-    const { label, icon } = SECTION_CHROME[id];
+    const { label, icon } = sectionChrome()[id];
     const selected = id === section;
 
     return (
@@ -232,7 +247,7 @@ function SettingsRailNav({
         <ul className="space-y-0.5">{rows}</ul>
       ) : (
         <SidebarSection
-          label="SETTINGS"
+          label={t("settings.title")}
           icon={<SettingsIcon className="size-3.5" />}
           collapsible
           defaultExpanded
@@ -273,7 +288,7 @@ function AppearancePane({
           <SettingsSection
             id="settings-appearance"
             icon={<AppearanceIcon className="size-4" />}
-            title="Appearance"
+            title={t("settings.sections.appearance")}
           >
             <div className="grid min-w-0 grid-cols-1 gap-4">
               <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
@@ -316,7 +331,7 @@ function AppearancePane({
                               background: meta.accent,
                               color: meta.bg,
                             }}
-                            aria-label="Current theme"
+                            aria-label={t("settings.appearance.currentTheme")}
                           >
                             <CheckIcon className="size-3" />
                           </span>
@@ -334,7 +349,7 @@ function AppearancePane({
           <SettingsSection
             id="settings-markdown-text"
             icon={<FontIcon className="size-4" />}
-            title="Markdown Text"
+            title={t("settings.appearance.markdownText")}
           >
             <div className="grid min-w-0 grid-cols-1 gap-4">
               <SharedFontSizeControl
@@ -343,21 +358,21 @@ function AppearancePane({
                 onReset={() => resetMarkdownFontSize()}
               />
               <MarkdownFontControl
-                title="Prose"
+                title={t("settings.appearance.prose")}
                 icon={<FontIcon className="size-4" />}
                 fontFamily={appearance.prose?.fontFamily}
                 fontSize={appearance.fontSize}
-                presets={PROSE_FONT_PRESETS}
-                sample="正文预览 / Markdown body text"
+                presets={proseFontPresets()}
+                sample={t("settings.appearance.proseSample")}
                 onFontChange={(value) => setMarkdownFont("prose", value || undefined)}
                 onReset={() => resetMarkdownText("prose")}
               />
               <MarkdownFontControl
-                title="Code"
+                title={t("settings.appearance.code")}
                 icon={<CodeFontIcon className="size-4" />}
                 fontFamily={appearance.code?.fontFamily}
                 fontSize={appearance.fontSize}
-                presets={CODE_FONT_PRESETS}
+                presets={codeFontPresets()}
                 sample="const size = 12"
                 onFontChange={(value) => setMarkdownFont("code", value || undefined)}
                 onReset={() => resetMarkdownText("code")}
@@ -371,18 +386,24 @@ function AppearancePane({
   );
 }
 
-const SIDEBAR_STYLE_META: Record<SidebarStyle, string> = {
-  tree: "Project groups",
-  recent: "Chat list",
-};
+const sidebarStyleMeta = (): Record<SidebarStyle, string> => ({
+  tree: t("settings.appearance.sidebar.tree"),
+  recent: t("settings.appearance.sidebar.recent"),
+});
 
 function SidebarStyleControl(): JSX.Element {
   const style = useSidebarStyle();
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-3 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
-      <h3 className="text-sm font-semibold text-text-primary">Sidebar</h3>
-      <div role="radiogroup" aria-label="Sidebar" className="grid grid-cols-2 gap-3">
+      <h3 className="text-sm font-semibold text-text-primary">
+        {t("settings.appearance.sidebar.title")}
+      </h3>
+      <div
+        role="radiogroup"
+        aria-label={t("settings.appearance.sidebar.title")}
+        className="grid grid-cols-2 gap-3"
+      >
         {SIDEBAR_STYLES.map((id) => {
           const selected = id === style;
 
@@ -426,7 +447,7 @@ function SidebarStyleControl(): JSX.Element {
                       </div>
                     ))}
               </div>
-              <span>{SIDEBAR_STYLE_META[id]}</span>
+              <span>{sidebarStyleMeta()[id]}</span>
             </button>
           );
         })}
@@ -435,18 +456,24 @@ function SidebarStyleControl(): JSX.Element {
   );
 }
 
-const MESSAGE_LAYOUT_META: Record<MessageLayoutMode, string> = {
-  "all-left": "All left",
-  "user-right": "Mine right",
-};
+const messageLayoutMeta = (): Record<MessageLayoutMode, string> => ({
+  "all-left": t("settings.appearance.alignment.allLeft"),
+  "user-right": t("settings.appearance.alignment.mineRight"),
+});
 
 function MessageAlignmentControl(): JSX.Element {
   const mode = useMessageLayoutMode();
 
   return (
     <div className="grid min-w-0 grid-cols-1 gap-3 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
-      <h3 className="text-sm font-semibold text-text-primary">Message alignment</h3>
-      <div role="radiogroup" aria-label="Message alignment" className="grid grid-cols-2 gap-3">
+      <h3 className="text-sm font-semibold text-text-primary">
+        {t("settings.appearance.alignment.title")}
+      </h3>
+      <div
+        role="radiogroup"
+        aria-label={t("settings.appearance.alignment.title")}
+        className="grid grid-cols-2 gap-3"
+      >
         {MESSAGE_LAYOUT_MODES.map((id) => {
           const selected = id === mode;
 
@@ -456,7 +483,7 @@ function MessageAlignmentControl(): JSX.Element {
               type="button"
               role="radio"
               aria-checked={selected}
-              aria-label={MESSAGE_LAYOUT_META[id]}
+              aria-label={messageLayoutMeta()[id]}
               onClick={() => setMessageLayoutMode(id)}
               className={cn(
                 "flex min-w-0 flex-col gap-3 rounded-(--control-radius) border-(length:--control-border-width) p-3 text-xs font-medium transition-colors focus-outline",
@@ -520,14 +547,17 @@ function AccountPane(): JSX.Element {
   if (!dto) {
     return (
       <section className="flex min-w-0 flex-1 items-center justify-center py-10 text-xs text-text-muted">
-        Could not load your account. Please retry from the main app.
+        {t("settings.account.loadFailed")}
       </section>
     );
   }
 
   return (
     <section className="flex min-w-0 flex-1 flex-col gap-5 px-5 py-5">
-      <SettingsHeading icon={<UserIcon className="size-4" />} title="Account" />
+      <SettingsHeading
+        icon={<UserIcon className="size-4" />}
+        title={t("settings.sections.account")}
+      />
 
       <div className="flex max-w-2xl flex-col gap-6">
         <ViewerProfileEditor user={dto} />
@@ -537,9 +567,11 @@ function AccountPane(): JSX.Element {
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between gap-3">
             <div className="min-w-0">
-              <p className="text-xs font-medium text-text-secondary">Log out</p>
+              <p className="text-xs font-medium text-text-secondary">
+                {t("settings.account.logOut")}
+              </p>
               <p className="text-(length:--text-meta) text-text-muted">
-                Ends the current sign-in on this computer.
+                {t("settings.account.logOutDetail")}
               </p>
             </div>
             <Button
@@ -553,7 +585,7 @@ function AccountPane(): JSX.Element {
               ) : (
                 <LeaveIcon className="size-3.5" />
               )}
-              Log out
+              {t("settings.account.logOut")}
             </Button>
           </div>
           {error ? (
@@ -597,10 +629,13 @@ function SharedFontSizeControl({
     <div className="grid min-w-0 grid-cols-1 gap-2 rounded-(--card-radius) border border-border-subtle bg-bg-floating p-3">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-text-primary">Font size</h3>
+          <h3 className="text-sm font-semibold text-text-primary">
+            {t("settings.appearance.fontSize")}
+          </h3>
           <p className="truncate text-xs text-text-muted">
-            Shared by prose and code
-            {isOverride ? "" : " theme default"}
+            {isOverride
+              ? t("settings.appearance.fontSizeShared")
+              : t("settings.appearance.fontSizeDefault")}
           </p>
         </div>
         <div className="flex shrink-0 items-center gap-3">
@@ -621,7 +656,7 @@ function SharedFontSizeControl({
             className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-elevated px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
           >
             <UndoIcon className="size-3.5" />
-            Reset
+            {t("settings.appearance.reset")}
           </button>
         </div>
       </div>
@@ -637,7 +672,7 @@ function SharedFontSizeControl({
           max={FONT_SIZE_MAX}
           step="any"
           value={thumbValue}
-          aria-label="Markdown font size"
+          aria-label={t("settings.appearance.fontSizeLabel")}
           onChange={(e) => {
             const raw = Number(e.target.value);
             setDragRaw(raw);
@@ -738,7 +773,9 @@ function MarkdownFontControl({
           </span>
           <div className="min-w-0">
             <h3 className="text-sm font-semibold text-text-primary">{title}</h3>
-            <p className="truncate text-xs text-text-muted">{fontValue || "Theme default font"}</p>
+            <p className="truncate text-xs text-text-muted">
+              {fontValue || t("settings.appearance.themeDefaultFont")}
+            </p>
           </div>
         </div>
         <button
@@ -748,18 +785,20 @@ function MarkdownFontControl({
           className="inline-flex shrink-0 items-center gap-1.5 rounded-(--control-radius) border border-border-subtle bg-bg-elevated px-2 py-1 text-xs font-medium text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary focus-outline disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-border-subtle disabled:hover:text-text-secondary"
         >
           <UndoIcon className="size-3.5" />
-          Reset
+          {t("settings.appearance.reset")}
         </button>
       </div>
 
       <div className="grid min-w-0 grid-cols-1 gap-2">
-        <Label htmlFor={`markdown-${title.toLowerCase()}-font`}>Font family</Label>
+        <Label htmlFor={`markdown-${title.toLowerCase()}-font`}>
+          {t("settings.appearance.fontFamily")}
+        </Label>
         <Input
           className="min-w-0"
           id={`markdown-${title.toLowerCase()}-font`}
           value={fontValue}
           onChange={(e) => onFontChange(e.target.value)}
-          placeholder="Theme default"
+          placeholder={t("settings.appearance.themeDefault")}
           spellCheck={false}
         />
         <div className="flex flex-wrap gap-1.5">

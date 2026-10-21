@@ -7,13 +7,14 @@ import {
 } from "./profile-summary-sections";
 import { ClockIcon, ComputerIcon, ProfileCardIcon } from "@/icons";
 import { AVATAR_PX } from "@/components/avatar-scale";
+import { t } from "@/lib/i18n";
 
 export function ProfileSkeleton({ agent = false }: { agent?: boolean }): JSX.Element {
   const { profileRef, compactHero } = useProfileHeroSize();
   const avatarSize = compactHero ? AVATAR_PX.profileCompact : AVATAR_PX.profile;
   return (
     <Region
-      label={agent ? "Loading agent" : "Loading profile"}
+      label={agent ? t("profile.loadingAgent") : t("profile.loadingProfile")}
       className={agent ? "p-3" : "human-profile-content"}
     >
       <div ref={profileRef} data-profile-layout className="mx-auto flex flex-col gap-6">
@@ -33,18 +34,21 @@ export function ProfileSkeleton({ agent = false }: { agent?: boolean }): JSX.Ele
           </ProfileFact>
           {agent ? (
             <>
-              <ProfileFact icon={<ComputerIcon className="size-3.5" />} label="Computer">
+              <ProfileFact
+                icon={<ComputerIcon className="size-3.5" />}
+                label={t("profile.computer")}
+              >
                 <span className="inline-block h-2.5 w-24 max-w-full rounded bg-bg-elevated" />
               </ProfileFact>
               <ProfileFact
                 icon={<span className="size-3.5 rounded bg-bg-elevated" />}
-                label="Session"
+                label={t("profile.session")}
               >
                 <span className="inline-block h-2.5 w-28 max-w-full rounded bg-bg-elevated" />
               </ProfileFact>
             </>
           ) : null}
-          <ProfileFact icon={<ClockIcon className="size-3.5" />} label="Created">
+          <ProfileFact icon={<ClockIcon className="size-3.5" />} label={t("profile.created")}>
             <span className="inline-block h-2.5 w-16 max-w-full rounded bg-bg-elevated" />
           </ProfileFact>
         </ProfileFactBand>

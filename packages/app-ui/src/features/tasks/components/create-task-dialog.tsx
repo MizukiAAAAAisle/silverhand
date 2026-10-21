@@ -14,6 +14,7 @@ import { CreateTaskChannelPicker } from "@/features/tasks/components/create-task
 import { createTaskErrorMessage } from "@/features/tasks/model/create-task-error";
 import { useCreateTask } from "@/features/tasks/hooks/hooks";
 import type { ChannelOption } from "@/features/tasks/components/task-filter-bar";
+import { t } from "@/lib/i18n";
 
 /**
  * The values the create form yields. The owner turns these into the create
@@ -149,7 +150,7 @@ export function CreateTaskDialog({
       // member channels, but the target may be closed (server rejects with a
       // typed `conversation_closed`), and the actor must be able to retarget
       // without retyping. Do not "simplify" this to close-on-catch.
-      setError(e instanceof Error ? e.message : "The task could not be created.");
+      setError(e instanceof Error ? e.message : t("tasks.theTaskCouldNot"));
       setSubmitting(false);
       return;
     }
@@ -169,7 +170,7 @@ export function CreateTaskDialog({
     >
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>New task</DialogTitle>
+          <DialogTitle>{t("tasks.newTask")}</DialogTitle>
         </DialogHeader>
 
         <form
@@ -181,7 +182,7 @@ export function CreateTaskDialog({
         >
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="create-task-title" required>
-              Title
+              {t("tasks.title")}
             </Label>
             <Input
               id="create-task-title"
@@ -194,7 +195,7 @@ export function CreateTaskDialog({
 
           {locked ? null : (
             <div className="flex flex-col gap-1.5">
-              <Label required>Channel</Label>
+              <Label required>{t("tasks.channel")}</Label>
               <CreateTaskChannelPicker
                 channelOptions={target.channelOptions}
                 value={channelId}
@@ -204,7 +205,7 @@ export function CreateTaskDialog({
           )}
 
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="create-task-body">Description</Label>
+            <Label htmlFor="create-task-body">{t("tasks.description")}</Label>
             <Textarea
               id="create-task-body"
               // Two more visible rows than the shared 80px floor (~3 lines) —
@@ -227,7 +228,7 @@ export function CreateTaskDialog({
               onClick={() => onOpenChange(false)}
               disabled={submitting}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="submit"
@@ -236,7 +237,7 @@ export function CreateTaskDialog({
               disabled={!canSubmit || submitting}
             >
               {submitting ? <SpinnerIcon className="size-4 animate-spin" /> : null}
-              Create task
+              {t("tasks.createTask")}
             </Button>
           </DialogFooter>
         </form>

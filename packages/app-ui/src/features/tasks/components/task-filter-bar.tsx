@@ -47,6 +47,7 @@ import {
   type TaskBoardContainerAxis,
   type TaskFilters,
 } from "@/features/tasks/model/task-filters";
+import { t, useLocale } from "@/lib/i18n";
 
 /** Rows for a population nobody has been told about yet — never rendered as an
  *  answer; the menu's footer says which non-answer it is. */
@@ -289,8 +290,8 @@ export function TaskFilterBar({
       ) : null}
       <PersonFilterControl
         icon={<UserIcon className="size-3.5" />}
-        label="Assignee"
-        anyLabel="All"
+        label={t("tasks.assignee")}
+        anyLabel={t("tasks.all")}
         population={mapBoardAuthority(people, (f) => f.assignees)}
         allowUnassigned={people.known && people.value.hasUnassigned}
         value={filters.assignee}
@@ -299,8 +300,8 @@ export function TaskFilterBar({
       />
       <PersonFilterControl
         icon={<CreatedByIcon className="size-3.5" />}
-        label="From"
-        anyLabel="All"
+        label={t("tasks.from")}
+        anyLabel={t("tasks.all")}
         population={mapBoardAuthority(people, (f) => f.creators)}
         value={filters.creator}
         onChange={(creator) => onChange({ ...filters, creator })}
@@ -310,8 +311,8 @@ export function TaskFilterBar({
         <button
           type="button"
           onClick={() => onChange(baselineFilters)}
-          aria-label="Reset filters"
-          title="Reset filters"
+          aria-label={t("tasks.resetFilters")}
+          title={t("tasks.resetFilters")}
           className={cn(
             // Reset affordance: icon-only, no label. Idle is a bare muted
             // glyph; hover paints a square box behind it — radius follows
@@ -549,15 +550,16 @@ function ChannelFilter({
   // "Workspaces" header over channel rows was both redundant and semantically
   // wrong (shiki #task:1387 review — the label named workspaces but the rows are
   // channels). The ALL row stays at the top.
+  const locale = useLocale();
   const sections = useMemo(
     () =>
       [
-        { key: "workspace" as const, label: "Projects" },
-        { key: "agent_space" as const, label: "Agent Spaces" },
+        { key: "workspace" as const, label: t("tasks.projects") },
+        { key: "agent_space" as const, label: t("tasks.agentSpaces") },
       ]
         .map((s) => ({ ...s, items: filtered.filter((o) => o.group === s.key) }))
         .filter((s) => s.items.length > 0),
-    [filtered],
+    [locale, filtered],
   );
 
   // Flat, in-render-order option list for roving keyboard nav (#task:1257):
@@ -639,9 +641,9 @@ function ChannelFilter({
           // there.
           icon={<ChannelIcon variant="sticker" density="md" className="task-filter-channel-hash" />}
           active={value !== null}
-          aria-label="Channel"
+          aria-label={t("tasks.channel")}
         >
-          {`Channel:${selected?.label ?? allChannelsLabel}`}
+          {t("tasks.channelFilter", { value: selected?.label ?? allChannelsLabel })}
         </FilterTrigger>
       </Popover.Trigger>
       <Popover.Portal>
@@ -666,7 +668,7 @@ function ChannelFilter({
               aria-expanded={open}
               aria-controls={listId}
               aria-activedescendant={optionId(roving.activeIndex)}
-              placeholder="Search channels…"
+              placeholder={t("tasks.searchChannels")}
               className="w-full bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
             />
           </div>
@@ -692,7 +694,7 @@ function ChannelFilter({
             {flatOptions.map(renderOption)}
             {filtered.length === 0 ? (
               <p className="px-2 py-3 text-center text-(length:--text-meta) italic text-text-muted">
-                No matches
+                {t("tasks.noMatches")}
               </p>
             ) : null}
           </div>
@@ -812,9 +814,9 @@ function BoardScopeFilter({
           // signals the board is narrowed, same vocabulary as the sibling
           // triggers. All is the neutral default.
           active={containerValue !== null}
-          aria-label="Board scope"
+          aria-label={t("tasks.boardScope")}
         >
-          {`Project:${selectedWs?.label ?? "All"}`}
+          {t("tasks.projectFilter", { value: selectedWs?.label ?? t("tasks.all") })}
         </FilterTrigger>
       </Popover.Trigger>
       <FilterPanel
@@ -834,7 +836,7 @@ function BoardScopeFilter({
             setOpen(false);
           }}
         >
-          All
+          {t("tasks.all")}
         </OptionRow>
         {groups.map((group) => (
           <div key={group.key}>
@@ -915,7 +917,7 @@ function PersonFilterControl({
     value.kind === "any"
       ? anyLabel
       : value.kind === "unassigned"
-        ? "No assignee"
+        ? t("tasks.noAssignee")
         : // The filter shows the assignee's/creator's display name (the
           // denormalized `name` on the dto — NOT a handle), so it renders
           // plain, no `@`, matching every other assignee/creator DISPLAY
@@ -923,7 +925,7 @@ function PersonFilterControl({
           // show a real handle (mentions, composer, the assignee picker).
           selectedName
           ? selectedName
-          : "Selected";
+          : t("tasks.selected");
 
   const choose = (next: PersonFilter): void => {
     onChange(next);
@@ -981,7 +983,7 @@ function PersonFilterControl({
             onHover={() => roving.setActiveIndex(unassignedIndex)}
             onSelect={() => choose({ kind: "unassigned" })}
           >
-            No assignee
+            {t("tasks.noAssignee")}
           </OptionRow>
         ) : null}
         {options.map((o, i) => {
@@ -1015,10 +1017,10 @@ function PersonFilterControl({
         {state === "ready" ? null : (
           <p className="px-2 py-3 text-center text-(length:--text-meta) italic text-text-muted">
             {state === "loading"
-              ? "Loading…"
+              ? t("tasks.loading")
               : state === "failed"
-                ? "Couldn’t load people"
-                : "None yet"}
+                ? t("tasks.couldntLoadPeople")
+                : t("tasks.noneYet")}
           </p>
         )}
       </FilterPanel>

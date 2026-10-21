@@ -3,6 +3,7 @@ import type { JSX, ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { CheckIcon, CloseIcon } from "@/icons";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 const EASE = [0.32, 0.72, 0, 1] as const;
 const PANEL_WIDTH = 84;
@@ -41,7 +42,7 @@ export function DeleteButton({
   onCancel,
   variant = "destructive",
   disabled = false,
-  confirmLabel = "Confirm",
+  confirmLabel = t("ui.confirm"),
   className,
 }: DeleteButtonProps): JSX.Element {
   const reduced = useReducedMotion() ?? false;
@@ -150,7 +151,7 @@ export function DeleteButton({
           >
             {[
               { label: confirmLabel, confirmed: true, icon: CheckIcon },
-              { label: "Cancel", confirmed: false, icon: CloseIcon },
+              { label: t("common.cancel"), confirmed: false, icon: CloseIcon },
             ].map(({ label, confirmed, icon: Icon }) => (
               <motion.div
                 key={label}

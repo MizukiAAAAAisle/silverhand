@@ -74,13 +74,13 @@ export function HostDiagnosticsAction({ host }: { host: HostDto }): JSX.Element 
     };
     await navigator.clipboard.writeText(buildHostDiagnosticsText(input));
     setCopied(true);
-    toast.success(computerCopy.copied);
+    toast.success(computerCopy().copied);
   };
 
   return (
     <Button variant="neutral" className="gap-2 w-full" onClick={() => void handleCopy()}>
       {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-      {copied ? computerCopy.copied : computerCopy.copyDiagnostics}
+      {copied ? computerCopy().copied : computerCopy().copyDiagnostics}
     </Button>
   );
 }

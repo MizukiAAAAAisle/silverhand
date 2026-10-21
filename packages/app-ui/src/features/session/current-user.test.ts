@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CURRENT_USER_DISPLAY_NAME,
-  UNKNOWN_USER_DISPLAY_NAME,
+  unknownUserDisplayName,
   clearCurrentUser,
   formatUserDisplayName,
   getCurrentUserId,
@@ -42,8 +42,8 @@ describe("current-user", () => {
 
   describe("formatUserDisplayName", () => {
     it("returns the Unknown sentinel for null/undefined", () => {
-      expect(formatUserDisplayName(null)).toBe(UNKNOWN_USER_DISPLAY_NAME);
-      expect(formatUserDisplayName(undefined)).toBe(UNKNOWN_USER_DISPLAY_NAME);
+      expect(formatUserDisplayName(null)).toBe(unknownUserDisplayName());
+      expect(formatUserDisplayName(undefined)).toBe(unknownUserDisplayName());
     });
 
     it("returns the viewer display name for the viewer id", () => {
