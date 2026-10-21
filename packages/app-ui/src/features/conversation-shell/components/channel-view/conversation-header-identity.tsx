@@ -168,7 +168,7 @@ function CounterpartIdentity({
           }}
           aria-label={t("conversationShell.openActivity", { name: presentation.label })}
           title={t("conversationShell.openActivity", { name: presentation.label })}
-          className="focus-outline inline-flex shrink-0 rounded-none transition-[filter] duration-100 hover:brightness-90"
+          className="focus-outline inline-flex shrink-0 rounded-(--avatar-radius) transition-[filter] duration-100 hover:brightness-90"
         >
           {face}
         </button>
@@ -178,7 +178,7 @@ function CounterpartIdentity({
           onClick={() => openHumanPanel(counterpart.id)}
           aria-label={t("conversationShell.openProfile", { name: presentation.label })}
           title={t("conversationShell.openProfile", { name: presentation.label })}
-          className="focus-outline inline-flex shrink-0 rounded-none transition-[filter] duration-100 hover:brightness-90"
+          className="focus-outline inline-flex shrink-0 rounded-(--avatar-radius) transition-[filter] duration-100 hover:brightness-90"
         >
           {face}
         </button>

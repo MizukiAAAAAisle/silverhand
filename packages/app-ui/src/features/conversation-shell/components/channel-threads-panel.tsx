@@ -363,7 +363,7 @@ function ThreadRow({
                 {overflow > 0 ? (
                   <span
                     data-avatar-ground
-                    className="flex size-4.5 shrink-0 items-center justify-center rounded-none text-(length:--text-badge) font-medium text-text-muted"
+                    className="flex size-4.5 shrink-0 items-center justify-center rounded-(--avatar-radius) text-(length:--text-badge) font-medium text-text-muted"
                   >
                     +{overflow}
                   </span>

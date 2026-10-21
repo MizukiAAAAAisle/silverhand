@@ -145,7 +145,7 @@ function NeutralAgentAvatar({
     <span
       data-avatar-ground
       className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle text-text-muted",
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-(--avatar-radius) align-middle text-text-muted",
         className,
       )}
       style={{ width: size, height: size }}

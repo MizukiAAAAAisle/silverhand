@@ -51,7 +51,7 @@ export function UserAvatar({
       <span
         data-avatar-ground
         className={cn(
-          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle",
+          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-(--avatar-radius) align-middle",
           className,
         )}
         style={{ width: size, height: size }}
@@ -75,7 +75,7 @@ export function UserAvatar({
     <span
       data-avatar-ground
       className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none text-text-muted align-middle",
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-(--avatar-radius) text-text-muted align-middle",
         className,
       )}
       style={{ width: size, height: size }}

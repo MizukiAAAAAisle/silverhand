@@ -38,7 +38,7 @@ export function MessageRowsSkeleton({
               <div className="mt-0.5 shrink-0" style={{ width: AVATAR_PX.lg }}>
                 {!row.continuation ? (
                   <div style={{ height: AVATAR_PX.lg }}>
-                    <SkeletonBlock className="size-full rounded-none" />
+                    <SkeletonBlock className="size-full rounded-(--avatar-radius)" />
                   </div>
                 ) : null}
               </div>

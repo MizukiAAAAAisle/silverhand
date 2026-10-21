@@ -20,7 +20,7 @@ export function ProfileSkeleton({ agent = false }: { agent?: boolean }): JSX.Ele
       <div ref={profileRef} data-profile-layout className="mx-auto flex flex-col gap-6">
         <div className="agent-profile-hero" data-compact={compactHero}>
           <div style={{ width: avatarSize, height: avatarSize }} className="shrink-0">
-            <div className="size-full rounded-none bg-bg-elevated" />
+            <div className="size-full rounded-(--avatar-radius) bg-bg-elevated" />
           </div>
           <div className="agent-profile-hero-fields min-w-0 flex-1">
             <Block className="h-5 w-2/5" />

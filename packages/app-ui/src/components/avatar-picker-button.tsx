@@ -78,7 +78,7 @@ export function AvatarPickerButton({
       disabled={disabled}
       aria-label={ariaLabel}
       className={cn(
-        "group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none focus-outline",
+        "group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-(--avatar-radius) focus-outline",
         disabled ? "pointer-events-none opacity-50" : "cursor-pointer",
         className,
       )}

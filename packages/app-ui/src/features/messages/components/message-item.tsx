@@ -1003,7 +1003,7 @@ function Avatar({
             event.preventDefault();
             onNavigateAgent(liveAgent.id);
           }}
-          className="mt-0.5 rounded-none transition-[filter] duration-100 hover:brightness-90 focus-outline"
+          className="mt-0.5 rounded-(--avatar-radius) transition-[filter] duration-100 hover:brightness-90 focus-outline"
         >
           {avatar}
         </button>
@@ -1025,7 +1025,7 @@ function Avatar({
             event.preventDefault();
             onNavigateHuman(liveHuman.id);
           }}
-          className="mt-0.5 rounded-none transition-[filter] duration-100 hover:brightness-90 focus-outline"
+          className="mt-0.5 rounded-(--avatar-radius) transition-[filter] duration-100 hover:brightness-90 focus-outline"
         >
           {avatar}
         </button>

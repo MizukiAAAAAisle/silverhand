@@ -135,7 +135,7 @@ export function HumanInfoPopover({
             {avatarObjectUrl ? (
               <span
                 data-avatar-ground
-                className="inline-block size-9 shrink-0 overflow-hidden rounded-none"
+                className="inline-block size-9 shrink-0 overflow-hidden rounded-(--avatar-radius)"
               >
                 {/* eslint-disable-next-line jsx-a11y/img-redundant-alt */}
                 <img src={avatarObjectUrl} alt="" className="size-full object-cover" />
@@ -147,7 +147,7 @@ export function HumanInfoPopover({
               // images next to it.
               <span
                 data-avatar-ground
-                className="inline-flex size-9 shrink-0 items-center justify-center rounded-none text-text-muted"
+                className="inline-flex size-9 shrink-0 items-center justify-center rounded-(--avatar-radius) text-text-muted"
                 aria-hidden
               >
                 <UserIcon className="size-5" />

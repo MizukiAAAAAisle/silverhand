@@ -102,6 +102,12 @@
   outline-offset: 2px;
 }
 
+/* Avatars take the theme's control corner, capped at a quarter of their own
+   side so a 14px chip stays a rounded square instead of turning into a circle. */
+:root {
+  --avatar-radius: min(var(--control-radius), 25%);
+}
+
 [data-avatar-ground] {
   background-color: var(--bg-avatar-ground);
 }
