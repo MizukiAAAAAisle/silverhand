@@ -467,3 +467,35 @@
 [data-search-active] .markdown-body .search-hit {
   background-color: var(--search-hit-bg-active, #ffde5c);
 }
+
+/* The own bubble is a saturated fill, so everything written inside it is
+   re-inked white: the theme's ink, accent and reference colours would vanish
+   into the blue or fight it. Code blocks keep their own island ground. */
+[data-own-bubble] {
+  --text-primary: #fff;
+  --text-secondary: rgb(255 255 255 / 0.85);
+  --text-muted: rgb(255 255 255 / 0.7);
+  --accent: #fff;
+  --accent-hover: rgb(255 255 255 / 0.85);
+  --accent-soft: rgb(255 255 255 / 0.2);
+  --task-ref-color: #fff;
+  --task-ref-marker: transparent;
+  --task-ref-marker-hover: transparent;
+  --text-inline-code: #fff;
+  --bg-inline-code: rgb(255 255 255 / 0.2);
+  --border-inline-code: none;
+  --border: rgb(255 255 255 / 0.5);
+  --border-subtle: rgb(255 255 255 / 0.3);
+  --bg-elevated: rgb(255 255 255 / 0.12);
+  color: #fff;
+}
+[data-own-bubble] .markdown-body a,
+[data-own-bubble] [data-mention-kind],
+[data-own-bubble] [data-task-ref] > span {
+  text-decoration: underline;
+  text-decoration-color: rgb(255 255 255 / 0.5);
+  text-underline-offset: 2px;
+}
+[data-own-bubble] ::selection {
+  background: rgb(255 255 255 / 0.35);
+}

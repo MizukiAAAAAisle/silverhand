@@ -160,6 +160,7 @@ export function MessageRowContent({
             padded blob above the attachments. */}
         {body ? (
           <div
+            data-own-bubble={alignRight || undefined}
             className={
               alignRight
                 ? "ml-auto w-fit max-w-full rounded-(--message-bubble-radius) bg-(--bg-message-bubble) px-3 py-2"
