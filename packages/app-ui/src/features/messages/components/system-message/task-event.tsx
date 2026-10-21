@@ -59,10 +59,14 @@ function TaskEventBody({
   if (subtype === "task_status") {
     return (
       <>
-        <span className="font-medium text-text-primary">{actorLabel}</span>
-        <span className="text-text-muted">{t("messages.taskVerb.moved")}</span>
+        <span data-task-event-actor className="font-medium text-text-primary">
+          {actorLabel}
+        </span>
+        <span data-task-event-verb className="text-text-muted">
+          {t("messages.taskVerb.moved")}
+        </span>
         <TaskRef taskNumber={meta.task_number} />
-        <span className="text-text-muted" aria-hidden>
+        <span data-task-event-arrow className="text-text-muted" aria-hidden>
           →
         </span>
         <TaskStatusPill status={meta.task_status} />
@@ -89,8 +93,10 @@ function TaskEventBody({
     const assignee = meta.task_assignee;
     return (
       <>
-        <span className="font-medium text-text-primary">{actorLabel}</span>
-        <span className="text-text-muted">
+        <span data-task-event-actor className="font-medium text-text-primary">
+          {actorLabel}
+        </span>
+        <span data-task-event-verb className="text-text-muted">
           {subtype === "task_claim"
             ? t("messages.taskVerb.assigned")
             : t("messages.taskVerb.unassigned")}
@@ -136,8 +142,12 @@ function TaskEventBody({
           : t("messages.taskVerb.unclaimed");
   return (
     <>
-      <span className="font-medium text-text-primary">{actorLabel}</span>
-      <span className="text-text-muted">{verb}</span>
+      <span data-task-event-actor className="font-medium text-text-primary">
+        {actorLabel}
+      </span>
+      <span data-task-event-verb className="text-text-muted">
+        {verb}
+      </span>
       <TaskRef taskNumber={meta.task_number} />
       {filedRemotely ? (
         <span className="text-text-muted">{t("messages.fromAnotherConversation")}</span>

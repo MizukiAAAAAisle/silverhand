@@ -55,6 +55,10 @@ export const messages = {
   react: "React",
   thread2: "Thread",
   replyInThread: "Reply in thread",
+  activityRecords: {
+    one: "1 record",
+    other: "{count} records",
+  },
   deselectMessage: "Deselect message",
   selectMessage: "Select message",
   addReaction: "Add reaction",

@@ -1,8 +1,11 @@
 import dayjs from "dayjs";
+import { useState } from "react";
 import type { MessageDto, UserDto } from "@silverhand/shared";
 import { SystemMessage } from "./system-message";
 import type { ChannelReference } from "./channel-ref";
 import type { WorkspaceChannelReference } from "./conversation-ref";
+import { foldTaskRuns } from "../model/fold-task-runs";
+import { t } from "@/lib/i18n";
 
 /**
  * Activity cluster — renders a contiguous run of low-priority system
@@ -47,37 +50,66 @@ export interface SystemActivityClusterProps {
 
 export function SystemActivityCluster({
   messages,
-  conversationRefsById,
-  onOpenConversationRef,
-  channelsByName,
-  onOpenChannelRef,
-  humansByName,
+  ...rowProps
 }: SystemActivityClusterProps): JSX.Element {
   return (
     <div className="system-activity-cluster" data-system-activity-cluster={String(messages.length)}>
-      {messages.map((m) => {
-        const createdAt = dayjs(m.created_at);
-
-        return (
-          <div key={m.id} data-activity-row className="relative">
-            <time
-              data-activity-time
-              dateTime={createdAt.toISOString()}
-              title={createdAt.format("YYYY-MM-DD HH:mm:ss")}
-            >
-              {createdAt.format("HH:mm")}
-            </time>
-            <SystemMessage
-              message={m}
-              conversationRefsById={conversationRefsById}
-              onOpenConversationRef={onOpenConversationRef}
-              channelsByName={channelsByName}
-              onOpenChannelRef={onOpenChannelRef}
-              humansByName={humansByName}
-            />
-          </div>
-        );
-      })}
+      {foldTaskRuns(messages).map((fold) => (
+        <TaskEventFoldRow key={fold.key} events={fold.events} {...rowProps} />
+      ))}
     </div>
+  );
+}
+
+type RowProps = Omit<SystemActivityClusterProps, "messages">;
+
+/** One task's consecutive events as their latest line. Earlier events open under
+ *  it, with their times, from the count at the end of the line. */
+function TaskEventFoldRow({ events, ...rowProps }: RowProps & { events: MessageDto[] }) {
+  const [open, setOpen] = useState(false);
+  const latest = events[events.length - 1]!;
+  const folded = events.length > 1;
+
+  return (
+    <div data-activity-fold={folded ? (open ? "open" : "closed") : "single"}>
+      <div data-activity-row className="relative">
+        <ActivityTime at={latest.created_at} />
+        <SystemMessage message={latest} {...rowProps} />
+        {folded ? (
+          <button
+            type="button"
+            data-activity-fold-toggle
+            aria-expanded={open}
+            onClick={() => setOpen((value) => !value)}
+          >
+            {t("messages.activityRecords", { count: events.length })}
+          </button>
+        ) : null}
+      </div>
+      {folded && open ? (
+        <div data-activity-history>
+          {events.map((event) => (
+            <div key={event.id} data-activity-row className="relative">
+              <ActivityTime at={event.created_at} />
+              <SystemMessage message={event} {...rowProps} />
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function ActivityTime({ at }: { at: number }): JSX.Element {
+  const createdAt = dayjs(at);
+
+  return (
+    <time
+      data-activity-time
+      dateTime={createdAt.toISOString()}
+      title={createdAt.format("YYYY-MM-DD HH:mm:ss")}
+    >
+      {createdAt.format("HH:mm")}
+    </time>
   );
 }
