@@ -414,12 +414,17 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
     }
   }
 
-  /// The page scroller whose top edge this extends.
+  /// The page scroller whose top edge this extends. The strip joins the bar's
+  /// edge effect only while it carries the Duo title, plain text that needs it;
+  /// the view tabs alone are glass capsules with their own ground.
   func observe(_ scroller: UIScrollView?) {
+    observed = scroller
     if #available(iOS 26.0, *) {
-      (edgeInteraction as? UIScrollEdgeElementContainerInteraction)?.scrollView = scroller
+      (edgeInteraction as? UIScrollEdgeElementContainerInteraction)?.scrollView =
+        showsTitle ? scroller : nil
     }
   }
+  private weak var observed: UIScrollView?
 
   override func layoutSubviews() {
     super.layoutSubviews()
@@ -450,6 +455,7 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
   ) {
     showsTitle = title != nil || titleButton != nil
     showsTabs = tabs != nil
+    observe(observed)
     if let title {
       let text = NSMutableAttributedString(
         string: title.text,
