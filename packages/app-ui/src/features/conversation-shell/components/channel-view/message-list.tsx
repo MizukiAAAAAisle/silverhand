@@ -58,7 +58,9 @@ const listComponents = {
     <>
       <div aria-hidden data-pane-chrome-spacer />
       {context?.leadingSlot ? (
-        <div className="mx-auto mb-1 max-w-300 px-4">{context.leadingSlot}</div>
+        <div className="mx-auto mb-1 max-w-300 px-(--message-list-gutter)">
+          {context.leadingSlot}
+        </div>
       ) : null}
     </>
   ),
@@ -851,7 +853,9 @@ export function MessageList({
             context={listContext}
             components={listComponents}
             itemContent={(_index, item) => (
-              <div className="mx-auto max-w-300 px-4 py-0.5">{renderItem(item)}</div>
+              <div className="mx-auto max-w-300 px-(--message-list-gutter) py-0.5">
+                {renderItem(item)}
+              </div>
             )}
             className="h-full min-w-0"
           />

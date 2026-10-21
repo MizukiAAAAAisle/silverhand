@@ -1048,7 +1048,7 @@ export function ThreadPanel({
             <div
               ref={scrollRef}
               onScroll={onScroll}
-              className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2"
+              className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-(--message-list-gutter) py-2"
             >
               {/* Load earlier replies (between the root and the tail window). */}
               {cluster.hasPreviousPage ? (
@@ -1078,13 +1078,13 @@ export function ThreadPanel({
                 2px poster ink is reserved for FRAME borders (things enclosed on
                 all sides + hard shadow); using it here read as a frame fragment
                 next to the header hairline (#task:1735 shiki feedback). Full-bleed
-                horizontally (`-mx-1` cancels the scroll container's `px-1`) so it
+                horizontally (its negative margin cancels the scroll container's gutter) so it
                 runs edge to edge. `shrink-0` keeps it a hairline in the flex
                 column even when the "No replies yet" empty state claims the
                 remaining height. Gated on the root so it reads as the root's own
                 bottom edge — present whether or not there are replies yet. */}
               {rootCtx.root ? (
-                <div className="-mx-1 my-2 shrink-0 border-t border-border-subtle" />
+                <div className="-mx-(--message-list-gutter) my-2 shrink-0 border-t border-border-subtle" />
               ) : null}
 
               {threadClusterShowsLoader({
