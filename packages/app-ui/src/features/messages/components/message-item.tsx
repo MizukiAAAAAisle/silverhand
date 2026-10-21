@@ -35,6 +35,7 @@ import { ThreadReplyPreview, visibleThreadReplyRows } from "./thread-reply-previ
 import { ReactionPicker } from "./reaction-picker";
 import { useToggleReaction } from "@/features/channels/reaction-hooks";
 import { useMessageLayoutMode } from "../hooks/use-message-layout-mode";
+import { useCoarsePointer } from "@/navigation/layout";
 import { MessageTaskTag } from "./message-task-tag";
 import { AttachmentList } from "./message-attachments";
 import { t } from "@/lib/i18n";
@@ -389,7 +390,13 @@ function ActorMessageItem({
         canMutate={canMutateLinkedTask}
       />
     ) : null;
-  const [hover, setHover] = useState(false);
+  const [pointerHover, setHover] = useState(false);
+  // WebKit on touch screens follows a scroll or tap with compatibility
+  // events typed "mouse" at the finger's last spot, so the event type cannot
+  // tell a finger from a mouse; a touch-first device gets no hover at all and
+  // reaches the same actions through the long-press menu.
+  const coarsePointer = useCoarsePointer();
+  const hover = pointerHover && !coarsePointer;
   // React-driven focus-within: tracking it as state and OR-ing into
   // the visibility class is more reliable than relying on Tailwind's
   // `focus-within:` utility, which generates a same-specificity rule
@@ -721,8 +728,6 @@ function ActorMessageItem({
       id={`msg-${message.id}`}
       data-message-row
       data-search-active={searchActive || undefined}
-      // Pointer events, not mouse events: a tap on touch synthesizes a
-      // mouseenter with no matching leave, which would pin the row framed.
       onPointerEnter={(event) => {
         if (event.pointerType === "mouse") {
           setHover(true);
