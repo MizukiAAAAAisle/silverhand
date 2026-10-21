@@ -842,8 +842,14 @@ function ActorMessageItem({
         // there stays as wide as its code. `badgeHeadsPreview` remains that
         // side's one exception: a root heading a reply cluster fills the cap so
         // every root in the cluster reads at one width.
+        //
+        // The own side also stops short of the other side's text edge: a row
+        // spends avatar + gap (2.75rem) on its leading side, so leaving that
+        // twice keeps an own bubble from starting left of where others' text
+        // starts. 85% still binds on wide panes; this binds on a phone.
         columnClassName={
-          "min-w-0 max-w-[85%]" + (!alignRight || badgeHeadsPreview ? " w-full" : "")
+          (alignRight ? "min-w-0 max-w-[min(85%,calc(100%-5.5rem))]" : "min-w-0 max-w-[85%]") +
+          (!alignRight || badgeHeadsPreview ? " w-full" : "")
         }
         /* A continuation row states neither author nor time in the content
            column: the group head already named the author, and this row's own
