@@ -10,11 +10,14 @@ import { useSyncExternalStore } from "react";
  *   new class or breakpoint changes this file alone.
  * - Input: `(pointer: coarse)`. Touch affordances (long-press menus, no
  *   autofocus that raises the keyboard) follow input, not width.
+ * - Hover: `(any-hover: hover)`. Some attached pointer can hover, which an
+ *   iPad with a trackpad has while its primary pointer stays coarse.
  */
 export type LayoutClass = "compact" | "regular";
 
 export const COMPACT_QUERY = "(max-width: 767px)";
 const COARSE_POINTER_QUERY = "(pointer: coarse)";
+const ANY_HOVER_QUERY = "(any-hover: hover)";
 
 function mediaStore(query: string) {
   return {
@@ -29,6 +32,7 @@ function mediaStore(query: string) {
 
 const compactMedia = mediaStore(COMPACT_QUERY);
 const coarseMedia = mediaStore(COARSE_POINTER_QUERY);
+const anyHoverMedia = mediaStore(ANY_HOVER_QUERY);
 
 export function readLayoutClass(): LayoutClass {
   return compactMedia.read() ? "compact" : "regular";
@@ -40,6 +44,11 @@ export function useCompactLayout(): boolean {
 
 export function useCoarsePointer(): boolean {
   return useSyncExternalStore(coarseMedia.subscribe, coarseMedia.read, () => false);
+}
+
+/** Hover-only features gate on this, then ignore touch-generated pointer events. */
+export function useHoverCapable(): boolean {
+  return useSyncExternalStore(anyHoverMedia.subscribe, anyHoverMedia.read, () => true);
 }
 
 /** Mirrors the width class onto `<html data-layout>` so portaled surfaces

@@ -4,7 +4,7 @@ import { NavigationLaunch } from "@/navigation/launch";
 import { NavigationProvider } from "@/navigation/provider";
 import { PageBarHost } from "@/navigation/page-bar";
 import { PageStack } from "@/navigation/page-stack";
-import { useCoarsePointer, useCompactLayout } from "@/navigation/layout";
+import { useCompactLayout, useHoverCapable } from "@/navigation/layout";
 import { getPlatform } from "@/platform";
 import { MobileHeader, MobileTabBar } from "@/components/layout/mobile-shell";
 import { useEffect, useState } from "react";
@@ -226,7 +226,7 @@ function RegisteredAppShell({
   darkFrame: boolean;
 }): JSX.Element {
   const compact = useCompactLayout();
-  const coarse = useCoarsePointer();
+  const hoverCapable = useHoverCapable();
   const signals = useApplicationSignals();
   const { navRailDots } = signals;
   const appUpdateState = useAppUpdateState();
@@ -262,7 +262,7 @@ function RegisteredAppShell({
     cssVar: "--sidebar-width",
   });
   const sidebarPeek = useSidebarPeek(
-    sidebarToggle && !workspaceSidebarVisible && !compact && !coarse,
+    sidebarToggle && !workspaceSidebarVisible && !compact && hoverCapable,
   );
   const searchNav: TitlebarSearchNav = {
     onJumpMessage: handleJumpToMessage,

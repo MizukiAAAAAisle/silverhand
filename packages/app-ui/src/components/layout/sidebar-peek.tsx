@@ -19,7 +19,8 @@ export interface SidebarPeek {
 }
 
 /** Hover peek of the hidden browse sidebar from the nav rail (regular layout,
- *  fine pointer). The peek floats over the page and never takes width. */
+ *  a hover-capable pointer attached; touch-generated hovers are ignored by the
+ *  callers). The peek floats over the page and never takes width. */
 export function useSidebarPeek(enabled: boolean): SidebarPeek {
   const [section, setSection] = useState<AppSection | null>(null);
   const [mountedSection, setMountedSection] = useState<AppSection | null>(null);
@@ -106,8 +107,8 @@ export function SidebarPeekLayer({
         className="sidebar-surface"
         data-state={open ? "open" : "closed"}
         style={{ width: "var(--sidebar-width)" }}
-        onPointerEnter={open ? peek.hold : undefined}
-        onPointerLeave={open ? peek.leave : undefined}
+        onPointerEnter={open ? (event) => event.pointerType !== "touch" && peek.hold() : undefined}
+        onPointerLeave={open ? (event) => event.pointerType !== "touch" && peek.leave() : undefined}
         {...(open ? {} : { inert: "" })}
         aria-hidden={open ? undefined : true}
       >

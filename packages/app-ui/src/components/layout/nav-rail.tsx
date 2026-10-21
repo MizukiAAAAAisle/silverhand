@@ -122,7 +122,11 @@ export function NavRail({
   return (
     <nav
       aria-label={t("ui.appSections")}
-      onPointerLeave={onHoverEnd}
+      onPointerLeave={(event) => {
+        if (event.pointerType !== "touch") {
+          onHoverEnd?.();
+        }
+      }}
       className="nav-rail flex h-full w-(--nav-rail-width) shrink-0 flex-col items-center gap-2"
     >
       <TooltipProvider>
@@ -137,7 +141,11 @@ export function NavRail({
                   aria-label={item.label}
                   aria-current={selected ? "page" : undefined}
                   onClick={() => onChange(item.id)}
-                  onPointerEnter={() => onHoverSection?.(item.id)}
+                  onPointerEnter={(event) => {
+                    if (event.pointerType !== "touch") {
+                      onHoverSection?.(item.id);
+                    }
+                  }}
                   className="nav-rail__item flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors"
                 >
                   {item.icon}
@@ -178,7 +186,11 @@ export function NavRail({
         aria-label={t("ui.settings")}
         aria-current={settingsSelected ? "page" : undefined}
         onClick={() => onChange("settings")}
-        onPointerEnter={() => onHoverSection?.("settings")}
+        onPointerEnter={(event) => {
+          if (event.pointerType !== "touch") {
+            onHoverSection?.("settings");
+          }
+        }}
         className={`nav-rail__item ${update ? "" : "mt-auto "}flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors`}
       >
         <SettingsIcon className="size-[18px]" />
