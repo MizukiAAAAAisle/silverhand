@@ -31,6 +31,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   let pageBar = PageBar()
   let composer = ComposerView()
   let banner = BannerView()
+  let selectionBar = SelectionBarView()
   var onIntent: (([String: Any]) -> Void)?
 
   // Shared navigation state, as last synced from the page.
@@ -217,6 +218,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   func setBackProgress(_ progress: CGFloat?) {
     guard let stack = selectedViewController as? UINavigationController else { return }
     composer.setBackProgress(progress)
+    selectionBar.setBackProgress(progress)
     guard let progress else {
       endSwipe()
       return
@@ -388,6 +390,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       banner.dismiss()
     }
     composer.setBlocked(blocked)
+    selectionBar.isHidden = blocked
     if let index = names.firstIndex(of: call.getString("tab") ?? ""), let host = page(index) {
       selectedIndex = index
       attachContent(to: host)
@@ -472,6 +475,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     // composer is a page's own and leaves with it; only a lost session takes
     // it with the bars.
     composer.remove()
+    removeSelectionBar(key: nil)
     banner.dismiss()
   }
 
@@ -610,6 +614,21 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     composer.install(in: view)
     composer.setBlocked(blocked)
     composer.apply(state)
+  }
+
+  func showSelectionBar(_ state: SelectionBarState) {
+    selectionBar.install(in: view)
+    selectionBar.isHidden = blocked
+    selectionBar.apply(state)
+    composer.setSteppedAside(true)
+  }
+
+  /// Removes the selection bar if it shows pane `key`, or whatever it shows
+  /// without one; the composer comes back.
+  func removeSelectionBar(key: String?) {
+    guard selectionBar.state != nil, key == nil || selectionBar.state?.key == key else { return }
+    selectionBar.remove()
+    composer.setSteppedAside(false)
   }
 
   func tabBarController(

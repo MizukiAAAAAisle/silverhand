@@ -783,6 +783,7 @@ export function MessageList({
         }}
         workspaceId={workspaceId}
         conversationId={channelId}
+        selectionKey={channelId}
         channelTitle={channelTitle}
       />
       <div ref={viewportRef} className="relative min-h-0 min-w-0 flex-1">

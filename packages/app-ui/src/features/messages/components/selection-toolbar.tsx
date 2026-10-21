@@ -45,7 +45,7 @@ export function SelectionToolbar({
       className="flex items-center justify-between gap-3 border-b border-border-subtle bg-bg-floating px-3 py-2 text-xs text-text-primary"
     >
       <span className="font-medium">
-        {count === 0 ? t("messages.noneSelected") : `${count} selected`}
+        {count === 0 ? t("messages.noneSelected") : t("messages.selectedCount", { count })}
       </span>
       <div className="flex items-center gap-2">
         <SelectionActionButton rank="cancel" label={t("common.cancel")} onClick={onCancel} />

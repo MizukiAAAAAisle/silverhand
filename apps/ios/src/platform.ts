@@ -14,6 +14,7 @@ import { createIOSTitlebar } from "./titlebar";
 import { createIOSPageBar } from "./page-bar";
 import { createIOSBanner } from "./banner";
 import { createIOSComposer } from "./composer";
+import { createIOSSelectionBar } from "./selection-bar";
 import { createIOSFiles, encodeBytes } from "./files";
 import { createIOSAvatarMaker } from "./avatar-maker";
 
@@ -62,6 +63,7 @@ export function createIOSPlatform(
     titlebar: createIOSTitlebar(bridge),
     pageBar: createIOSPageBar(bridge),
     composer: createIOSComposer(bridge),
+    selectionBar: createIOSSelectionBar(bridge),
     banner: createIOSBanner(bridge),
     avatarMaker: createIOSAvatarMaker(bridge),
     client: {

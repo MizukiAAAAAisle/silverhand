@@ -86,6 +86,14 @@ export interface FileCapability {
   sharePngExport?(input: {
     pngBytes: Uint8Array;
   }): Promise<{ ok: true } | { ok: false; canceled: true } | { ok: false; error: string }>;
+  /** Shows a rendered image in a native sheet with a share action; resolves
+   * when the sheet closes, with whether a share completed. */
+  previewPngExport?(input: {
+    pngBytes: Uint8Array;
+    title: string;
+    shareLabel: string;
+    closeLabel: string;
+  }): Promise<{ shared: boolean }>;
   savePngExport(input: {
     pngBytes: Uint8Array;
     suggestedName: string;
@@ -146,6 +154,7 @@ export interface ClientPlatform {
   titlebar?: TitlebarCapability;
   pageBar?: PageBarCapability;
   composer?: ComposerCapability;
+  selectionBar?: SelectionBarCapability;
   banner?: BannerCapability;
   avatarMaker?: AvatarMakerCapability;
   /** Present only where the app can update itself. */
@@ -355,6 +364,30 @@ export interface ComposerCapability {
   /** Replaces the text of draft `key`; `caret` counts UTF-16 units. */
   setText(input: { key: string; text: string; caret: number; focus: boolean }): Promise<void>;
   subscribe(handler: (event: ComposerEvent) => void): Promise<() => void>;
+}
+/** The compact layout's message-selection actions, drawn natively in the
+ * composer's place while messages are selected; the composer steps aside
+ * until the bar is removed. The page keeps the selection and every string.
+ * `key` names the pane the selection belongs to. */
+export interface SelectionBarState {
+  key: string;
+  /** How many are selected, as the page words it. */
+  count: string;
+  cancelLabel: string;
+  copyLabel: string;
+  saveLabel: string;
+  /** False while nothing is selected: only Cancel acts. */
+  enabled: boolean;
+  /** The image is rendering: Save shows it is at work. */
+  busy: boolean;
+}
+export type SelectionBarEvent = { kind: "cancel" | "copy" | "save"; key: string };
+export interface SelectionBarCapability {
+  /** Shows the bar for pane `state.key`. */
+  sync(state: SelectionBarState): Promise<void>;
+  /** Removes the bar, if it still shows pane `key`. */
+  remove(key: string): Promise<void>;
+  subscribe(handler: (event: SelectionBarEvent) => void): Promise<() => void>;
 }
 /** A notice native draws over its bars; a newer one replaces the one showing. */
 export interface BannerNotice {

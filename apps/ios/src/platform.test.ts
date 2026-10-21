@@ -24,6 +24,8 @@ function harness() {
     composerSync: vi.fn(async () => {}),
     composerRemove: vi.fn(async () => {}),
     composerSetText: vi.fn(async () => {}),
+    selectionBarSync: vi.fn(async () => {}),
+    selectionBarRemove: vi.fn(async () => {}),
     bannerShow: vi.fn(async () => {}),
     getProfile: vi.fn(async () => ({ server_url: "https://server.example", updated_at: 1 })),
     authState: vi.fn(async () => ({
@@ -68,6 +70,7 @@ function harness() {
     addListener: vi.fn(async () => ({ remove: vi.fn() })),
     saveAttachment: vi.fn(async () => ({ completed: true })),
     sharePng: vi.fn(async () => ({ completed: true })),
+    previewPng: vi.fn(async () => ({ shared: true })),
     avatarMakerEdit: vi.fn(async () => ({})),
     openExternal: vi.fn(),
     appVersion: vi.fn(async () => ({ version: "1.0" })),

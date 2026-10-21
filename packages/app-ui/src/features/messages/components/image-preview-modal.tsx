@@ -237,6 +237,9 @@ export function ImagePreviewModal({
 }): JSX.Element {
   const compact = useCompactLayout();
   const shareImage = getPlatform().files.sharePngExport;
+  // The compact layout on a native host shows the image in a native sheet:
+  // this renders it offscreen only, and the selection bar shows the wait.
+  const nativePreview = compact ? getPlatform().files.previewPngExport : undefined;
   const queryClient = useQueryClient();
   const [phase, setPhase] = useState<"idle" | "rendering" | "ready" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
@@ -362,6 +365,37 @@ export function ImagePreviewModal({
     };
   }, [open]);
 
+  useEffect(() => {
+    if (!open || !nativePreview || (phase !== "ready" && phase !== "error")) {
+      return;
+    }
+    if (phase === "error" || !pngBytes) {
+      toast.error(t("messages.renderFailed", { error: String(error) }));
+      onOpenChange(false);
+      return;
+    }
+    const generation = exportGeneration.current;
+    void nativePreview({
+      pngBytes,
+      title: t("messages.imagePreview"),
+      shareLabel: t("messages.share"),
+      closeLabel: t("common.close"),
+    })
+      .catch((err: unknown) => {
+        toast.error(t("messages.renderFailed", { error: String(err) }));
+        return { shared: false };
+      })
+      .then(({ shared }) => {
+        if (generation !== exportGeneration.current) {
+          return;
+        }
+        if (shared) {
+          onExportComplete?.();
+        }
+        onOpenChange(false);
+      });
+  }, [open, nativePreview, phase]);
+
   const suggestedName = suggestImageFilename(messages, channelTitle);
 
   const onShare = async (): Promise<void> => {
@@ -422,6 +456,48 @@ export function ImagePreviewModal({
       setBusy(false);
     }
   };
+
+  const offscreen = (
+    <>
+      {/* Offscreen render target. Positioned far off-canvas so the
+        layout still computes (display:none would zero the
+        intrinsic height) without paint cost or visual noise.
+        html-to-image walks this subtree once per open. */}
+      <div
+        aria-hidden
+        style={{
+          position: "fixed",
+          top: "-99999px",
+          left: "-99999px",
+          pointerEvents: "none",
+        }}
+      >
+        <div ref={offscreenRef}>
+          <MessageScreenshotView
+            compact={compact}
+            messages={messages}
+            channelTitle={channelTitle}
+            agentsByName={agentsByName}
+            humansByName={humansByName}
+            channelsByName={channelsByName}
+            conversationRefsById={conversationRefsById}
+            taskRefsByNumber={taskRefsByNumber}
+            agentAvatarUrls={agentAvatarUrls}
+            authorAgentAvatarUrls={authorAgentAvatarUrls}
+            authorUserAvatarUrls={authorUserAvatarUrls}
+            attachmentImageUrls={attachmentImageUrls}
+            viewer={viewer}
+            viewerAvatarObjectUrl={viewerAvatarObjectUrl}
+            mermaidSvgByCode={mermaidSvgByCode}
+          />
+        </div>
+      </div>
+    </>
+  );
+
+  if (nativePreview) {
+    return open ? offscreen : <></>;
+  }
 
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
@@ -498,39 +574,7 @@ export function ImagePreviewModal({
             )}
           </div>
 
-          {/* Offscreen render target. Positioned far off-canvas so the
-              layout still computes (display:none would zero the
-              intrinsic height) without paint cost or visual noise.
-              html-to-image walks this subtree once per open. */}
-          <div
-            aria-hidden
-            style={{
-              position: "fixed",
-              top: "-99999px",
-              left: "-99999px",
-              pointerEvents: "none",
-            }}
-          >
-            <div ref={offscreenRef}>
-              <MessageScreenshotView
-                compact={compact}
-                messages={messages}
-                channelTitle={channelTitle}
-                agentsByName={agentsByName}
-                humansByName={humansByName}
-                channelsByName={channelsByName}
-                conversationRefsById={conversationRefsById}
-                taskRefsByNumber={taskRefsByNumber}
-                agentAvatarUrls={agentAvatarUrls}
-                authorAgentAvatarUrls={authorAgentAvatarUrls}
-                authorUserAvatarUrls={authorUserAvatarUrls}
-                attachmentImageUrls={attachmentImageUrls}
-                viewer={viewer}
-                viewerAvatarObjectUrl={viewerAvatarObjectUrl}
-                mermaidSvgByCode={mermaidSvgByCode}
-              />
-            </div>
-          </div>
+          {offscreen}
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

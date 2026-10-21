@@ -13,7 +13,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "bannerShow", "sharePng", "saveAttachment", "avatarMakerEdit",
+    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "selectionBarSync", "selectionBarRemove", "bannerShow", "sharePng", "previewPng", "saveAttachment", "avatarMakerEdit",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -112,6 +112,25 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
           ])
         }
       } catch { call.reject(error.localizedDescription) }
+    }
+  }
+
+  @objc func previewPng(_ call: CAPPluginCall) {
+    Task { @MainActor in
+      guard let encoded = call.getString("base64"),
+        let bytes = Data(base64Encoded: encoded),
+        let image = UIImage(data: bytes),
+        let host = self.bridge?.viewController,
+        host.view.window != nil,
+        host.presentedViewController == nil
+      else {
+        call.reject("Unable to present the image preview")
+        return
+      }
+      ImagePreviewController.present(
+        image, title: call.getString("title") ?? "", shareLabel: call.getString("shareLabel") ?? "",
+        closeLabel: call.getString("closeLabel") ?? "", from: host
+      ) { shared in call.resolve(["shared": shared]) }
     }
   }
 
@@ -338,6 +357,34 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         host.showComposer(next)
       }
+      call.resolve()
+    }
+  }
+  @objc public func selectionBarSync(_ call: CAPPluginCall) {
+    guard let state = call.getObject("state"), let key = state["key"] as? String else {
+      call.reject("Missing selection bar state")
+      return
+    }
+    let next = SelectionBarState(
+      key: key, count: state["count"] as? String ?? "",
+      cancelLabel: state["cancelLabel"] as? String ?? "",
+      copyLabel: state["copyLabel"] as? String ?? "",
+      saveLabel: state["saveLabel"] as? String ?? "",
+      enabled: state["enabled"] as? Bool ?? false, busy: state["busy"] as? Bool ?? false)
+    Task { @MainActor [self] in
+      if let host = navigationHost {
+        host.selectionBar.onEvent = { [weak self] event in
+          self?.notifyListeners("selectionBar", data: event)
+        }
+        host.showSelectionBar(next)
+      }
+      call.resolve()
+    }
+  }
+  @objc public func selectionBarRemove(_ call: CAPPluginCall) {
+    let key = call.getString("key")
+    Task { @MainActor in
+      navigationHost?.removeSelectionBar(key: key)
       call.resolve()
     }
   }

@@ -72,6 +72,10 @@ export const messages = {
   quote: "Quote",
   messageSelection: "Message selection",
   noneSelected: "None selected",
+  selectedCount: {
+    one: "1 selected",
+    other: "{count} selected",
+  },
   saveImage: "Save image",
   collapseContext: "Collapse context",
   expandContext: "Expand context",

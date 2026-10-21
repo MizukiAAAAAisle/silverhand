@@ -292,10 +292,25 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   /// A web modal covers the page; native chrome cannot sit under its
   /// backdrop, so the composer leaves while one is open.
   func setBlocked(_ blocked: Bool) {
-    if blocked, textView.isFirstResponder { textView.resignFirstResponder() }
-    isHidden = blocked
-    picker.isHidden = blocked
-    activity.isHidden = blocked
+    self.blocked = blocked
+    applyHidden()
+  }
+
+  /// The message-selection bar takes the composer's place while it shows.
+  func setSteppedAside(_ aside: Bool) {
+    steppedAside = aside
+    applyHidden()
+  }
+
+  private var blocked = false
+  private var steppedAside = false
+
+  private func applyHidden() {
+    let hidden = blocked || steppedAside
+    if hidden, textView.isFirstResponder { textView.resignFirstResponder() }
+    isHidden = hidden
+    picker.isHidden = hidden
+    activity.isHidden = hidden
   }
 
   /// Takes the composer off screen and forgets its draft.

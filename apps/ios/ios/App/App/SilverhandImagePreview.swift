@@ -1,0 +1,135 @@
+import UIKit
+
+/// A rendered image in a sheet: it fills the width and scrolls when long,
+/// pinches to zoom, and shares through the system sheet. Reports whether a
+/// share completed; closing or swiping the sheet away is not one.
+@MainActor
+final class ImagePreviewController: UIViewController, UIScrollViewDelegate,
+  UIAdaptivePresentationControllerDelegate
+{
+  private let image: UIImage
+  private let shareLabel: String
+  private let closeLabel: String
+  private let scrollView = UIScrollView()
+  private let imageView: UIImageView
+  private var finish: ((Bool) -> Void)?
+  private var fittedWidth: CGFloat = 0
+
+  static func present(
+    _ image: UIImage, title: String, shareLabel: String, closeLabel: String,
+    from host: UIViewController, finish: @escaping (Bool) -> Void
+  ) {
+    let preview = ImagePreviewController(
+      image: image, title: title, shareLabel: shareLabel, closeLabel: closeLabel)
+    preview.finish = finish
+    let navigation = UINavigationController(rootViewController: preview)
+    navigation.modalPresentationStyle = .pageSheet
+    if let sheet = navigation.sheetPresentationController {
+      sheet.detents = [.large()]
+      sheet.prefersGrabberVisible = false
+    }
+    navigation.presentationController?.delegate = preview
+    host.present(navigation, animated: true)
+  }
+
+  private init(image: UIImage, title: String, shareLabel: String, closeLabel: String) {
+    self.image = image
+    self.shareLabel = shareLabel
+    self.closeLabel = closeLabel
+    imageView = UIImageView(image: image)
+    super.init(nibName: nil, bundle: nil)
+    self.title = title
+  }
+
+  required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
+  override func viewDidLoad() {
+    super.viewDidLoad()
+    view.backgroundColor = .systemGroupedBackground
+
+    let close = UIBarButtonItem(
+      systemItem: .close, primaryAction: UIAction { [weak self] _ in self?.close(shared: false) })
+    close.accessibilityLabel = closeLabel
+    navigationItem.leftBarButtonItem = close
+    let share = UIBarButtonItem(
+      systemItem: .action, primaryAction: UIAction { [weak self] _ in self?.share() })
+    share.accessibilityLabel = shareLabel
+    navigationItem.rightBarButtonItem = share
+
+    scrollView.delegate = self
+    scrollView.maximumZoomScale = 4
+    scrollView.contentInsetAdjustmentBehavior = .always
+    scrollView.showsHorizontalScrollIndicator = false
+    view.addSubview(scrollView)
+    imageView.isAccessibilityElement = true
+    imageView.accessibilityLabel = title
+    scrollView.addSubview(imageView)
+
+    let doubleTap = UITapGestureRecognizer(target: self, action: #selector(toggleZoom(_:)))
+    doubleTap.numberOfTapsRequired = 2
+    scrollView.addGestureRecognizer(doubleTap)
+  }
+
+  override func viewDidLayoutSubviews() {
+    super.viewDidLayoutSubviews()
+    scrollView.frame = view.bounds
+    let width = scrollView.bounds.width
+    guard width > 0, image.size.width > 0, width != fittedWidth else { return }
+    fittedWidth = width
+    // Zoom 1 is the image at the sheet's width; pinching only enlarges it.
+    scrollView.zoomScale = 1
+    imageView.frame = CGRect(
+      x: 0, y: 0, width: width, height: image.size.height * width / image.size.width)
+    scrollView.contentSize = imageView.frame.size
+    centre()
+  }
+
+  func viewForZooming(in scrollView: UIScrollView) -> UIView? { imageView }
+
+  func scrollViewDidZoom(_ scrollView: UIScrollView) { centre() }
+
+  /// A short image sits in the middle of the sheet rather than at its top.
+  private func centre() {
+    let visible = scrollView.bounds.inset(by: scrollView.adjustedContentInset)
+    let size = scrollView.contentSize
+    let dy = max(0, (visible.height - size.height) / 2)
+    let dx = max(0, (visible.width - size.width) / 2)
+    imageView.center = CGPoint(x: size.width / 2 + dx, y: size.height / 2 + dy)
+  }
+
+  @objc private func toggleZoom(_ tap: UITapGestureRecognizer) {
+    if scrollView.zoomScale > 1 {
+      scrollView.setZoomScale(1, animated: true)
+      return
+    }
+    let point = tap.location(in: imageView)
+    let size = CGSize(width: scrollView.bounds.width / 2, height: scrollView.bounds.height / 2)
+    scrollView.zoom(
+      to: CGRect(
+        origin: CGPoint(x: point.x - size.width / 2, y: point.y - size.height / 2), size: size),
+      animated: true)
+  }
+
+  private func share() {
+    let activity = UIActivityViewController(activityItems: [image], applicationActivities: nil)
+    activity.completionWithItemsHandler = { [weak self] _, completed, _, _ in
+      if completed { self?.close(shared: true) }
+    }
+    activity.popoverPresentationController?.barButtonItem = navigationItem.rightBarButtonItem
+    present(activity, animated: true)
+  }
+
+  private func close(shared: Bool) {
+    let finish = self.finish
+    self.finish = nil
+    // From the presenter, so a share sheet still up leaves with the preview.
+    (navigationController ?? self).presentingViewController?.dismiss(animated: true)
+    finish?(shared)
+  }
+
+  func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+    let finish = self.finish
+    self.finish = nil
+    finish?(false)
+  }
+}

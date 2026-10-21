@@ -74,6 +74,9 @@ export const messages: Translation<typeof en> = {
   quote: "引用",
   messageSelection: "已选消息",
   noneSelected: "未选择",
+  selectedCount: {
+    other: "已选 {count} 条",
+  },
   saveImage: "保存图片",
   collapseContext: "收起上下文",
   expandContext: "展开上下文",

@@ -1042,6 +1042,7 @@ export function ThreadPanel({
               }}
               workspaceId={workspaceId}
               conversationId={channelId}
+              selectionKey={`${channelId}#cluster#${rootMessageId}`}
               channelTitle={parentChannelTitle}
             />
             <div
