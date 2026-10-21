@@ -111,7 +111,7 @@ export function CreateAgentDialog({
 }: CreateAgentDialogProps): JSX.Element {
   const [name, setName] = useState("");
   const [runtime, setRuntime] = useState<RuntimeKind>("claude");
-  const [sessionScope, setSessionScope] = useState<AgentSessionScope>("conversation");
+  const [sessionScope, setSessionScope] = useState<AgentSessionScope>("agent");
   // Model tracks the selected runtime's catalog default (qoder → `Ultimate`,
   // others → blank = the runtime's own CLI default). Switching runtime resets
   // it to that runtime's default so the field always reflects what will be
@@ -179,7 +179,7 @@ export function CreateAgentDialog({
   useEffect(() => {
     if (!open) {
       setSelectedHostId(null);
-      setSessionScope("conversation");
+      setSessionScope("agent");
       setRuntimeGate(EMPTY_RUNTIME_GATE);
       return;
     }
@@ -254,7 +254,7 @@ export function CreateAgentDialog({
       onCreated?.(res.agent.id);
       setName("");
       setRuntime("claude");
-      setSessionScope("conversation");
+      setSessionScope("agent");
       setModel(runtimeDefaultModel("claude") ?? "");
       setSelectedHostId(null);
       setRuntimeGate(EMPTY_RUNTIME_GATE);
@@ -321,17 +321,6 @@ export function CreateAgentDialog({
             >
               <button
                 type="button"
-                className={chipClass(sessionScope === "conversation")}
-                aria-pressed={sessionScope === "conversation"}
-                onClick={() => {
-                  setSessionScope("conversation");
-                  setError(null);
-                }}
-              >
-                {t("agentPage.perConversation")}
-              </button>
-              <button
-                type="button"
                 className={chipClass(sessionScope === "agent")}
                 aria-pressed={sessionScope === "agent"}
                 onClick={() => {
@@ -340,6 +329,17 @@ export function CreateAgentDialog({
                 }}
               >
                 {t("agentPage.acrossConversations")}
+              </button>
+              <button
+                type="button"
+                className={chipClass(sessionScope === "conversation")}
+                aria-pressed={sessionScope === "conversation"}
+                onClick={() => {
+                  setSessionScope("conversation");
+                  setError(null);
+                }}
+              >
+                {t("agentPage.perConversation")}
               </button>
             </div>
             <p className="text-xs text-text-muted">
