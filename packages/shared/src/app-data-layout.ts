@@ -83,10 +83,7 @@ export function computersRootDir(appRoot: string): string {
  * desktop and connect slots are literally the same coordinates.
  */
 export function safeComputerDirId(computerId: string): string {
-  return (
-    computerId.replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 80) ||
-    shortHash(computerId)
-  );
+  return computerId.replace(/[^A-Za-z0-9_.-]+/g, '_').slice(0, 80) || shortHash(computerId);
 }
 
 function shortHash(value: string): string {
@@ -109,14 +106,8 @@ export interface ComputerSlotPaths {
   proxyConfig: string;
 }
 
-export function resolveComputerSlotPaths(
-  appRoot: string,
-  computerId: string,
-): ComputerSlotPaths {
-  return resolveComputerSlotFromComputersRoot(
-    computersRootDir(appRoot),
-    computerId,
-  );
+export function resolveComputerSlotPaths(appRoot: string, computerId: string): ComputerSlotPaths {
+  return resolveComputerSlotFromComputersRoot(computersRootDir(appRoot), computerId);
 }
 
 /** Same slot, keyed from an explicit computers root (what the daemon

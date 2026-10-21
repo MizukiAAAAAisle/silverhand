@@ -10,7 +10,8 @@ import ts from "typescript";
 
 const ROOT = fileURLToPath(new URL("../src", import.meta.url));
 
-const SKIP_FILE = /(\.test\.tsx?|\.d\.ts|-contract\.ts|viewer-channel-removal\.ts|conversation-ingestor\.ts|html-preview-csp\.ts)$|\/lib\/i18n\/|\/icons\//;
+const SKIP_FILE =
+  /(\.test\.tsx?|\.d\.ts|-contract\.ts|viewer-channel-removal\.ts|conversation-ingestor\.ts|html-preview-csp\.ts)$|\/lib\/i18n\/|\/icons\//;
 const COPY_ATTRIBUTES = new Set([
   "title",
   "label",

@@ -36,11 +36,9 @@ import { DAEMON_ADMISSION } from '../daemon-admission.generated.js';
  * MUST supply the input field — even if it's `null` or an empty
  * object — and never omit it entirely.
  */
-const RequiredUnknownSchema = z
-  .unknown()
-  .refine(v => v !== undefined, {
-    message: 'field is required (opaque payload must be present)',
-  });
+const RequiredUnknownSchema = z.unknown().refine((v) => v !== undefined, {
+  message: 'field is required (opaque payload must be present)',
+});
 
 /**
  * Normalized terminal outcome of a tool call, projected from each runtime's
@@ -51,12 +49,7 @@ const RequiredUnknownSchema = z
  * downgrade. A runtime that cannot prove success (missing/ambiguous status,
  * unknown exit-code semantics) emits `completed`, never a guessed `success`.
  */
-export const TOOL_OUTCOMES = [
-  'success',
-  'failed',
-  'cancelled',
-  'completed',
-] as const;
+export const TOOL_OUTCOMES = ['success', 'failed', 'cancelled', 'completed'] as const;
 export const ToolOutcomeSchema = z.enum(TOOL_OUTCOMES);
 export type ToolOutcome = (typeof TOOL_OUTCOMES)[number];
 

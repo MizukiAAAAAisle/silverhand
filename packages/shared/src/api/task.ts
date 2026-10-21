@@ -1,16 +1,9 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: task. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
-import {
-  TaskAssigneeTypeSchema,
-  TaskStatusSchema,
-  type TaskStatus,
-} from '../db/schema.js';
+import { TaskAssigneeTypeSchema, TaskStatusSchema, type TaskStatus } from '../db/schema.js';
 import { AgentCapabilitySchema } from './workspace.js';
-import {
-  CanonicalPositiveIntegerQuerySchema,
-  PositiveJsSafeIntegerSchema,
-} from './wire-number.js';
+import { CanonicalPositiveIntegerQuerySchema, PositiveJsSafeIntegerSchema } from './wire-number.js';
 
 // ── Task title / content input spec (single source of truth) ──────────
 // Both create and edit — across all three entry points (agent CLI, human
@@ -40,7 +33,6 @@ export const TaskTitleSchema = z
  *  body clears the description). Omission is normalized to `""` by the
  *  service — the stored/read `content` is always a string, never null. */
 export const TaskBodySchema = z.string().max(TASK_CONTENT_MAX_LEN);
-
 
 export const TaskAssigneeDtoSchema = z.object({
   type: TaskAssigneeTypeSchema,
@@ -262,22 +254,14 @@ export type ListTasksQuery = z.infer<typeof ListTasksQuerySchema>;
 /** Assignee axis. Omitted = any. `unassigned` means BOTH assignee columns are
  *  NULL (the aggregate splits one concept across `assignee_agent_id` /
  *  `assignee_user_id`, so "no assignee" must name both). */
-export const TaskBoardAssigneeFilterTypeSchema = z.enum([
-  'agent',
-  'user',
-  'unassigned',
-]);
-export type TaskBoardAssigneeFilterType = z.infer<
-  typeof TaskBoardAssigneeFilterTypeSchema
->;
+export const TaskBoardAssigneeFilterTypeSchema = z.enum(['agent', 'user', 'unassigned']);
+export type TaskBoardAssigneeFilterType = z.infer<typeof TaskBoardAssigneeFilterTypeSchema>;
 
 /** Creator axis. Omitted = any. `system` is deliberately absent: a system
  *  creator has no id and is not a selectable person (the existing filter bar
  *  already skips it), so it is a value of the DATA, not of this filter. */
 export const TaskBoardCreatorFilterTypeSchema = z.enum(['agent', 'user']);
-export type TaskBoardCreatorFilterType = z.infer<
-  typeof TaskBoardCreatorFilterTypeSchema
->;
+export type TaskBoardCreatorFilterType = z.infer<typeof TaskBoardCreatorFilterTypeSchema>;
 
 /** The board's TOP-LEVEL container axis (#task:2041). A task's owning
  *  conversation sits in exactly ONE human container, and the four-state tab
@@ -294,11 +278,7 @@ export type TaskBoardCreatorFilterType = z.infer<
  *  and `workspace_id` / `channel_id` stack as an intersection: choosing
  *  `agent_space` then a specific `workspace_id` narrows to that one Agent Space
  *  workspace. */
-export const TaskBoardContainerSchema = z.enum([
-  'workspace',
-  'agent_space',
-  'direct_messages',
-]);
+export const TaskBoardContainerSchema = z.enum(['workspace', 'agent_space', 'direct_messages']);
 export type TaskBoardContainer = z.infer<typeof TaskBoardContainerSchema>;
 
 /** The filter axes every board face shares. Kept as a raw field map (not a
@@ -453,7 +433,7 @@ export type TaskBoardColumnDto = z.infer<typeof TaskBoardColumnDtoSchema>;
 // Total by construction: derived from TaskStatusSchema, so a new status is
 // covered without hand-listing it here (no "missing key = 0" compat branch).
 const taskBoardCountShape = Object.fromEntries(
-  TaskStatusSchema.options.map(s => [s, z.number().int().nonnegative()]),
+  TaskStatusSchema.options.map((s) => [s, z.number().int().nonnegative()]),
 ) as Record<TaskStatus, z.ZodNumber>;
 
 /**
@@ -647,9 +627,7 @@ export const HumanCreateTaskErrorCodeSchema = z.enum([
   'conversation_archived',
   'not_conversation_member',
 ]);
-export type HumanCreateTaskErrorCode = z.infer<
-  typeof HumanCreateTaskErrorCodeSchema
->;
+export type HumanCreateTaskErrorCode = z.infer<typeof HumanCreateTaskErrorCodeSchema>;
 
 /** SUCCESS returns ONLY the identity the create transaction authoritatively
  *  produced (`id` / `task_number` / `title`) — the SAME shape the agent batch
@@ -690,13 +668,13 @@ export const ClaimTasksInputSchema = z
     workspace_id: z.string().optional(),
     workspace_name: z.string().optional(),
   })
-  .refine(v => !(v.workspace_id && v.workspace_name), {
+  .refine((v) => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
   })
-  .refine(v => (v.task_numbers !== undefined) !== (v.task_ids !== undefined), {
+  .refine((v) => (v.task_numbers !== undefined) !== (v.task_ids !== undefined), {
     message: 'provide exactly one of task_numbers or task_ids',
   })
-  .refine(v => !(v.task_ids && (v.workspace_id || v.workspace_name)), {
+  .refine((v) => !(v.task_ids && (v.workspace_id || v.workspace_name)), {
     message:
       'workspace selectors only apply to task_numbers; a task id already determines its board',
   });
@@ -764,13 +742,13 @@ export const UnclaimTaskInputSchema = z
     workspace_id: z.string().optional(),
     workspace_name: z.string().optional(),
   })
-  .refine(v => !(v.workspace_id && v.workspace_name), {
+  .refine((v) => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
   })
-  .refine(v => (v.task_number !== undefined) !== (v.task_id !== undefined), {
+  .refine((v) => (v.task_number !== undefined) !== (v.task_id !== undefined), {
     message: 'provide exactly one of task_number or task_id',
   })
-  .refine(v => !(v.task_id && (v.workspace_id || v.workspace_name)), {
+  .refine((v) => !(v.task_id && (v.workspace_id || v.workspace_name)), {
     message:
       'workspace selectors only apply to task_number; a task id already determines its board',
   });
@@ -787,13 +765,13 @@ export const UpdateTaskStatusInputSchema = z
     workspace_id: z.string().optional(),
     workspace_name: z.string().optional(),
   })
-  .refine(v => !(v.workspace_id && v.workspace_name), {
+  .refine((v) => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
   })
-  .refine(v => (v.task_number !== undefined) !== (v.task_id !== undefined), {
+  .refine((v) => (v.task_number !== undefined) !== (v.task_id !== undefined), {
     message: 'provide exactly one of task_number or task_id',
   })
-  .refine(v => !(v.task_id && (v.workspace_id || v.workspace_name)), {
+  .refine((v) => !(v.task_id && (v.workspace_id || v.workspace_name)), {
     message:
       'workspace selectors only apply to task_number; a task id already determines its board',
   });
@@ -841,9 +819,7 @@ export type TaskMutationResult = z.infer<typeof TaskMutationResultSchema>;
 export const HumanUpdateTaskStatusInputSchema = z.object({
   status: TaskStatusSchema,
 });
-export type HumanUpdateTaskStatusInput = z.infer<
-  typeof HumanUpdateTaskStatusInputSchema
->;
+export type HumanUpdateTaskStatusInput = z.infer<typeof HumanUpdateTaskStatusInputSchema>;
 
 // Human UI — POST /api/tasks/:taskId/claim (assign to a target agent).
 // `agent_id` is REQUIRED: assignment and un-assignment are two writes with two
@@ -877,16 +853,16 @@ export const EditTaskInputSchema = z
     workspace_id: z.string().optional(),
     workspace_name: z.string().optional(),
   })
-  .refine(v => v.title !== undefined || v.body !== undefined, {
+  .refine((v) => v.title !== undefined || v.body !== undefined, {
     message: 'provide at least one of title or body',
   })
-  .refine(v => !(v.workspace_id && v.workspace_name), {
+  .refine((v) => !(v.workspace_id && v.workspace_name), {
     message: 'workspace_id and workspace_name are mutually exclusive',
   })
-  .refine(v => (v.task_number !== undefined) !== (v.task_id !== undefined), {
+  .refine((v) => (v.task_number !== undefined) !== (v.task_id !== undefined), {
     message: 'provide exactly one of task_number or task_id',
   })
-  .refine(v => !(v.task_id && (v.workspace_id || v.workspace_name)), {
+  .refine((v) => !(v.task_id && (v.workspace_id || v.workspace_name)), {
     message:
       'workspace selectors only apply to task_number; a task id already determines its board',
   });
@@ -898,7 +874,7 @@ export const HumanEditTaskInputSchema = z
     title: TaskTitleSchema.optional(),
     body: TaskBodySchema.optional(),
   })
-  .refine(v => v.title !== undefined || v.body !== undefined, {
+  .refine((v) => v.title !== undefined || v.body !== undefined, {
     message: 'provide at least one of title or body',
   });
 export type HumanEditTaskInput = z.infer<typeof HumanEditTaskInputSchema>;

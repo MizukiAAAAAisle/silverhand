@@ -1,17 +1,9 @@
-import type {
-  HostAvailability,
-  HostLifecycleStatus,
-  HostUnreachableReason,
-} from './api/host.js';
+import type { HostAvailability, HostLifecycleStatus, HostUnreachableReason } from './api/host.js';
 import type { HostKind, HostProvisioningSource } from './db/schema.js';
 
 export type HostDiagnosticsFetchStatus = 'loading' | 'success' | 'error';
 
-export type HostDiagnosticsFetchErrorKind =
-  | 'network'
-  | 'forbidden'
-  | 'not_found'
-  | 'unknown';
+export type HostDiagnosticsFetchErrorKind = 'network' | 'forbidden' | 'not_found' | 'unknown';
 
 export interface HostDiagnosticsComputerInput {
   id: string;

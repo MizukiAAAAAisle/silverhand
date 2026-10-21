@@ -22,19 +22,9 @@ import { join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { execPath } from 'node:process';
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import {
-  composeRuntimeDeliveryPresentation,
-  parseDeliveryTarget,
-} from '@silverhand/shared';
+import { composeRuntimeDeliveryPresentation, parseDeliveryTarget } from '@silverhand/shared';
 
 import { Supervisor } from '../src/daemon/supervisor/index.js';
 import type { DeliveryOwnerContext } from '../src/daemon/supervisor-contract.js';
@@ -44,16 +34,9 @@ import { QoderDriver } from '../src/drivers/qoder.js';
 import { PiDriver } from '../src/drivers/pi.js';
 import { GrokDriver } from '../src/drivers/grok.js';
 import { createDaemonLogControl, type DaemonLogger } from '../src/daemon/logger.js';
-import type {
-  EventFrame,
-  RuntimeStartResult,
-  StartOptions,
-} from '../src/protocol.js';
+import type { EventFrame, RuntimeStartResult, StartOptions } from '../src/protocol.js';
 import { runtimePidFilePath } from '../src/daemon/runtime-pidfiles.js';
-import {
-  testStartOptions,
-  testRuntimeStartResolveDeps,
-} from './_helpers/runtime-start-options.js';
+import { testStartOptions, testRuntimeStartResolveDeps } from './_helpers/runtime-start-options.js';
 
 const FIXTURE = join(__dirname, '_fixtures', 'echo-runtime.cjs');
 /** 3c-b watchdog fixture — produces zero bytes until killed. See
@@ -83,12 +66,7 @@ const NO_OUTPUT_FIXTURE = join(__dirname, '_fixtures', 'no-output-runtime.cjs');
  * own agents root and skip this. */
 const SUPERVISOR_AGENTS_ROOT = mkdtempSync(join(tmpdir(), 'sh-sup-agents-'));
 function ensureSupervisorBundle(agentId: string, workspaceId = 'ws1'): void {
-  const bundleDir = join(
-    SUPERVISOR_AGENTS_ROOT,
-    agentId,
-    'workspaces',
-    workspaceId,
-  );
+  const bundleDir = join(SUPERVISOR_AGENTS_ROOT, agentId, 'workspaces', workspaceId);
   // The cwd is the only hard prerequisite — a directory the process can enter.
   // MEMORY.md is best-effort enrichment and is intentionally NOT written here.
   mkdirSync(bundleDir, { recursive: true });
@@ -119,9 +97,7 @@ function assertStarted(
   res: RuntimeStartResult,
 ): asserts res is Extract<RuntimeStartResult, { started: true }> {
   if (!res.started) {
-    throw new Error(
-      `expected start() to succeed, got cooldown: ${JSON.stringify(res)}`,
-    );
+    throw new Error(`expected start() to succeed, got cooldown: ${JSON.stringify(res)}`);
   }
 }
 
@@ -213,7 +189,7 @@ function makeFakeDriver(extraArgs: string[] = []): Driver {
     initPreProtocolCapMs: 5 * 60_000,
     initPostProtocolMs: 60_000,
     buildArgs: (_ctx: DriverSpawnContext): string[] => [FIXTURE, ...extraArgs],
-    applyEnv: env => ({ ...env }),
+    applyEnv: (env) => ({ ...env }),
     encodeStdinMessage: (text: string) => encodeStreamJsonUser(text),
     encodeInterruptControl: () => null,
     parseLine: (_line: string): ParsedEvent[] => [],
@@ -225,7 +201,7 @@ function makeFakeDriver(extraArgs: string[] = []): Driver {
  *  can scan for runtime_state / runtime_output / runtime_exit. */
 function makeEmitSpy(): { emit: (e: EventFrame) => void; events: EventFrame[] } {
   const events: EventFrame[] = [];
-  return { emit: e => events.push(e), events };
+  return { emit: (e) => events.push(e), events };
 }
 
 /** Controls only child I/O and exit timing; Supervisor still owns admission. */
@@ -279,19 +255,21 @@ class ControlledRuntime extends EventEmitter {
   }
 }
 
-function makeSupervisor(opts: {
-  driverArgs?: string[];
-  sigtermToSigkillMs?: number;
-  sigkillTimeoutMs?: number;
-  spawnFn?: (b: string, a: ReadonlyArray<string>, o: SpawnOptions) => ChildProcess;
-  daemonInstanceId?: string;
-  runtimePidRootDir?: string | null;
-  runtimeStartResolveDeps?: ReturnType<typeof testRuntimeStartResolveDeps>;
-  emitRawRuntimeOutput?: boolean;
-  logger?: DaemonLogger;
-  /** Observe the DriverSpawnContext the supervisor hands to buildArgs. */
-  onSpawnCtx?: (ctx: DriverSpawnContext) => void;
-} = {}): {
+function makeSupervisor(
+  opts: {
+    driverArgs?: string[];
+    sigtermToSigkillMs?: number;
+    sigkillTimeoutMs?: number;
+    spawnFn?: (b: string, a: ReadonlyArray<string>, o: SpawnOptions) => ChildProcess;
+    daemonInstanceId?: string;
+    runtimePidRootDir?: string | null;
+    runtimeStartResolveDeps?: ReturnType<typeof testRuntimeStartResolveDeps>;
+    emitRawRuntimeOutput?: boolean;
+    logger?: DaemonLogger;
+    /** Observe the DriverSpawnContext the supervisor hands to buildArgs. */
+    onSpawnCtx?: (ctx: DriverSpawnContext) => void;
+  } = {},
+): {
   supervisor: Supervisor;
   events: EventFrame[];
 } {
@@ -300,7 +278,7 @@ function makeSupervisor(opts: {
   const driver: Driver = opts.onSpawnCtx
     ? {
         ...baseDriver,
-        buildArgs: ctx => {
+        buildArgs: (ctx) => {
           opts.onSpawnCtx!(ctx);
           return baseDriver.buildArgs(ctx);
         },
@@ -310,8 +288,7 @@ function makeSupervisor(opts: {
   // test runner uses so we don't depend on the fixture being chmod +x.
   const realSpawn = spawn;
   const spawnFn =
-    opts.spawnFn ??
-    ((bin, args, options) => realSpawn(execPath, [bin, ...args.slice(1)], options));
+    opts.spawnFn ?? ((bin, args, options) => realSpawn(execPath, [bin, ...args.slice(1)], options));
   const supervisor = new Supervisor({
     emit: spy.emit,
     logger: opts.logger ?? silentLogger(),
@@ -343,11 +320,7 @@ const baseStartParams = {
   }),
 };
 
-async function waitFor(
-  cond: () => boolean,
-  timeoutMs = 2_000,
-  intervalMs = 10,
-): Promise<void> {
+async function waitFor(cond: () => boolean, timeoutMs = 2_000, intervalMs = 10): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (cond()) return;
@@ -363,15 +336,10 @@ async function waitFor(
  * the batch is written to stdin). Tests that then act on the delivered
  * turn must wait for that consumed ack first.
  */
-async function waitForDeliveryConsumed(
-  events: EventFrame[],
-  deliveryId: number,
-): Promise<void> {
+async function waitForDeliveryConsumed(events: EventFrame[], deliveryId: number): Promise<void> {
   await waitFor(() =>
     events.some(
-      e =>
-        e.event === 'runtime_delivery_consumed' &&
-        e.delivery_ids.includes(deliveryId),
+      (e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(deliveryId),
     ),
   );
 }
@@ -385,9 +353,7 @@ async function waitForDeliveryConsumed(
  */
 async function waitForRuntimeReady(events: EventFrame[]): Promise<void> {
   await waitFor(() =>
-    events.some(
-      e => e.event === 'runtime_output' && e.chunk.includes('READY'),
-    ),
+    events.some((e) => e.event === 'runtime_output' && e.chunk.includes('READY')),
   );
 }
 
@@ -396,7 +362,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     const infoRecords: unknown[] = [];
     const logger: DaemonLogger = {
       ...silentLogger(),
-      info: obj => infoRecords.push(obj),
+      info: (obj) => infoRecords.push(obj),
     };
     const { supervisor } = makeSupervisor({ logger });
 
@@ -404,7 +370,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       const res = await supervisor.start(baseStartParams);
       assertStarted(res);
       const attempt = infoRecords.find(
-        record =>
+        (record) =>
           typeof record === 'object' &&
           record !== null &&
           (record as { action?: unknown }).action === 'runtime_spawn_attempt',
@@ -433,7 +399,15 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       });
     } finally {
       await supervisor
-        .stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
+        .stop({
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: 'Conversation0001',
+            agent_id: 'a1',
+          },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
         .catch(() => {});
     }
   });
@@ -463,7 +437,15 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       expect(existsSync(join(bundleDir, 'MEMORY.md'))).toBe(false);
     } finally {
       await supervisor
-        .stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
+        .stop({
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: 'Conversation0001',
+            agent_id: 'a1',
+          },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
         .catch(() => {});
       rmSync(agentsRoot, { recursive: true, force: true });
     }
@@ -496,7 +478,9 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       // verbatim to the API/renderer). It names only the semantic id + kind;
       // the concrete path stays a host-only log diagnostic.
       const err = await supervisor.start(baseStartParams).then(
-        () => { throw new Error('expected start to reject'); },
+        () => {
+          throw new Error('expected start to reject');
+        },
         (e: unknown) => e as { code?: string; message?: string },
       );
       expect(err.code).toBe('workspace_bundle_missing');
@@ -521,9 +505,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       spawnFn: () => fakeChild,
     });
 
-    await expect(supervisor.start(baseStartParams)).rejects.toThrow(
-      /child spawned without a pid/,
-    );
+    await expect(supervisor.start(baseStartParams)).rejects.toThrow(/child spawned without a pid/);
     expect(() => {
       fakeChild.emit('error', new Error('spawn failed after return'));
     }).not.toThrow();
@@ -538,14 +520,14 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     expect(typeof res.started_at).toBe('number');
 
     // After setImmediate ticks, the ready-for-drain event should land.
-    await waitFor(() => events.some(e => e.event === 'runtime_ready_for_drain'));
+    await waitFor(() => events.some((e) => e.event === 'runtime_ready_for_drain'));
 
-    const states = events.filter(e => e.event === 'runtime_state');
+    const states = events.filter((e) => e.event === 'runtime_state');
     const startingStates = states.filter(
-      e => e.event === 'runtime_state' && e.state.status === 'starting',
+      (e) => e.event === 'runtime_state' && e.state.status === 'starting',
     );
     const idleStates = states.filter(
-      e => e.event === 'runtime_state' && e.state.status === 'idle',
+      (e) => e.event === 'runtime_state' && e.state.status === 'idle',
     );
     expect(startingStates.length).toBeGreaterThanOrEqual(1);
     expect(idleStates.length).toBeGreaterThanOrEqual(1);
@@ -606,7 +588,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     const captured: { ctx?: DriverSpawnContext } = {};
     const driver: Driver = {
       ...makeFakeDriver(['--echo-stdin']),
-      buildArgs: ctx => {
+      buildArgs: (ctx) => {
         captured.ctx = ctx;
         promptText = readFileSync(ctx.systemPromptPath, 'utf8');
         return [FIXTURE, '--echo-stdin'];
@@ -618,8 +600,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       logger: silentLogger(),
       driverFor: () => driver,
       resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
-      spawnFn: (bin, args, options) =>
-        spawn(execPath, [bin, ...args.slice(1)], options),
+      spawnFn: (bin, args, options) => spawn(execPath, [bin, ...args.slice(1)], options),
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({
         agentHomeRootDir,
       }),
@@ -629,20 +610,29 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     });
 
     try {
-      const res = await supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        spawn_options: testStartOptions({
-          conversationId: 'Conversation0001',
-          agentId: 'a1',
-        }),
-        delivery_ids: [11],
-        kind: 'message',
-        text: 'startup delivery D2G',
-        deliveries: [{ delivery_id: 11, seq: 11, presentation: testDeliveryPresentation('startup delivery D2G') }],
-      }, { owner: 'test-owner' });
+      const res = await supervisor.deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: 'Conversation0001',
+          target: { conversation_id: 'Conversation0001', workspace: null },
+          agent_id: 'a1',
+          spawn_options: testStartOptions({
+            conversationId: 'Conversation0001',
+            agentId: 'a1',
+          }),
+          delivery_ids: [11],
+          kind: 'message',
+          text: 'startup delivery D2G',
+          deliveries: [
+            {
+              delivery_id: 11,
+              seq: 11,
+              presentation: testDeliveryPresentation('startup delivery D2G'),
+            },
+          ],
+        },
+        { owner: 'test-owner' },
+      );
       expect(res.disposition).toBe('spawning');
       expect(captured.ctx).toBeDefined();
       const ctx = captured.ctx!;
@@ -657,15 +647,9 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       expect(promptText).toContain('Runtime spawn evidence');
       expect(promptText).not.toContain('NOTE_BODY_MUST_NOT_BE_INJECTED');
       expect(promptText).not.toContain('CONSENSUS_D2G');
-      await waitFor(() =>
-        spy.events.some(e => e.event === 'runtime_delivery_consumed'),
-      );
+      await waitFor(() => spy.events.some((e) => e.event === 'runtime_delivery_consumed'));
       expect(
-        spy.events.some(
-          e =>
-            e.event === 'runtime_delivery_consumed' &&
-            e.delivery_ids[0] === 11,
-        ),
+        spy.events.some((e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids[0] === 11),
       ).toBe(true);
       await supervisor.stop({
         runtime_scope: {
@@ -693,7 +677,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
     const childEnvs: Array<NodeJS.ProcessEnv> = [];
     const { supervisor, events } = makeSupervisor({
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir }),
-      onSpawnCtx: ctx => {
+      onSpawnCtx: (ctx) => {
         spawnContexts.push(ctx);
         promptTexts.push(readFileSync(ctx.systemPromptPath, 'utf8'));
       },
@@ -707,27 +691,44 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       sessionScope: 'agent',
     });
     const deliver = (conversationId: string, generation: number, deliveryId: number) =>
-      supervisor.deliver({
-        runtime_generation: generation,
-        conversation_id: conversationId,
-        target: { conversation_id: conversationId, workspace: conversationId === 'Conversation0002' ? { id: 'ws-action', name: 'Action Workspace' } : null },
-        agent_id: 'a1',
-        delivery_ids: [deliveryId],
-        kind: 'message',
-        text: `delivery ${deliveryId}`,
-        deliveries: [{ delivery_id: deliveryId, seq: deliveryId, presentation: testDeliveryPresentation(`delivery ${deliveryId}`) }],
-        spawn_options: options,
-      }, { owner: `owner-${generation}` });
+      supervisor.deliver(
+        {
+          runtime_generation: generation,
+          conversation_id: conversationId,
+          target: {
+            conversation_id: conversationId,
+            workspace:
+              conversationId === 'Conversation0002'
+                ? { id: 'ws-action', name: 'Action Workspace' }
+                : null,
+          },
+          agent_id: 'a1',
+          delivery_ids: [deliveryId],
+          kind: 'message',
+          text: `delivery ${deliveryId}`,
+          deliveries: [
+            {
+              delivery_id: deliveryId,
+              seq: deliveryId,
+              presentation: testDeliveryPresentation(`delivery ${deliveryId}`),
+            },
+          ],
+          spawn_options: options,
+        },
+        { owner: `owner-${generation}` },
+      );
 
     try {
       expect(await deliver('Conversation0001', 1, 11)).toMatchObject({
         disposition: 'spawning',
       });
       await waitForDeliveryConsumed(events, 11);
-      await expect(supervisor.clearSession({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-        runtime_generation: 1,
-      })).resolves.toEqual({ cleared: true });
+      await expect(
+        supervisor.clearSession({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+          runtime_generation: 1,
+        }),
+      ).resolves.toEqual({ cleared: true });
 
       expect(await deliver('Conversation0002', 2, 22)).toMatchObject({
         disposition: 'spawning',
@@ -737,10 +738,7 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       expect(existsSync(join(agentHome, 'conversations'))).toBe(false);
       expect(existsSync(join(agentHome, 'workspaces'))).toBe(false);
       expect(spawnContexts).toHaveLength(2);
-      expect(spawnContexts.map(ctx => ctx.workspacePath)).toEqual([
-        agentHome,
-        agentHome,
-      ]);
+      expect(spawnContexts.map((ctx) => ctx.workspacePath)).toEqual([agentHome, agentHome]);
       expect(promptTexts).toHaveLength(2);
       for (const prompt of promptTexts) {
         expect(prompt).toContain('AGENT_SLOT_ROLE');
@@ -756,11 +754,13 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
         expect(env).not.toHaveProperty('SILVERHAND_CONVERSATION_ID');
       }
     } finally {
-      await supervisor.stop({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-        runtime_generation: 2,
-        mode: 'hard',
-      }).catch(() => {});
+      await supervisor
+        .stop({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+          runtime_generation: 2,
+          mode: 'hard',
+        })
+        .catch(() => {});
       rmSync(dir, { recursive: true, force: true });
     }
   });
@@ -778,15 +778,11 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       const res = await supervisor.start(baseStartParams);
       assertStarted(res);
 
-      const filePath = runtimePidFilePath(
-        runtimePidRootDir,
-        daemonInstanceId,
-        {
-          kind: 'conversation',
-          conversation_id: 'Conversation0001',
-          agent_id: 'a1',
-        },
-      );
+      const filePath = runtimePidFilePath(runtimePidRootDir, daemonInstanceId, {
+        kind: 'conversation',
+        conversation_id: 'Conversation0001',
+        agent_id: 'a1',
+      });
       expect(existsSync(filePath)).toBe(true);
       const record = JSON.parse(readFileSync(filePath, 'utf8'));
       expect(record).toMatchObject({
@@ -802,11 +798,27 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
         cmd: FIXTURE,
       });
 
-      await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+      await supervisor.stop({
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'Conversation0001',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
+      });
       expect(existsSync(filePath)).toBe(false);
     } finally {
       await supervisor
-        ?.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
+        ?.stop({
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: 'Conversation0001',
+            agent_id: 'a1',
+          },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
         .catch(() => {});
       rmSync(dir, { recursive: true, force: true });
     }
@@ -830,9 +842,9 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
   it('rejects a runtime_start custody generation that differs from the live handle', async () => {
     const { supervisor } = makeSupervisor();
     await supervisor.start({ ...baseStartParams, runtime_generation: 4 });
-    await expect(
-      supervisor.start({ ...baseStartParams, runtime_generation: 5 }),
-    ).rejects.toThrow(/runtime generation mismatch/);
+    await expect(supervisor.start({ ...baseStartParams, runtime_generation: 5 })).rejects.toThrow(
+      /runtime generation mismatch/,
+    );
     await supervisor.stop({
       runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
       runtime_generation: 4,
@@ -858,7 +870,9 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       logger: silentLogger(),
       driverFor: () => makeFakeDriver(),
       resolveRuntime: async () => null,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+      }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     });
     await expect(supervisor.start(baseStartParams)).rejects.toMatchObject({
@@ -886,7 +900,9 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
           },
         }),
         resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version }),
-        runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+        runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+          agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+        }),
         controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       });
       const error = await supervisor.start(baseStartParams).catch((err: unknown) => err);
@@ -902,9 +918,12 @@ describe('Supervisor 3a — spawn / status / phase emit', () => {
       });
     });
 
-    it.each([null, 'garbage', ''])('lets an unknown version (%j) through to spawn', async (version) => {
-      expect((await startWith(version)).spawned).toBe(true);
-    });
+    it.each([null, 'garbage', ''])(
+      'lets an unknown version (%j) through to spawn',
+      async (version) => {
+        expect((await startWith(version)).spawned).toBe(true);
+      },
+    );
 
     it('lets the floor itself through', async () => {
       expect((await startWith(minimum)).spawned).toBe(true);
@@ -1015,9 +1034,7 @@ describe('Supervisor 3a — output pump', () => {
     expect(r.resumed).toBe(false);
     expect(
       events.filter(
-        e =>
-          e.event === 'runtime_output_paused' ||
-          e.event === 'runtime_output_resumed',
+        (e) => e.event === 'runtime_output_paused' || e.event === 'runtime_output_resumed',
       ),
     ).toEqual([]);
   });
@@ -1027,11 +1044,12 @@ describe('Supervisor 3a — hard stop / exit', () => {
   it('hard stop sends SIGTERM, child exits, runtime_state(failed, stopped) + runtime_exit(intentional=true) land', async () => {
     const { supervisor, events } = makeSupervisor();
     await supervisor.start(baseStartParams);
-    await waitFor(() => events.some(e => e.event === 'runtime_ready_for_drain'));
+    await waitFor(() => events.some((e) => e.event === 'runtime_ready_for_drain'));
 
     const stopRes = await supervisor.stop({
       runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-      runtime_generation: 1, mode: 'hard',
+      runtime_generation: 1,
+      mode: 'hard',
     });
     expect(stopRes).toMatchObject({ mode: 'hard', stopped: true });
     // exit_code may be null on Linux where SIGTERM-killed children
@@ -1041,7 +1059,7 @@ describe('Supervisor 3a — hard stop / exit', () => {
       expect(stopRes.exit_code === null || stopRes.exit_code === 143).toBe(true);
     }
 
-    const exitEvt = events.find(e => e.event === 'runtime_exit');
+    const exitEvt = events.find((e) => e.event === 'runtime_exit');
     expect(exitEvt).toBeDefined();
     if (exitEvt && exitEvt.event === 'runtime_exit') {
       expect(exitEvt.intentional).toBe(true);
@@ -1051,9 +1069,7 @@ describe('Supervisor 3a — hard stop / exit', () => {
     // Cindy `GMbjEkGUHrB1BBMe` `stopped` maps to status:'failed' (not
     // 'idle') — the agent did NOT complete cleanly, it was forcibly
     // terminated. Only `replied|turn_ended|replaced` map to idle.
-    const lastState = [...events]
-      .reverse()
-      .find(e => e.event === 'runtime_state');
+    const lastState = [...events].reverse().find((e) => e.event === 'runtime_state');
     expect(lastState).toBeDefined();
     if (lastState && lastState.event === 'runtime_state') {
       expect(lastState.state.terminalReason).toBe('stopped');
@@ -1070,7 +1086,8 @@ describe('Supervisor 3a — hard stop / exit', () => {
     const { supervisor } = makeSupervisor();
     const res = await supervisor.stop({
       runtime_scope: { kind: 'conversation', conversation_id: 'ConversationX001', agent_id: 'aX' },
-      runtime_generation: 1, mode: 'hard',
+      runtime_generation: 1,
+      mode: 'hard',
     });
     expect(res).toEqual({ mode: 'hard', stopped: false, exit_code: null });
   });
@@ -1087,13 +1104,14 @@ describe('Supervisor 3a — hard stop / exit', () => {
     // SIGTERM lands during node's startup window and kills the
     // process before the trap takes effect.
     await waitFor(() =>
-      events.some(e => e.event === 'runtime_output' && e.chunk.includes('READY')),
+      events.some((e) => e.event === 'runtime_output' && e.chunk.includes('READY')),
     );
 
     const t0 = Date.now();
     const stopRes = await supervisor.stop({
       runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-      runtime_generation: 1, mode: 'hard',
+      runtime_generation: 1,
+      mode: 'hard',
     });
     const elapsed = Date.now() - t0;
 
@@ -1131,11 +1149,8 @@ describe('Supervisor 3a — hard stop / exit', () => {
       }
     }
     const stub = new StubChild();
-    const spawnFn = (
-      _b: string,
-      _a: ReadonlyArray<string>,
-      _o: SpawnOptions,
-    ): ChildProcess => stub as unknown as ChildProcess;
+    const spawnFn = (_b: string, _a: ReadonlyArray<string>, _o: SpawnOptions): ChildProcess =>
+      stub as unknown as ChildProcess;
 
     const { supervisor, events } = makeSupervisor({
       sigtermToSigkillMs: 30,
@@ -1147,7 +1162,8 @@ describe('Supervisor 3a — hard stop / exit', () => {
     const t0 = Date.now();
     const stopRes = await supervisor.stop({
       runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-      runtime_generation: 1, mode: 'hard',
+      runtime_generation: 1,
+      mode: 'hard',
     });
     const elapsed = Date.now() - t0;
 
@@ -1161,12 +1177,12 @@ describe('Supervisor 3a — hard stop / exit', () => {
     const snap = supervisor.status({});
     expect(snap.runtimes[0]?.phase).toBe('draining');
     expect(snap.runtimes[0]?.pid).toBe(999_999);
-    expect(events.some(e => e.event === 'runtime_exit')).toBe(false);
+    expect(events.some((e) => e.event === 'runtime_exit')).toBe(false);
 
     // Cleanup: pretend the child finally exits so the supervisor's
     // primary listener fires and we leave no dangling handles.
     stub.emit('exit', null, 'SIGKILL');
-    await waitFor(() => events.some(e => e.event === 'runtime_exit'));
+    await waitFor(() => events.some((e) => e.event === 'runtime_exit'));
   });
 
   it('oneShot clean exit code 0 (no stop request) marks intentional=false; reason maps to replied → status:idle (Cindy `5nruk1IPaEHSab0T` B4)', async () => {
@@ -1189,29 +1205,20 @@ describe('Supervisor 3a — hard stop / exit', () => {
       // Sleep briefly then voluntarily exit(0). The supervisor never
       // gets a stop() call — this exercises the clean-exit path.
       driverArgs: ['--sleep', '50'],
-      driverOverride: base => ({ ...base, oneShot: true }),
+      driverOverride: (base) => ({ ...base, oneShot: true }),
     });
     await supervisor.start(baseStartParams);
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_exit'),
-      3_000,
-    );
-    const exitEvt = events.find(e => e.event === 'runtime_exit');
-    expect(exitEvt && exitEvt.event === 'runtime_exit' && exitEvt.intentional).toBe(
-      false,
-    );
+    await waitFor(() => events.some((e) => e.event === 'runtime_exit'), 3_000);
+    const exitEvt = events.find((e) => e.event === 'runtime_exit');
+    expect(exitEvt && exitEvt.event === 'runtime_exit' && exitEvt.intentional).toBe(false);
     if (exitEvt && exitEvt.event === 'runtime_exit') {
       expect(exitEvt.code).toBe(0);
     }
-    const lastState = [...events]
-      .reverse()
-      .find(e => e.event === 'runtime_state');
+    const lastState = [...events].reverse().find((e) => e.event === 'runtime_state');
     expect(lastState && lastState.event === 'runtime_state' && lastState.state.terminalReason).toBe(
       'replied',
     );
-    expect(lastState && lastState.event === 'runtime_state' && lastState.state.status).toBe(
-      'idle',
-    );
+    expect(lastState && lastState.event === 'runtime_state' && lastState.state.status).toBe('idle');
   });
 
   it('voluntary child exit with NON-ZERO code marks intentional=false; reason maps to crashed → status:failed (Cindy `5nruk1IPaEHSab0T` B4)', async () => {
@@ -1236,28 +1243,21 @@ describe('Supervisor 3a — hard stop / exit', () => {
       }
     }
     const stub = new CodeExitStub();
-    const spawnFn = (
-      _b: string,
-      _a: ReadonlyArray<string>,
-      _o: SpawnOptions,
-    ): ChildProcess => stub as unknown as ChildProcess;
+    const spawnFn = (_b: string, _a: ReadonlyArray<string>, _o: SpawnOptions): ChildProcess =>
+      stub as unknown as ChildProcess;
 
     const { supervisor, events } = makeSupervisor({ spawnFn });
     await supervisor.start(baseStartParams);
     // Simulate a non-zero exit (e.g. binary crash on uncaught throw).
     stub.emit('exit', 137, null);
-    await waitFor(() => events.some(e => e.event === 'runtime_exit'));
+    await waitFor(() => events.some((e) => e.event === 'runtime_exit'));
 
-    const exitEvt = events.find(e => e.event === 'runtime_exit');
-    expect(exitEvt && exitEvt.event === 'runtime_exit' && exitEvt.intentional).toBe(
-      false,
-    );
+    const exitEvt = events.find((e) => e.event === 'runtime_exit');
+    expect(exitEvt && exitEvt.event === 'runtime_exit' && exitEvt.intentional).toBe(false);
     if (exitEvt && exitEvt.event === 'runtime_exit') {
       expect(exitEvt.code).toBe(137);
     }
-    const lastState = [...events]
-      .reverse()
-      .find(e => e.event === 'runtime_state');
+    const lastState = [...events].reverse().find((e) => e.event === 'runtime_state');
     expect(lastState && lastState.event === 'runtime_state' && lastState.state.terminalReason).toBe(
       'crashed',
     );
@@ -1293,19 +1293,14 @@ describe('Supervisor 3a — hard stop / exit', () => {
       }
     }
     const stub = new TailFlushStub();
-    const spawnFn = (
-      _b: string,
-      _a: ReadonlyArray<string>,
-      _o: SpawnOptions,
-    ): ChildProcess => stub as unknown as ChildProcess;
+    const spawnFn = (_b: string, _a: ReadonlyArray<string>, _o: SpawnOptions): ChildProcess =>
+      stub as unknown as ChildProcess;
 
     const { driver } = makeProgrammableDriver();
     // Pre-arm parseLine to return a session_init for whatever line
     // the supervisor hands it.
     driver.parseLine = (line: string) =>
-      line === 'final-line'
-        ? [{ kind: 'session_init', sessionId: 'sess-tail' }]
-        : [];
+      line === 'final-line' ? [{ kind: 'session_init', sessionId: 'sess-tail' }] : [];
 
     const spy = makeEmitSpy();
     const supervisor = new Supervisor({
@@ -1314,7 +1309,9 @@ describe('Supervisor 3a — hard stop / exit', () => {
       driverFor: () => driver,
       resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+      }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
@@ -1325,15 +1322,15 @@ describe('Supervisor 3a — hard stop / exit', () => {
     stub.stdout.emit('data', 'final-line');
     // Now exit cleanly.
     stub.emit('exit', 0, null);
-    await waitFor(() => spy.events.some(e => e.event === 'runtime_exit'));
+    await waitFor(() => spy.events.some((e) => e.event === 'runtime_exit'));
 
     const idxParsed = spy.events.findIndex(
-      e =>
+      (e) =>
         e.event === 'runtime_parsed_event' &&
         e.parsed.kind === 'session_init' &&
         e.parsed.sessionId === 'sess-tail',
     );
-    const idxExit = spy.events.findIndex(e => e.event === 'runtime_exit');
+    const idxExit = spy.events.findIndex((e) => e.event === 'runtime_exit');
     expect(idxParsed).toBeGreaterThanOrEqual(0);
     expect(idxExit).toBeGreaterThanOrEqual(0);
     // Flush happens before phase='exited' is set + before the
@@ -1347,11 +1344,11 @@ describe('Supervisor 3a — stopAll / closeActivityLog', () => {
   it('shutdown drains once, joins concurrent callers and rejects later starts', async () => {
     const { supervisor, events } = makeSupervisor();
     await supervisor.start(baseStartParams);
-    await waitFor(() => events.some(e => e.event === 'runtime_ready_for_drain'));
+    await waitFor(() => events.some((e) => e.event === 'runtime_ready_for_drain'));
     const first = supervisor.shutdown();
     expect(supervisor.shutdown()).toBe(first);
     await first;
-    expect(supervisor.status({}).runtimes.every(r => r.phase === 'exited')).toBe(true);
+    expect(supervisor.status({}).runtimes.every((r) => r.phase === 'exited')).toBe(true);
     await expect(supervisor.start(baseStartParams)).rejects.toThrow('shutting down');
   });
 
@@ -1361,7 +1358,9 @@ describe('Supervisor 3a — stopAll / closeActivityLog', () => {
     );
     const { supervisor } = makeSupervisor({
       spawnFn,
-      onSpawnCtx: () => { void supervisor.shutdown(); },
+      onSpawnCtx: () => {
+        void supervisor.shutdown();
+      },
     });
     await expect(supervisor.start(baseStartParams)).rejects.toThrow('shutting down');
     await supervisor.shutdown();
@@ -1380,16 +1379,13 @@ describe('Supervisor 3a — stopAll / closeActivityLog', () => {
         agentId: 'a2',
       }),
     });
-    await waitFor(
-      () =>
-        events.filter(e => e.event === 'runtime_ready_for_drain').length >= 2,
-    );
+    await waitFor(() => events.filter((e) => e.event === 'runtime_ready_for_drain').length >= 2);
 
     const res = await supervisor.stopAll({});
     expect(res.stopped_count).toBe(2);
 
     const snap = supervisor.status({});
-    expect(snap.runtimes.every(r => r.phase === 'exited')).toBe(true);
+    expect(snap.runtimes.every((r) => r.phase === 'exited')).toBe(true);
   });
 
   it('closeActivityLog returns flushed:true (host has no activity log to flush in 3a)', () => {
@@ -1415,31 +1411,28 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
       agentId: 'a1',
       sessionScope: 'agent',
     });
-    const deliver = (
-      conversationId: string,
-      deliveryId: number,
-      seq: number,
-      body: string,
-    ) => {
+    const deliver = (conversationId: string, deliveryId: number, seq: number, body: string) => {
       const presentation = testDeliveryPresentation(body);
-      return supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: conversationId,
-        target: { conversation_id: conversationId, workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [deliveryId],
-        deliveries: [{
-          delivery_id: deliveryId,
-          seq,
-          presentation,
-        }],
-        kind: 'message',
-        text: composeRuntimeDeliveryPresentation(
-          [presentation],
-          'silverhand message send',
-        ),
-        spawn_options: agentOptions,
-      }, { owner: 'agent-slot-owner' });
+      return supervisor.deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: conversationId,
+          target: { conversation_id: conversationId, workspace: null },
+          agent_id: 'a1',
+          delivery_ids: [deliveryId],
+          deliveries: [
+            {
+              delivery_id: deliveryId,
+              seq,
+              presentation,
+            },
+          ],
+          kind: 'message',
+          text: composeRuntimeDeliveryPresentation([presentation], 'silverhand message send'),
+          spawn_options: agentOptions,
+        },
+        { owner: 'agent-slot-owner' },
+      );
     };
 
     try {
@@ -1453,28 +1446,37 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
       await waitForDeliveryConsumed(events, 202);
       await waitFor(() =>
         events.some(
-            event => event.event === 'runtime_output'
-            && event.chunk.includes('second target'),
+          (event) => event.event === 'runtime_output' && event.chunk.includes('second target'),
         ),
       );
 
-      expect(supervisor.pauseOutput({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-      })).toEqual({ paused: true });
-      expect(supervisor.resumeOutput({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-      })).toEqual({ resumed: true });
-      expect(events.filter(
-        (event): event is Extract<
-          EventFrame,
-          { event: 'runtime_output_paused' | 'runtime_output_resumed' }
-        > => event.event === 'runtime_output_paused'
-          || event.event === 'runtime_output_resumed',
-      ).map(event => ({
-        event: event.event,
-        scope: event.runtime_scope,
-        focusedConversationId: event.conversation_id,
-      }))).toEqual([
+      expect(
+        supervisor.pauseOutput({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        }),
+      ).toEqual({ paused: true });
+      expect(
+        supervisor.resumeOutput({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+        }),
+      ).toEqual({ resumed: true });
+      expect(
+        events
+          .filter(
+            (
+              event,
+            ): event is Extract<
+              EventFrame,
+              { event: 'runtime_output_paused' | 'runtime_output_resumed' }
+            > =>
+              event.event === 'runtime_output_paused' || event.event === 'runtime_output_resumed',
+          )
+          .map((event) => ({
+            event: event.event,
+            scope: event.runtime_scope,
+            focusedConversationId: event.conversation_id,
+          })),
+      ).toEqual([
         {
           event: 'runtime_output_paused',
           scope: { kind: 'agent', agent_id: 'a1' },
@@ -1499,11 +1501,13 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
         (event): event is Extract<EventFrame, { event: 'runtime_delivery_consumed' }> =>
           event.event === 'runtime_delivery_consumed',
       );
-      expect(consumed.map(event => ({
-        conversationId: event.conversation_id,
-        deliveryIds: event.delivery_ids,
-        scope: event.runtime_scope,
-      }))).toEqual([
+      expect(
+        consumed.map((event) => ({
+          conversationId: event.conversation_id,
+          deliveryIds: event.delivery_ids,
+          scope: event.runtime_scope,
+        })),
+      ).toEqual([
         {
           conversationId: 'Conversation0001',
           deliveryIds: [101],
@@ -1520,7 +1524,7 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
           (event): event is Extract<EventFrame, { event: 'runtime_output' }> =>
             event.event === 'runtime_output',
         )
-        .map(event => event.chunk)
+        .map((event) => event.chunk)
         .join('');
       expect(output).toContain('first target');
       expect(output).toContain('second target');
@@ -1537,11 +1541,13 @@ describe('Supervisor 3b — deliver WRITE arm writes payload to stdin', () => {
       expect(lastDeliveredSeqPath).toBeDefined();
       expect(readFileSync(lastDeliveredSeqPath!, 'utf8')).toBe('1\n');
     } finally {
-      await supervisor.stop({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-        runtime_generation: 1,
-        mode: 'hard',
-      }).catch(() => {});
+      await supervisor
+        .stop({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
+        .catch(() => {});
     }
   });
 
@@ -1611,18 +1617,28 @@ describe('Supervisor 3b — clearSession behavior', () => {
     });
     await supervisor.start({ ...baseStartParams, runtime_generation: 2 });
 
-    await expect(supervisor.stop({
-      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-      runtime_generation: 1,
-      mode: 'hard',
-    })).resolves.toEqual({ mode: 'hard', stopped: false, exit_code: null });
-    await expect(supervisor.clearSession({
-      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-      runtime_generation: 1,
-    })).resolves.toEqual({ cleared: false });
-    expect(supervisor.status({}).runtimes).toMatchObject([
-      { runtime_generation: 2 },
-    ]);
+    await expect(
+      supervisor.stop({
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'Conversation0001',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
+      }),
+    ).resolves.toEqual({ mode: 'hard', stopped: false, exit_code: null });
+    await expect(
+      supervisor.clearSession({
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'Conversation0001',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+      }),
+    ).resolves.toEqual({ cleared: false });
+    expect(supervisor.status({}).runtimes).toMatchObject([{ runtime_generation: 2 }]);
 
     await supervisor.stop({
       runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
@@ -1645,7 +1661,7 @@ describe('Supervisor 3b — clearSession behavior', () => {
       runtime_generation: 1,
     });
     expect(hit).toEqual({ cleared: true });
-    expect(events.some(e => e.event === 'runtime_exit')).toBe(true);
+    expect(events.some((e) => e.event === 'runtime_exit')).toBe(true);
   });
 });
 
@@ -1680,7 +1696,7 @@ function makeProgrammableDriver(
     initPreProtocolCapMs: 5 * 60_000,
     initPostProtocolMs: 60_000,
     buildArgs: () => [FIXTURE, '--echo-stdin', ...extraArgs],
-    applyEnv: env => ({ ...env }),
+    applyEnv: (env) => ({ ...env }),
     // Option A v2 (Cindy `UMGu36zoTDVuKWXi`): daemon calls
     // encodeStdinMessage directly. A null return surfaces as
     // `driver_refused`, which would break tests that exercise the
@@ -1695,32 +1711,34 @@ function makeProgrammableDriver(
     },
     classifyInitProgress: () => null,
   };
-  return { driver, setNextParse: events => (next = events) };
+  return { driver, setNextParse: (events) => (next = events) };
 }
 
-function makeSupervisorWithDriver(driver: Driver, opts: {
-  sigtermToSigkillMs?: number;
-  sigkillTimeoutMs?: number;
-  emitRawRuntimeOutput?: boolean;
-  logger?: DaemonLogger;
-} = {}): {
+function makeSupervisorWithDriver(
+  driver: Driver,
+  opts: {
+    sigtermToSigkillMs?: number;
+    sigkillTimeoutMs?: number;
+    emitRawRuntimeOutput?: boolean;
+    logger?: DaemonLogger;
+  } = {},
+): {
   supervisor: Supervisor;
   events: EventFrame[];
 } {
   const spy = makeEmitSpy();
   const realSpawn = spawn;
-  const spawnFn = (
-    bin: string,
-    args: ReadonlyArray<string>,
-    options: SpawnOptions,
-  ): ChildProcess => realSpawn(execPath, [bin, ...args.slice(1)], options);
+  const spawnFn = (bin: string, args: ReadonlyArray<string>, options: SpawnOptions): ChildProcess =>
+    realSpawn(execPath, [bin, ...args.slice(1)], options);
   const supervisor = new Supervisor({
     emit: spy.emit,
     logger: opts.logger ?? silentLogger(),
     driverFor: () => driver,
     resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
     spawnFn,
-    runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+    runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+      agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+    }),
     controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     emitRawRuntimeOutput: opts.emitRawRuntimeOutput ?? true,
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
@@ -1747,7 +1765,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
 
     await waitFor(() =>
       events.some(
-        e =>
+        (e) =>
           e.event === 'runtime_parsed_event' &&
           e.parsed.kind === 'session_init' &&
           e.parsed.sessionId === 'sess-abc',
@@ -1755,7 +1773,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     );
     expect(
       events.some(
-        e =>
+        (e) =>
           e.event === 'runtime_parsed_event' &&
           e.parsed.kind === 'text' &&
           e.parsed.text === 'hi from driver',
@@ -1763,12 +1781,14 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     ).toBe(true);
     // Raw `runtime_output` MUST also carry the same bytes (Cindy:
     // parse fanout is a sidecar, not a replacement for raw output).
-    expect(
-      events.some(
-        e => e.event === 'runtime_output' && e.chunk.includes('READY'),
-      ),
-    ).toBe(true);
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    expect(events.some((e) => e.event === 'runtime_output' && e.chunk.includes('READY'))).toBe(
+      true,
+    );
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('correlates runtime lifecycle frames to the minted payload uuid end-to-end (#task:1557)', async () => {
@@ -1796,17 +1816,22 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
 
     // Delivery #1: the supervisor mints a uuid for the lifecycle-capable
     // driver and hands it to the encoder.
-    await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [21],
-      kind: 'message',
-      text: 'first payload',
-      deliveries: [{ delivery_id: 21, seq: 21, presentation: testDeliveryPresentation('first payload') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [21],
+        kind: 'message',
+        text: 'first payload',
+        deliveries: [
+          { delivery_id: 21, seq: 21, presentation: testDeliveryPresentation('first payload') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     await waitForDeliveryConsumed(events, 21);
     const uuidA = captured[0];
     expect(uuidA).toBeTruthy();
@@ -1818,23 +1843,26 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
       { kind: 'input_lifecycle', commandUuid: uuidA!, state: 'started' },
       { kind: 'input_lifecycle', commandUuid: uuidA!, state: 'completed' },
     ]);
-    await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [22],
-      kind: 'message',
-      text: 'second payload',
-      deliveries: [{ delivery_id: 22, seq: 22, presentation: testDeliveryPresentation('second payload') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
-    await waitFor(() =>
-      logs.some(
-        l => l['action'] === 'input_lifecycle' && l['state'] === 'completed',
-      ),
+    await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [22],
+        kind: 'message',
+        text: 'second payload',
+        deliveries: [
+          { delivery_id: 22, seq: 22, presentation: testDeliveryPresentation('second payload') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
     );
-    const lifecycleLogs = logs.filter(l => l['action'] === 'input_lifecycle');
+    await waitFor(() =>
+      logs.some((l) => l['action'] === 'input_lifecycle' && l['state'] === 'completed'),
+    );
+    const lifecycleLogs = logs.filter((l) => l['action'] === 'input_lifecycle');
     expect(lifecycleLogs).toHaveLength(3);
     for (const entry of lifecycleLogs) {
       expect(entry['command_uuid']).toBe(uuidA);
@@ -1844,30 +1872,33 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
 
     // completed pruned the mapping: replaying `started` for uuidA on
     // delivery #3's echo must log correlated:false.
-    setNextParse([
-      { kind: 'input_lifecycle', commandUuid: uuidA!, state: 'started' },
-    ]);
-    await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [23],
-      kind: 'message',
-      text: 'third payload',
-      deliveries: [{ delivery_id: 23, seq: 23, presentation: testDeliveryPresentation('third payload') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    setNextParse([{ kind: 'input_lifecycle', commandUuid: uuidA!, state: 'started' }]);
+    await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [23],
+        kind: 'message',
+        text: 'third payload',
+        deliveries: [
+          { delivery_id: 23, seq: 23, presentation: testDeliveryPresentation('third payload') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     await waitFor(() =>
       logs.some(
-        l =>
+        (l) =>
           l['action'] === 'input_lifecycle' &&
           l['state'] === 'started' &&
           l['correlated'] === false,
       ),
     );
     const uncorrelated = logs.find(
-      l => l['action'] === 'input_lifecycle' && l['correlated'] === false,
+      (l) => l['action'] === 'input_lifecycle' && l['correlated'] === false,
     );
     expect(uncorrelated?.['delivery_ids']).toBeNull();
 
@@ -1875,20 +1906,27 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     // transition of their own — the three lifecycle frames add exactly
     // nothing on top of the delivery that preceded them.
     expect(
-      events.some(
-        e => e.event === 'runtime_state' && e.state?.status === 'tool_running',
-      ),
+      events.some((e) => e.event === 'runtime_state' && e.state?.status === 'tool_running'),
     ).toBe(false);
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('parsed events drive AgentRunState transitions (thinking → tool_running → thinking → idle)', async () => {
     const { driver } = makeProgrammableDriver([
-      '--emit-line', 'A',
-      '--emit-line', 'B',
-      '--emit-line', 'C',
-      '--emit-line', 'D',
-      '--emit-line', 'E',
+      '--emit-line',
+      'A',
+      '--emit-line',
+      'B',
+      '--emit-line',
+      'C',
+      '--emit-line',
+      'D',
+      '--emit-line',
+      'E',
     ]);
     const { supervisor, events } = makeSupervisorWithDriver(driver);
     // 6 stdout lines arrive: READY, A, B, C, D, E. The first call
@@ -1896,30 +1934,31 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     // lifecycle. step beyond the sequence returns [].
     let step = 0;
     const sequence: ParsedEvent[][] = [
-      [],                                                  // READY (no-op)
-      [{ kind: 'thinking', text: 'pondering' }],          // A → thinking
-      [{ kind: 'tool_call', name: 'Bash', input: {} }],   // B → tool_running(Bash)
+      [], // READY (no-op)
+      [{ kind: 'thinking', text: 'pondering' }], // A → thinking
+      [{ kind: 'tool_call', name: 'Bash', input: {} }], // B → tool_running(Bash)
       [{ kind: 'tool_output', name: 'Bash', outcome: 'success' }], // C → thinking (outstanding=0)
-      [{ kind: 'text', text: 'hello' }],                   // D → text snippet, still thinking
-      [{ kind: 'turn_end' }],                              // E → idle (turn_ended)
+      [{ kind: 'text', text: 'hello' }], // D → text snippet, still thinking
+      [{ kind: 'turn_end' }], // E → idle (turn_ended)
     ];
     driver.parseLine = () => sequence[step++] ?? [];
 
     await supervisor.start(baseStartParams);
 
-    await waitFor(() =>
-      events.some(
-        e =>
-          e.event === 'runtime_state' &&
-          e.state.status === 'idle' &&
-          e.state.terminalReason === 'turn_ended',
-      ),
+    await waitFor(
+      () =>
+        events.some(
+          (e) =>
+            e.event === 'runtime_state' &&
+            e.state.status === 'idle' &&
+            e.state.terminalReason === 'turn_ended',
+        ),
       3_000,
     );
 
     const statusSeq = events
-      .filter(e => e.event === 'runtime_state')
-      .map(e => (e.event === 'runtime_state' ? e.state.status : ''));
+      .filter((e) => e.event === 'runtime_state')
+      .map((e) => (e.event === 'runtime_state' ? e.state.status : ''));
     // Must contain the lifecycle in order; allow other status emits
     // (starting, idle, etc.) interleaved.
     const required = ['thinking', 'tool_running', 'thinking', 'idle'];
@@ -1931,7 +1970,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     expect(cursor).toBe(required.length);
 
     const snippetState = events.find(
-      e =>
+      (e) =>
         e.event === 'runtime_state' &&
         e.state.activitySnippet === 'pondering' &&
         e.state.activitySnippetKind === 'thinking',
@@ -1939,7 +1978,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     expect(snippetState).toBeDefined();
 
     const textSnippetState = events.find(
-      e =>
+      (e) =>
         e.event === 'runtime_state' &&
         e.state.activitySnippet === 'hello' &&
         e.state.activitySnippetKind === 'text',
@@ -1947,19 +1986,17 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     expect(textSnippetState).toBeDefined();
 
     const toolState = events.find(
-      e =>
+      (e) =>
         e.event === 'runtime_state' &&
         e.state.status === 'tool_running' &&
         e.state.detail === 'Bash',
     );
     expect(
-      toolState &&
-        toolState.event === 'runtime_state' &&
-        toolState.state.toolCallCounts,
+      toolState && toolState.event === 'runtime_state' && toolState.state.toolCallCounts,
     ).toEqual({ Bash: 1 });
 
     const postToolThinking = events.find(
-      e =>
+      (e) =>
         e.event === 'runtime_state' &&
         e.state.status === 'thinking' &&
         e.state.toolCallCounts?.Bash === 1,
@@ -1968,29 +2005,33 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
 
     const lastIdle = [...events]
       .reverse()
-      .find(
-        e => e.event === 'runtime_state' && e.state.status === 'idle',
-      );
-    expect(
-      lastIdle &&
-        lastIdle.event === 'runtime_state' &&
-        lastIdle.state.terminalReason,
-    ).toBe('turn_ended');
+      .find((e) => e.event === 'runtime_state' && e.state.status === 'idle');
+    expect(lastIdle && lastIdle.event === 'runtime_state' && lastIdle.state.terminalReason).toBe(
+      'turn_ended',
+    );
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('a tool_call_input refinement is forwarded but touches NO run state: counts stay at one call and a single tool_output still ends the tool (#task:2101)', async () => {
     const { driver } = makeProgrammableDriver([
-      '--emit-line', 'A',
-      '--emit-line', 'B',
-      '--emit-line', 'C',
-      '--emit-line', 'D',
+      '--emit-line',
+      'A',
+      '--emit-line',
+      'B',
+      '--emit-line',
+      'C',
+      '--emit-line',
+      'D',
     ]);
     const { supervisor, events } = makeSupervisorWithDriver(driver);
     let step = 0;
     const sequence: ParsedEvent[][] = [
-      [],                                                   // READY (no-op)
+      [], // READY (no-op)
       [{ kind: 'tool_call', name: 'Bash', input: { cwd: '/w' } }],
       // The late params for the SAME call. If this were counted as a call,
       // `toolCallCounts.Bash` would reach 2 and `outstandingToolUses` 2 —
@@ -2003,13 +2044,14 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
 
     await supervisor.start(baseStartParams);
 
-    await waitFor(() =>
-      events.some(
-        e =>
-          e.event === 'runtime_state' &&
-          e.state.status === 'idle' &&
-          e.state.terminalReason === 'turn_ended',
-      ),
+    await waitFor(
+      () =>
+        events.some(
+          (e) =>
+            e.event === 'runtime_state' &&
+            e.state.status === 'idle' &&
+            e.state.terminalReason === 'turn_ended',
+        ),
       3_000,
     );
 
@@ -2017,7 +2059,7 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     // real runtime output, it just is not run-state evidence.
     expect(
       events.some(
-        e =>
+        (e) =>
           e.event === 'runtime_parsed_event' &&
           e.parsed.kind === 'tool_call_input' &&
           e.parsed.toolCallId === 't1',
@@ -2034,14 +2076,18 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
     // One `tool_output` was enough to close the tool: outstanding was never
     // double-incremented.
     const backToThinking = events.find(
-      e =>
+      (e) =>
         e.event === 'runtime_state' &&
         e.state.status === 'thinking' &&
         e.state.toolCallCounts?.Bash === 1,
     );
     expect(backToThinking).toBeDefined();
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('non-fatal parsed errors surface as thinking activity instead of leaving the UI idle', async () => {
@@ -2064,16 +2110,19 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
 
     await waitFor(() =>
       events.some(
-        e =>
+        (e) =>
           e.event === 'runtime_state' &&
           e.state.status === 'thinking' &&
-          e.state.activitySnippet ===
-            'Claude API gateway unreachable; retrying (attempt 1)' &&
+          e.state.activitySnippet === 'Claude API gateway unreachable; retrying (attempt 1)' &&
           e.state.activitySnippetKind === undefined,
       ),
     );
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('a parsed event whose encoded frame exceeds MAX_FRAME_BYTES is downgraded to runtime_parsed_event_dropped (no payload leaked)', async () => {
@@ -2184,20 +2233,29 @@ describe('Supervisor 3b — parse fanout (Cindy `OQCA05pivtB8nSTC` + `C2BZGDbQWf
 //    supervisor just minted for THIS batch.
 describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
   const deliverBatch = (supervisor: Supervisor, id: number) =>
-    supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [id],
-      kind: 'message',
-      text: `payload ${id}`,
-      deliveries: [{ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`payload ${id}`) }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [id],
+        kind: 'message',
+        text: `payload ${id}`,
+        deliveries: [
+          { delivery_id: id, seq: id, presentation: testDeliveryPresentation(`payload ${id}`) },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
 
   const hardStop = (supervisor: Supervisor) =>
-    supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
 
   it('a written batch stays UNCONSUMED on the stdin-write ack alone — no input_lifecycle started ⇒ no runtime_delivery_consumed (regression falsifier)', async () => {
     const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits', 'lifecycle-start');
@@ -2210,8 +2268,12 @@ describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
     };
     const logs: Array<Record<string, unknown>> = [];
     const logger: DaemonLogger = {
-      info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
-      warn: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      info: (f: unknown) => {
+        if (f && typeof f === 'object') logs.push(f as Record<string, unknown>);
+      },
+      warn: (f: unknown) => {
+        if (f && typeof f === 'object') logs.push(f as Record<string, unknown>);
+      },
       error: () => {},
     } as unknown as DaemonLogger;
     const { supervisor, events } = makeSupervisorWithDriver(driver, { logger });
@@ -2225,7 +2287,7 @@ describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
     // The gate recorded the awaiting-admission sub-state for THIS batch.
     await waitFor(() =>
       logs.some(
-        l =>
+        (l) =>
           l['action'] === 'startup_delivery_awaiting_admission' &&
           Array.isArray(l['delivery_ids']) &&
           (l['delivery_ids'] as number[]).includes(77),
@@ -2235,9 +2297,7 @@ describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
     // the write ack. (Pre-#2210 settle-at-write behavior fails HERE.)
     await wait(150);
     expect(
-      events.some(
-        e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(77),
-      ),
+      events.some((e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(77)),
     ).toBe(false);
     await hardStop(supervisor);
   });
@@ -2248,7 +2308,9 @@ describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
     // for THIS write, so the echo replays the real admission proof.
     const baseEncode = driver.encodeStdinMessage.bind(driver);
     driver.encodeStdinMessage = (t, s, o) => {
-      setNextParse([{ kind: 'input_lifecycle', commandUuid: o?.payloadUuid ?? '', state: 'started' }]);
+      setNextParse([
+        { kind: 'input_lifecycle', commandUuid: o?.payloadUuid ?? '', state: 'started' },
+      ]);
       return baseEncode(t, s, o);
     };
     const { supervisor, events } = makeSupervisorWithDriver(driver);
@@ -2266,7 +2328,9 @@ describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
     const { driver, setNextParse } = makeProgrammableDriver([], 'self_inits', 'lifecycle-start');
     const baseEncode = driver.encodeStdinMessage.bind(driver);
     driver.encodeStdinMessage = (t, s, o) => {
-      setNextParse([{ kind: 'input_lifecycle', commandUuid: 'not-the-minted-uuid', state: 'started' }]);
+      setNextParse([
+        { kind: 'input_lifecycle', commandUuid: 'not-the-minted-uuid', state: 'started' },
+      ]);
       return baseEncode(t, s, o);
     };
     const { supervisor, events } = makeSupervisorWithDriver(driver);
@@ -2277,24 +2341,22 @@ describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
     expect(res.disposition).toBe('admitted');
     // The mismatched `started` was parsed & fanned out...
     await waitFor(() =>
-      events.some(
-        e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'input_lifecycle',
-      ),
+      events.some((e) => e.event === 'runtime_parsed_event' && e.parsed.kind === 'input_lifecycle'),
     );
     // ...but it must NOT have opened the gate for delivery 99.
     await wait(100);
     expect(
-      events.some(
-        e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(99),
-      ),
+      events.some((e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(99)),
     ).toBe(false);
     await hardStop(supervisor);
   });
 
   const consumedCount = (events: EventFrame[], id: number) =>
-    events.filter(e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(id)).length;
+    events.filter((e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(id))
+      .length;
   const failedCount = (events: EventFrame[], id: number) =>
-    events.filter(e => e.event === 'runtime_delivery_failed' && e.delivery_ids.includes(id)).length;
+    events.filter((e) => e.event === 'runtime_delivery_failed' && e.delivery_ids.includes(id))
+      .length;
 
   it.each(['success', 'failure'] as const)(
     'early started waits for stdin completion; %s settles the delivery exactly once',
@@ -2362,7 +2424,6 @@ describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
       stub.dispose();
     }
   });
-
 
   // ── P0 exit-vs-stdout-drain (Cindy `dfxZOd5LJ17FibYs`): a pending
   //    lifecycle-start gate's failed/ROLLBACK must wait for the stdout
@@ -2483,7 +2544,7 @@ describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
     expect(failedCount(events, 82)).toBe(1);
     expect(consumedCount(events, 82)).toBe(0);
     const failed = events.find(
-      e => e.event === 'runtime_delivery_failed' && e.delivery_ids.includes(82),
+      (e) => e.event === 'runtime_delivery_failed' && e.delivery_ids.includes(82),
     );
     expect(failed && failed.event === 'runtime_delivery_failed' && failed.reason).toBe(
       'child_exit',
@@ -2556,13 +2617,11 @@ describe('Supervisor 3b — #task:2210 lifecycle-start admission gate', () => {
     stub.emit('exit', 0, null);
     await wait(20);
     const parsedFor84 = () =>
-      events.filter(
-        e => e.event === 'runtime_parsed_event' && e.agent_id === 'a1',
-      ).length;
+      events.filter((e) => e.event === 'runtime_parsed_event' && e.agent_id === 'a1').length;
     const exitCount = () =>
-      events.filter(e => e.event === 'runtime_exit' && e.agent_id === 'a1').length;
+      events.filter((e) => e.event === 'runtime_exit' && e.agent_id === 'a1').length;
     const stateCount = () =>
-      events.filter(e => e.event === 'runtime_state' && e.agent_id === 'a1').length;
+      events.filter((e) => e.event === 'runtime_state' && e.agent_id === 'a1').length;
     const parsedBefore = parsedFor84();
     const exitBefore = exitCount();
     const stateBefore = stateCount();
@@ -2594,45 +2653,44 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
     const { supervisor, events } = makeSupervisor({
       driverArgs: ['--echo-stdin'],
     });
-    await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [101, 102],
-      kind: 'message',
-      text: 'boot batch',
-      deliveries: [
-        { delivery_id: 101, seq: 101, presentation: testDeliveryPresentation('boot batch') },
-        { delivery_id: 102, seq: 102, presentation: testDeliveryPresentation('boot batch') },
-      ],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
-    await waitFor(() => events.some(e => e.event === 'runtime_ready_for_drain'));
+    await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [101, 102],
+        kind: 'message',
+        text: 'boot batch',
+        deliveries: [
+          { delivery_id: 101, seq: 101, presentation: testDeliveryPresentation('boot batch') },
+          { delivery_id: 102, seq: 102, presentation: testDeliveryPresentation('boot batch') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
+    await waitFor(() => events.some((e) => e.event === 'runtime_ready_for_drain'));
 
-    const idxConsumed = events.findIndex(
-      e => e.event === 'runtime_delivery_consumed',
-    );
-    const idxReady = events.findIndex(
-      e => e.event === 'runtime_ready_for_drain',
-    );
+    const idxConsumed = events.findIndex((e) => e.event === 'runtime_delivery_consumed');
+    const idxReady = events.findIndex((e) => e.event === 'runtime_ready_for_drain');
     expect(idxConsumed).toBeGreaterThanOrEqual(0);
     expect(idxReady).toBeGreaterThan(idxConsumed);
 
-    const consumed = events.find(
-      e => e.event === 'runtime_delivery_consumed',
-    );
+    const consumed = events.find((e) => e.event === 'runtime_delivery_consumed');
     if (consumed && consumed.event === 'runtime_delivery_consumed') {
       expect(consumed.delivery_ids).toEqual([101, 102]);
     }
 
     // ready_for_drain must be emitted exactly once.
-    const readyCount = events.filter(
-      e => e.event === 'runtime_ready_for_drain',
-    ).length;
+    const readyCount = events.filter((e) => e.event === 'runtime_ready_for_drain').length;
     expect(readyCount).toBe(1);
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('SPAWN batch gate is cleared even if the child exits before the supervisor writes the batch (no startup_pending leak)', async () => {
@@ -2649,23 +2707,28 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
       driverArgs: ['--sleep', '1'],
     });
     await supervisor
-      .deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [201],
-        kind: 'message',
-        text: 'boot batch',
-        deliveries: [{ delivery_id: 201, seq: 201, presentation: testDeliveryPresentation('boot batch') }],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' })
+      .deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: 'Conversation0001',
+          target: { conversation_id: 'Conversation0001', workspace: null },
+          agent_id: 'a1',
+          delivery_ids: [201],
+          kind: 'message',
+          text: 'boot batch',
+          deliveries: [
+            { delivery_id: 201, seq: 201, presentation: testDeliveryPresentation('boot batch') },
+          ],
+          spawn_options: baseStartParams.options,
+        },
+        { owner: 'test-owner' },
+      )
       .catch(() => {});
     await waitFor(
       () =>
-        events.some(e => e.event === 'runtime_exit') ||
-        events.some(e => e.event === 'runtime_delivery_failed') ||
-        events.some(e => e.event === 'runtime_delivery_consumed'),
+        events.some((e) => e.event === 'runtime_exit') ||
+        events.some((e) => e.event === 'runtime_delivery_failed') ||
+        events.some((e) => e.event === 'runtime_delivery_consumed'),
       3_000,
     );
     // After the dust settles, a deliver must NOT refuse startup_pending
@@ -2673,17 +2736,22 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
     // consume won the race it may be admitted — both are fine. The key
     // invariant Cindy `wuiwdLKrLFyGip_s` locked is the gate cleared,
     // NOT a particular post-clear outcome).
-    const deliverRes = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [202],
-      kind: 'message',
-      text: 'after-death',
-      deliveries: [{ delivery_id: 202, seq: 202, presentation: testDeliveryPresentation('after-death') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const deliverRes = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [202],
+        kind: 'message',
+        text: 'after-death',
+        deliveries: [
+          { delivery_id: 202, seq: 202, presentation: testDeliveryPresentation('after-death') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     if (deliverRes.disposition === 'refused') {
       expect(deliverRes.reason).not.toBe('startup_pending');
     }
@@ -2691,16 +2759,22 @@ describe('Supervisor 3b — deliver SPAWN batch step-0 mutex', () => {
     // If the supervisor took the explicit failed path, verify the
     // delivery_ids round-trip and reason=child_exit (this is the
     // path that runs when the exit handler beats the consume).
-    const failed = events.find(
-      e => e.event === 'runtime_delivery_failed',
-    );
+    const failed = events.find((e) => e.event === 'runtime_delivery_failed');
     if (failed && failed.event === 'runtime_delivery_failed') {
       expect(failed.delivery_ids).toEqual([201]);
       expect(failed.reason).toBe('child_exit');
     }
 
     await supervisor
-      .stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
+      .stop({
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'Conversation0001',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
+      })
       .catch(() => {});
   });
 });
@@ -2720,10 +2794,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
       readonly stderr = new EventEmitter();
       writeResolved = false;
       readonly stdin = {
-        write: (
-          _line: string,
-          cb?: (err?: Error | null) => void,
-        ): boolean => {
+        write: (_line: string, cb?: (err?: Error | null) => void): boolean => {
           // Resolve on next tick so `writeStdinPayload` settles, but
           // the caller can observe state in between.
           setImmediate(() => {
@@ -2742,11 +2813,8 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
       }
     }
     const stub = new ControlledStub();
-    const spawnFn = (
-      _b: string,
-      _a: ReadonlyArray<string>,
-      _o: SpawnOptions,
-    ): ChildProcess => stub as unknown as ChildProcess;
+    const spawnFn = (_b: string, _a: ReadonlyArray<string>, _o: SpawnOptions): ChildProcess =>
+      stub as unknown as ChildProcess;
 
     const { driver } = makeProgrammableDriver([], 'requires_first_message');
     const spy = makeEmitSpy();
@@ -2756,26 +2824,31 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
       driverFor: () => driver,
       resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
       spawnFn,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+      }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
     });
 
-    await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [501, 502],
-      kind: 'message',
-      text: 'boot batch',
-      deliveries: [
-        { delivery_id: 501, seq: 501, presentation: testDeliveryPresentation('boot batch') },
-        { delivery_id: 502, seq: 502, presentation: testDeliveryPresentation('boot batch') },
-      ],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [501, 502],
+        kind: 'message',
+        text: 'boot batch',
+        deliveries: [
+          { delivery_id: 501, seq: 501, presentation: testDeliveryPresentation('boot batch') },
+          { delivery_id: 502, seq: 502, presentation: testDeliveryPresentation('boot batch') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
 
     // Wait for the stdin write to have actually completed (the consume
     // path is async — deliver() returned before the write settled).
@@ -2785,15 +2858,9 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
     // must NOT clear and ready_for_drain must NOT fire.
     await wait(40);
 
-    expect(
-      spy.events.some(e => e.event === 'runtime_delivery_consumed'),
-    ).toBe(false);
-    expect(spy.events.some(e => e.event === 'runtime_ready_for_drain')).toBe(
-      false,
-    );
-    expect(spy.events.some(e => e.event === 'runtime_delivery_failed')).toBe(
-      false,
-    );
+    expect(spy.events.some((e) => e.event === 'runtime_delivery_consumed')).toBe(false);
+    expect(spy.events.some((e) => e.event === 'runtime_ready_for_drain')).toBe(false);
+    expect(spy.events.some((e) => e.event === 'runtime_delivery_failed')).toBe(false);
 
     // #task:1417 Stage 3 — deliver during the write-in-flight window now
     // DEFERS (the handle is `ready` but the first batch's write is parked
@@ -2801,17 +2868,22 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
     // transfers to the daemon's mid-turn queue; [777] flushes once the
     // parked write settles. (Stage 2 refused `startup_pending` here and made
     // the backend re-drive; Stage 3 keeps it, which is strictly better.)
-    const deliverMid = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [777],
-      kind: 'message',
-      text: 'stub',
-      deliveries: [{ delivery_id: 777, seq: 777, presentation: testDeliveryPresentation('stub') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const deliverMid = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [777],
+        kind: 'message',
+        text: 'stub',
+        deliveries: [
+          { delivery_id: 777, seq: 777, presentation: testDeliveryPresentation('stub') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(deliverMid).toEqual({
       disposition: 'deferred',
       pid: expect.any(Number),
@@ -2822,9 +2894,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
     // line; the programmable driver returns whatever its parseLine
     // hook returns. The line content itself is irrelevant — parseLine
     // sees any non-empty line.
-    driver.parseLine = () => [
-      { kind: 'session_init', sessionId: 'sess-deferred' },
-    ];
+    driver.parseLine = () => [{ kind: 'session_init', sessionId: 'sess-deferred' }];
     stub.stdout.emit('data', 'irrelevant-line-content\n');
 
     // After session_init, settle order must be:
@@ -2834,36 +2904,23 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
     // index is later than both consumed and ready — that's a
     // cosmetic ordering and not the invariant. The semantic
     // invariant is `consumed < ready`.)
-    await waitFor(
-      () => spy.events.some(e => e.event === 'runtime_ready_for_drain'),
-      1_000,
-    );
-    const idxConsumed = spy.events.findIndex(
-      e => e.event === 'runtime_delivery_consumed',
-    );
-    const idxReady = spy.events.findIndex(
-      e => e.event === 'runtime_ready_for_drain',
-    );
+    await waitFor(() => spy.events.some((e) => e.event === 'runtime_ready_for_drain'), 1_000);
+    const idxConsumed = spy.events.findIndex((e) => e.event === 'runtime_delivery_consumed');
+    const idxReady = spy.events.findIndex((e) => e.event === 'runtime_ready_for_drain');
     const idxSessionInit = spy.events.findIndex(
-      e =>
-        e.event === 'runtime_parsed_event' &&
-        e.parsed.kind === 'session_init',
+      (e) => e.event === 'runtime_parsed_event' && e.parsed.kind === 'session_init',
     );
     expect(idxSessionInit).toBeGreaterThanOrEqual(0);
     expect(idxConsumed).toBeGreaterThanOrEqual(0);
     expect(idxReady).toBeGreaterThan(idxConsumed);
 
-    const consumed = spy.events.find(
-      e => e.event === 'runtime_delivery_consumed',
-    );
+    const consumed = spy.events.find((e) => e.event === 'runtime_delivery_consumed');
     if (consumed && consumed.event === 'runtime_delivery_consumed') {
       expect(consumed.delivery_ids).toEqual([501, 502]);
     }
 
     // ready_for_drain fires exactly once even with the deferred path.
-    const readyCount = spy.events.filter(
-      e => e.event === 'runtime_ready_for_drain',
-    ).length;
+    const readyCount = spy.events.filter((e) => e.event === 'runtime_ready_for_drain').length;
     expect(readyCount).toBe(1);
 
     // #task:1417 Stage 3 — the deferred [777] flushes once the parked
@@ -2872,25 +2929,28 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B2: deferred SPAWN-batch co
     await waitFor(
       () =>
         spy.events.some(
-          e =>
-            e.event === 'runtime_delivery_consumed' &&
-            e.delivery_ids.includes(777),
+          (e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(777),
         ),
       1_000,
     );
 
     // Deliver after everything settled now succeeds (WRITE arm → admitted).
-    const deliverAfter = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [999],
-      kind: 'message',
-      text: 'stub',
-      deliveries: [{ delivery_id: 999, seq: 999, presentation: testDeliveryPresentation('stub') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const deliverAfter = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [999],
+        kind: 'message',
+        text: 'stub',
+        deliveries: [
+          { delivery_id: 999, seq: 999, presentation: testDeliveryPresentation('stub') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(deliverAfter.disposition).toBe('admitted');
 
     // Cleanup.
@@ -2906,32 +2966,34 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
     // old runState would keep accumulating with a `terminalReason`
     // stuck on it.
     const { driver } = makeProgrammableDriver([
-      '--emit-line', 'A',
-      '--emit-line', 'B',
-      '--emit-line', 'C',
+      '--emit-line',
+      'A',
+      '--emit-line',
+      'B',
+      '--emit-line',
+      'C',
     ]);
     const { supervisor, events } = makeSupervisorWithDriver(driver);
     let step = 0;
     const sequence: ParsedEvent[][] = [
-      [],                                       // READY
-      [{ kind: 'thinking', text: 't1' }],      // A — run 1 starts
-      [{ kind: 'turn_end' }],                   // B — run 1 resolves
-      [{ kind: 'thinking', text: 't2' }],      // C — run 2 starts
+      [], // READY
+      [{ kind: 'thinking', text: 't1' }], // A — run 1 starts
+      [{ kind: 'turn_end' }], // B — run 1 resolves
+      [{ kind: 'thinking', text: 't2' }], // C — run 2 starts
     ];
     driver.parseLine = () => sequence[step++] ?? [];
 
     await supervisor.start(baseStartParams);
     await waitFor(
       () =>
-        events.filter(
-          e => e.event === 'runtime_state' && e.state.status === 'thinking',
-        ).length >= 2,
+        events.filter((e) => e.event === 'runtime_state' && e.state.status === 'thinking').length >=
+        2,
       3_000,
     );
 
     const thinkingStates = events
-      .filter(e => e.event === 'runtime_state' && e.state.status === 'thinking')
-      .map(e => (e.event === 'runtime_state' ? e.state : null!));
+      .filter((e) => e.event === 'runtime_state' && e.state.status === 'thinking')
+      .map((e) => (e.event === 'runtime_state' ? e.state : null!));
     expect(thinkingStates.length).toBeGreaterThanOrEqual(2);
 
     // First and last thinking states belong to different runs.
@@ -2947,9 +3009,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
     // The terminal frame for turn_end carries status:idle (CM rule:
     // turn_ended → idle) and reuses the first run's runId.
     const terminal = events.find(
-      e =>
-        e.event === 'runtime_state' &&
-        e.state.terminalReason === 'turn_ended',
+      (e) => e.event === 'runtime_state' && e.state.terminalReason === 'turn_ended',
     );
     expect(terminal).toBeDefined();
     if (terminal && terminal.event === 'runtime_state') {
@@ -2957,7 +3017,11 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
       expect(terminal.state.runId).toBe(firstThinking.runId);
     }
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('hard stop mid-tool_running emits terminal {status:failed, terminalReason:stopped} reusing the active runId', async () => {
@@ -2971,8 +3035,8 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
     const { supervisor, events } = makeSupervisorWithDriver(driver);
     let step = 0;
     const sequence: ParsedEvent[][] = [
-      [],                                                  // READY
-      [{ kind: 'tool_call', name: 'Bash', input: {} }],   // A → tool_running
+      [], // READY
+      [{ kind: 'tool_call', name: 'Bash', input: {} }], // A → tool_running
     ];
     driver.parseLine = () => sequence[step++] ?? [];
 
@@ -2980,7 +3044,7 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
     await waitFor(
       () =>
         events.some(
-          e =>
+          (e) =>
             e.event === 'runtime_state' &&
             e.state.status === 'tool_running' &&
             e.state.detail === 'Bash',
@@ -2988,29 +3052,26 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
       3_000,
     );
     const toolRunning = events.find(
-      e =>
+      (e) =>
         e.event === 'runtime_state' &&
         e.state.status === 'tool_running' &&
         e.state.detail === 'Bash',
     );
     const inflightRunId =
-      toolRunning && toolRunning.event === 'runtime_state'
-        ? toolRunning.state.runId
-        : null;
+      toolRunning && toolRunning.event === 'runtime_state' ? toolRunning.state.runId : null;
     expect(inflightRunId).toBeTruthy();
 
     await supervisor.stop({
       runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-      runtime_generation: 1, mode: 'hard',
+      runtime_generation: 1,
+      mode: 'hard',
     });
 
     // Find the FIRST terminal `runtime_state` (resolveRun emits one
     // before runtime_exit). It must carry status:failed +
     // terminalReason:stopped + the same runId as the in-flight run.
     const terminal = events.find(
-      e =>
-        e.event === 'runtime_state' &&
-        e.state.terminalReason === 'stopped',
+      (e) => e.event === 'runtime_state' && e.state.terminalReason === 'stopped',
     );
     expect(terminal).toBeDefined();
     if (terminal && terminal.event === 'runtime_state') {
@@ -3024,27 +3085,20 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
     // returns null until a fresh event creates a new run. Without B3
     // the terminal AgentRunState would still be hanging on the handle,
     // and status() would project it as if the run were still live.
-    const { driver } = makeProgrammableDriver([
-      '--emit-line', 'A',
-      '--emit-line', 'B',
-    ]);
+    const { driver } = makeProgrammableDriver(['--emit-line', 'A', '--emit-line', 'B']);
     const { supervisor, events } = makeSupervisorWithDriver(driver);
     let step = 0;
     const sequence: ParsedEvent[][] = [
-      [],                                       // READY
-      [{ kind: 'thinking', text: 'pondering' }],// A → run starts
-      [{ kind: 'turn_end' }],                   // B → run resolves
+      [], // READY
+      [{ kind: 'thinking', text: 'pondering' }], // A → run starts
+      [{ kind: 'turn_end' }], // B → run resolves
     ];
     driver.parseLine = () => sequence[step++] ?? [];
 
     await supervisor.start(baseStartParams);
     await waitFor(
       () =>
-        events.some(
-          e =>
-            e.event === 'runtime_state' &&
-            e.state.terminalReason === 'turn_ended',
-        ),
+        events.some((e) => e.event === 'runtime_state' && e.state.terminalReason === 'turn_ended'),
       3_000,
     );
     // Give a tick for runState to be nulled out after the terminal
@@ -3055,7 +3109,11 @@ describe('Supervisor 3b — Cindy `YW2BGWryWjfymPkU` B3: resolveRun terminal sem
     expect(snap.runtimes).toHaveLength(1);
     expect(snap.runtimes[0]?.run_state).toBeNull();
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 });
 
@@ -3110,15 +3168,16 @@ function make3cSupervisor(
   const driver = opts.driverOverride ? opts.driverOverride(baseDriver) : baseDriver;
   const realSpawn = spawn;
   const spawnFn =
-    opts.spawnFn ??
-    ((bin, args, options) => realSpawn(execPath, [bin, ...args.slice(1)], options));
+    opts.spawnFn ?? ((bin, args, options) => realSpawn(execPath, [bin, ...args.slice(1)], options));
   const supervisor = new Supervisor({
     emit: spy.emit,
     logger: silentLogger(),
     driverFor: () => driver,
     resolveRuntime: async (_kind, fallback) => ({ binary: fallback, version: null }),
     spawnFn,
-    runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+    runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+      agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+    }),
     controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
     sigtermToSigkillMs: opts.sigtermToSigkillMs ?? 50,
     sigkillTimeoutMs: opts.sigkillTimeoutMs ?? 200,
@@ -3137,9 +3196,10 @@ function make3cSupervisor(
 
 describe('Supervisor 3c-b — driver.bindIO', () => {
   it('calls driver.bindIO once after spawn with writeLine + spawnCtx', async () => {
-    const calls: Array<{ writeLine: (line: string) => Promise<void>; ctx: DriverSpawnContext }> = [];
+    const calls: Array<{ writeLine: (line: string) => Promise<void>; ctx: DriverSpawnContext }> =
+      [];
     const { supervisor } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         bindIO(io) {
           calls.push({ writeLine: io.writeLine, ctx: io.spawnCtx });
@@ -3151,14 +3211,18 @@ describe('Supervisor 3c-b — driver.bindIO', () => {
     expect(calls).toHaveLength(1);
     expect(typeof calls[0]!.writeLine).toBe('function');
     expect(calls[0]!.ctx.agentName).toBe('tester');
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('bindIO.writeLine writes the payload + "\\n" to child stdin', async () => {
     let writeLine: ((line: string) => Promise<void>) | null = null;
     const { supervisor, events } = make3cSupervisor({
       driverArgs: ['--echo-stdin'],
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         bindIO(io) {
           writeLine = io.writeLine;
@@ -3170,29 +3234,31 @@ describe('Supervisor 3c-b — driver.bindIO', () => {
     // wait for child READY so stdin is plumbed
     await waitFor(() =>
       events.some(
-        e =>
-          e.event === 'runtime_output' &&
-          e.stream === 'stdout' &&
-          e.chunk.includes('READY'),
+        (e) => e.event === 'runtime_output' && e.stream === 'stdout' && e.chunk.includes('READY'),
       ),
     );
     await writeLine!('jsonrpc-line-no-trailing-newline');
-    await waitFor(() =>
-      events.some(
-        e =>
-          e.event === 'runtime_output' &&
-          e.stream === 'stdout' &&
-          e.chunk.includes('STDIN:jsonrpc-line-no-trailing-newline'),
-      ),
+    await waitFor(
+      () =>
+        events.some(
+          (e) =>
+            e.event === 'runtime_output' &&
+            e.stream === 'stdout' &&
+            e.chunk.includes('STDIN:jsonrpc-line-no-trailing-newline'),
+        ),
       2_000,
     );
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('bindIO.writeLine throws synchronously when the driver line already ends with "\\n" (Cindy `-pdNvRYOWip5e9yA` guard, `HyC05fC-FEs94uoZ` sync follow-up)', async () => {
     let writeLine: ((line: string) => Promise<void>) | null = null;
     const { supervisor } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         bindIO(io) {
           writeLine = io.writeLine;
@@ -3207,7 +3273,11 @@ describe('Supervisor 3c-b — driver.bindIO', () => {
     // driver's bound callsite instead, where the driver author sees
     // it during local testing.
     expect(() => writeLine!('already-terminated\n')).toThrow(/must not end with/);
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 });
 
@@ -3223,7 +3293,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     // spawn seam runs `node no-output-runtime.cjs` cleanly and the
     // child emits zero bytes until the watchdog kills it.
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         kickoffMode: 'self_inits', // arm immediately at spawn
         binary: NO_OUTPUT_FIXTURE,
@@ -3237,14 +3307,10 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     await supervisor.start(baseStartParams);
     await waitFor(
       () =>
-        events.some(
-          e =>
-            e.event === 'runtime_init_timeout' &&
-            e.timeout_reason === 'silence',
-        ),
+        events.some((e) => e.event === 'runtime_init_timeout' && e.timeout_reason === 'silence'),
       2_000,
     );
-    const timeout = events.find(e => e.event === 'runtime_init_timeout');
+    const timeout = events.find((e) => e.event === 'runtime_init_timeout');
     expect(timeout && timeout.event === 'runtime_init_timeout').toBe(true);
     if (timeout && timeout.event === 'runtime_init_timeout') {
       expect(timeout.timeout_reason).toBe('silence');
@@ -3265,9 +3331,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     await waitFor(
       () =>
         events.some(
-          e =>
-            e.event === 'runtime_init_timeout' &&
-            e.timeout_reason === 'pre_protocol_cap',
+          (e) => e.event === 'runtime_init_timeout' && e.timeout_reason === 'pre_protocol_cap',
         ),
       2_000,
     );
@@ -3278,7 +3342,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     // line. After READY arrives, the post-protocol timer arms; we
     // never emit session_ready, so it fires.
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         classifyInitProgress: () => 'protocol_ready' as const,
       }),
@@ -3289,9 +3353,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     await waitFor(
       () =>
         events.some(
-          e =>
-            e.event === 'runtime_init_timeout' &&
-            e.timeout_reason === 'post_protocol',
+          (e) => e.event === 'runtime_init_timeout' && e.timeout_reason === 'post_protocol',
         ),
       2_000,
     );
@@ -3308,7 +3370,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     // CI while still keeping the "wait past every window" assertion
     // honest.
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         classifyInitProgress: () => 'session_ready' as const,
       }),
@@ -3318,8 +3380,12 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     await supervisor.start(baseStartParams);
     // Wait past every watchdog window; no timeout should ever fire.
     await wait(1_200);
-    expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    expect(events.find((e) => e.event === 'runtime_init_timeout')).toBeUndefined();
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('a parsed session_init event clears the watchdog', async () => {
@@ -3353,7 +3419,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
 
   it('deferred-init: requires_first_message + no startup batch → no watchdog at spawn; deliver arms it', async () => {
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         kickoffMode: 'requires_first_message',
       }),
@@ -3364,24 +3430,24 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     // Let every default-armed window pass; nothing should fire because
     // the watchdog isn't armed yet.
     await wait(250);
-    expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
+    expect(events.find((e) => e.event === 'runtime_init_timeout')).toBeUndefined();
     // Now deliver — that arms the watchdog. echo-runtime won't emit
     // session_init, so a silence/pre-cap timeout follows.
-    await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [1],
-      kind: 'message',
-      text: 'hi',
-      deliveries: [{ delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('hi') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_init_timeout'),
-      2_000,
+    await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [1],
+        kind: 'message',
+        text: 'hi',
+        deliveries: [{ delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('hi') }],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
     );
+    await waitFor(() => events.some((e) => e.event === 'runtime_init_timeout'), 2_000);
   });
 
   it('deferred-init: requires_first_message + SPAWN batch arms watchdog only after the first stdin write', async () => {
@@ -3391,10 +3457,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
       readonly stderr = new EventEmitter();
       pendingWrite: ((err?: Error | null) => void) | null = null;
       readonly stdin = {
-        write: (
-          _line: string,
-          cb?: (err?: Error | null) => void,
-        ): boolean => {
+        write: (_line: string, cb?: (err?: Error | null) => void): boolean => {
           this.pendingWrite = cb ?? null;
           return true;
         },
@@ -3409,7 +3472,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     }
     const stub = new DelayedWriteStub();
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         kickoffMode: 'requires_first_message',
       }),
@@ -3419,17 +3482,22 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
       sigtermToSigkillMs: 30,
     });
 
-    await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [901],
-      kind: 'message',
-      text: 'boot batch',
-      deliveries: [{ delivery_id: 901, seq: 901, presentation: testDeliveryPresentation('boot batch') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [901],
+        kind: 'message',
+        text: 'boot batch',
+        deliveries: [
+          { delivery_id: 901, seq: 901, presentation: testDeliveryPresentation('boot batch') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     await waitFor(() => stub.pendingWrite !== null, 1_000);
 
     // Wait past the watchdog window while the SPAWN-batch write is
@@ -3437,13 +3505,10 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     // correct boundary for Claude-like runtimes is the first completed
     // stdin write, not process spawn.
     await wait(150);
-    expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
+    expect(events.find((e) => e.event === 'runtime_init_timeout')).toBeUndefined();
 
     stub.pendingWrite?.();
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_init_timeout'),
-      2_000,
-    );
+    await waitFor(() => events.some((e) => e.event === 'runtime_init_timeout'), 2_000);
   });
 
   it('override precedence: opts.initLivenessSilenceMs overrides driver.initLivenessSilenceMs', async () => {
@@ -3452,7 +3517,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     // timer once, then went idle"). Cindy `HyC05fC-FEs94uoZ` B1
     // applies here too.
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         initLivenessSilenceMs: 60_000, // driver opinion would never fire in test budget
         binary: NO_OUTPUT_FIXTURE,
@@ -3465,11 +3530,7 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     await supervisor.start(baseStartParams);
     await waitFor(
       () =>
-        events.some(
-          e =>
-            e.event === 'runtime_init_timeout' &&
-            e.timeout_reason === 'silence',
-        ),
+        events.some((e) => e.event === 'runtime_init_timeout' && e.timeout_reason === 'silence'),
       2_000,
     );
   });
@@ -3478,24 +3539,20 @@ describe('Supervisor 3c-b — 3-tier init watchdog', () => {
     // Same fixture swap as the per-tier-override test: no-output
     // fixture so silence fires deterministically from zero bytes.
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         initLivenessSilenceMs: 60_000,
         binary: NO_OUTPUT_FIXTURE,
         buildArgs: () => [NO_OUTPUT_FIXTURE],
       }),
-      initWatchdogMs: 80,            // global override
+      initWatchdogMs: 80, // global override
       initLivenessSilenceMs: 60_000, // per-tier — must be IGNORED
       sigtermToSigkillMs: 30,
     });
     await supervisor.start(baseStartParams);
     await waitFor(
       () =>
-        events.some(
-          e =>
-            e.event === 'runtime_init_timeout' &&
-            e.timeout_reason === 'silence',
-        ),
+        events.some((e) => e.event === 'runtime_init_timeout' && e.timeout_reason === 'silence'),
       2_000,
     );
   });
@@ -3512,17 +3569,12 @@ describe('Supervisor 3c-b — retry / cooldown state machine', () => {
     });
     await supervisor.start(baseStartParams);
     await waitFor(
-      () =>
-        events.some(
-          e => e.event === 'runtime_init_retrying' && e.retry_attempt === 1,
-        ),
+      () => events.some((e) => e.event === 'runtime_init_retrying' && e.retry_attempt === 1),
       2_000,
     );
     // The timeout that triggered the retry carried retry_attempt=0
     // (0-indexed, "the one that just failed") and retrying=true.
-    const firstTimeout = events.find(
-      e => e.event === 'runtime_init_timeout',
-    );
+    const firstTimeout = events.find((e) => e.event === 'runtime_init_timeout');
     expect(firstTimeout && firstTimeout.event === 'runtime_init_timeout').toBe(true);
     if (firstTimeout && firstTimeout.event === 'runtime_init_timeout') {
       expect(firstTimeout.retry_attempt).toBe(0);
@@ -3531,7 +3583,11 @@ describe('Supervisor 3c-b — retry / cooldown state machine', () => {
       expect(firstTimeout.cooldown_until).toBeUndefined();
     }
     // Stop any pending retry process.
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('second timeout (attempt=1) emits retrying=false; no runtime_init_retrying follows', async () => {
@@ -3543,38 +3599,34 @@ describe('Supervisor 3c-b — retry / cooldown state machine', () => {
     });
     await supervisor.start(baseStartParams);
     await waitFor(
-      () =>
-        events.filter(e => e.event === 'runtime_init_timeout').length >= 2,
+      () => events.filter((e) => e.event === 'runtime_init_timeout').length >= 2,
       4_000,
     );
-    const timeouts = events.filter(e => e.event === 'runtime_init_timeout');
+    const timeouts = events.filter((e) => e.event === 'runtime_init_timeout');
     if (timeouts[1] && timeouts[1].event === 'runtime_init_timeout') {
       expect(timeouts[1].retry_attempt).toBe(1);
       expect(timeouts[1].retrying).toBe(false);
     }
     // Exactly ONE retrying event was emitted across the whole sequence.
-    expect(events.filter(e => e.event === 'runtime_init_retrying')).toHaveLength(1);
+    expect(events.filter((e) => e.event === 'runtime_init_retrying')).toHaveLength(1);
   });
 
   it('after threshold failures cooldown engages: runtime_init_timeout carries cooldown_until + runtime_init_cooldown event fires on exit', async () => {
     const { supervisor, events } = make3cSupervisor({
       initWatchdogMs: 60,
       sigtermToSigkillMs: 30,
-      initMaxRetries: 0,                 // no retry — every failure is terminal
-      initFailureCooldownThreshold: 1,   // cooldown after the first failure
+      initMaxRetries: 0, // no retry — every failure is terminal
+      initFailureCooldownThreshold: 1, // cooldown after the first failure
       initFailureCooldownMs: 60_000,
     });
     await supervisor.start(baseStartParams);
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_init_cooldown'),
-      3_000,
-    );
-    const timeout = events.find(e => e.event === 'runtime_init_timeout');
+    await waitFor(() => events.some((e) => e.event === 'runtime_init_cooldown'), 3_000);
+    const timeout = events.find((e) => e.event === 'runtime_init_timeout');
     if (timeout && timeout.event === 'runtime_init_timeout') {
       expect(typeof timeout.cooldown_until).toBe('number');
       expect((timeout.cooldown_until ?? 0) > Date.now()).toBe(true);
     }
-    const cooldown = events.find(e => e.event === 'runtime_init_cooldown');
+    const cooldown = events.find((e) => e.event === 'runtime_init_cooldown');
     if (cooldown && cooldown.event === 'runtime_init_cooldown') {
       expect(cooldown.attempts_exhausted).toBeGreaterThanOrEqual(1);
       expect(cooldown.cooldown_until > Date.now()).toBe(true);
@@ -3597,7 +3649,7 @@ describe('Supervisor 3c-b — retry / cooldown state machine', () => {
           .length === 0 ||
         supervisor
           .status({ conversation_id: 'Conversation0001', agent_id: 'a1' })
-          .runtimes.some(r => r.phase === 'exited'),
+          .runtimes.some((r) => r.phase === 'exited'),
       3_000,
     );
     // Give the exit handler a tick to mark cooldown.
@@ -3623,7 +3675,11 @@ describe('Supervisor 3c-b — retry / cooldown state machine', () => {
     const second = await supervisor.start(baseStartParams);
     assertStarted(second);
     expect(second.pid).toBeGreaterThan(0);
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('successful session_init clears prior failures before counting a new cooldown incident', async () => {
@@ -3697,14 +3753,11 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
       initFailureCooldownMs: 60_000,
     });
     await supervisor.start(baseStartParams);
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_init_cooldown'),
-      3_000,
-    );
+    await waitFor(() => events.some((e) => e.event === 'runtime_init_cooldown'), 3_000);
     // The watchdog must NOT have fired — this is the pre-init path, not a
     // timeout re-labelled. (Core of Cindy's "don't disguise as timeout".)
-    expect(events.some(e => e.event === 'runtime_init_timeout')).toBe(false);
-    const cooldown = events.find(e => e.event === 'runtime_init_cooldown');
+    expect(events.some((e) => e.event === 'runtime_init_timeout')).toBe(false);
+    const cooldown = events.find((e) => e.event === 'runtime_init_cooldown');
     if (cooldown && cooldown.event === 'runtime_init_cooldown') {
       expect(cooldown.attempts_exhausted).toBe(1);
       expect(cooldown.cooldown_until > Date.now()).toBe(true);
@@ -3722,7 +3775,7 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
       () =>
         supervisor
           .status({ conversation_id: 'Conversation0001', agent_id: 'a1' })
-          .runtimes.every(r => r.phase === 'exited') ||
+          .runtimes.every((r) => r.phase === 'exited') ||
         supervisor.status({ conversation_id: 'Conversation0001', agent_id: 'a1' }).runtimes
           .length === 0,
       3_000,
@@ -3746,11 +3799,8 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
       initFailureCooldownMs: 60_000,
     });
     await supervisor.start(baseStartParams);
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_init_cooldown'),
-      3_000,
-    );
-    expect(events.some(e => e.event === 'runtime_init_timeout')).toBe(false);
+    await waitFor(() => events.some((e) => e.event === 'runtime_init_cooldown'), 3_000);
+    expect(events.some((e) => e.event === 'runtime_init_timeout')).toBe(false);
   });
 
   it('a oneShot runtime that exits CLEAN code-0 pre-init is EXCLUDED — no cooldown, next start still succeeds', async () => {
@@ -3760,7 +3810,7 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
     // even a threshold of 1 never engages here.
     const { supervisor, events } = make3cSupervisor({
       driverArgs: ['--sleep', '30', '--exit-code', '0'],
-      driverOverride: base => ({ ...base, oneShot: true }),
+      driverOverride: (base) => ({ ...base, oneShot: true }),
       initFailureCooldownThreshold: 1,
       initFailureCooldownMs: 60_000,
     });
@@ -3769,17 +3819,21 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
       () =>
         supervisor
           .status({ conversation_id: 'Conversation0001', agent_id: 'a1' })
-          .runtimes.every(r => r.phase === 'exited') ||
+          .runtimes.every((r) => r.phase === 'exited') ||
         supervisor.status({ conversation_id: 'Conversation0001', agent_id: 'a1' }).runtimes
           .length === 0,
       3_000,
     );
     await wait(50);
-    expect(events.some(e => e.event === 'runtime_init_cooldown')).toBe(false);
+    expect(events.some((e) => e.event === 'runtime_init_cooldown')).toBe(false);
     // Not gated — a oneShot's clean exit left the failure counter clean.
     const second = await supervisor.start(baseStartParams);
     expect(second.started).toBe(true);
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('a oneShot runtime that exits ABNORMALLY (non-zero) pre-init IS counted (oneShot excuses success, not a kill)', async () => {
@@ -3791,17 +3845,14 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
     // which takes the same `code !== 0` disjunct as this non-zero case.)
     const { supervisor, events } = make3cSupervisor({
       driverArgs: ['--sleep', '30', '--exit-code', '1'],
-      driverOverride: base => ({ ...base, oneShot: true }),
+      driverOverride: (base) => ({ ...base, oneShot: true }),
       initFailureCooldownThreshold: 1,
       initFailureCooldownMs: 60_000,
     });
     await supervisor.start(baseStartParams);
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_init_cooldown'),
-      3_000,
-    );
-    expect(events.some(e => e.event === 'runtime_init_timeout')).toBe(false);
-    const cooldown = events.find(e => e.event === 'runtime_init_cooldown');
+    await waitFor(() => events.some((e) => e.event === 'runtime_init_cooldown'), 3_000);
+    expect(events.some((e) => e.event === 'runtime_init_timeout')).toBe(false);
+    const cooldown = events.find((e) => e.event === 'runtime_init_cooldown');
     if (cooldown && cooldown.event === 'runtime_init_cooldown') {
       expect(cooldown.attempts_exhausted).toBe(1);
     }
@@ -3831,21 +3882,18 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
       const res = await supervisor.start(baseStartParams);
       expect(res.started).toBe(true); // not gated yet
       await waitFor(
-        () => events.filter(e => e.event === 'runtime_exit').length === attempt,
+        () => events.filter((e) => e.event === 'runtime_exit').length === attempt,
         3_000,
       );
-      expect(events.some(e => e.event === 'runtime_init_cooldown')).toBe(false);
+      expect(events.some((e) => e.event === 'runtime_init_cooldown')).toBe(false);
     }
 
     // Crash 3: still a permitted fresh start, but this exit crosses the
     // threshold and engages cooldown.
     const third = await supervisor.start(baseStartParams);
     expect(third.started).toBe(true);
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_init_cooldown'),
-      3_000,
-    );
-    const cooldowns = events.filter(e => e.event === 'runtime_init_cooldown');
+    await waitFor(() => events.some((e) => e.event === 'runtime_init_cooldown'), 3_000);
+    const cooldowns = events.filter((e) => e.event === 'runtime_init_cooldown');
     expect(cooldowns).toHaveLength(1);
     const cd = cooldowns[0];
     if (cd && cd.event === 'runtime_init_cooldown') {
@@ -3853,7 +3901,7 @@ describe('Supervisor #task:1460 — pre-init exit folds into init-failure cooldo
       expect(cd.cooldown_until > Date.now()).toBe(true);
     }
     // The watchdog never fired across the whole sequence.
-    expect(events.some(e => e.event === 'runtime_init_timeout')).toBe(false);
+    expect(events.some((e) => e.event === 'runtime_init_timeout')).toBe(false);
 
     // 4th fresh start is refused by the cooldown gate.
     await wait(20);
@@ -3883,7 +3931,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     // entry; the timer never fires; exit handler maps `intentional`
     // → terminal `stopped`.
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         binary: NO_OUTPUT_FIXTURE,
         buildArgs: () => [NO_OUTPUT_FIXTURE],
@@ -3898,7 +3946,8 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     // Trigger hard stop BEFORE the silence window elapses.
     const stopPromise = supervisor.stop({
       runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-      runtime_generation: 1, mode: 'hard',
+      runtime_generation: 1,
+      mode: 'hard',
     });
     // Wait well past the original 80ms silence window to prove the
     // timer was actually cleared, not just delayed.
@@ -3908,13 +3957,11 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
 
     // NO runtime_init_timeout — proves clearInitWatchdog ran at
     // hardStopHandle entry.
-    expect(events.find(e => e.event === 'runtime_init_timeout')).toBeUndefined();
+    expect(events.find((e) => e.event === 'runtime_init_timeout')).toBeUndefined();
     // Terminal reason is 'stopped' (not 'timeout'), proving the
     // exit-handler reason mapping picked the user intent.
     const terminal = events.find(
-      e =>
-        e.event === 'runtime_state' &&
-        e.state.terminalReason !== undefined,
+      (e) => e.event === 'runtime_state' && e.state.terminalReason !== undefined,
     );
     expect(terminal).toBeDefined();
     if (terminal && terminal.event === 'runtime_state') {
@@ -3922,10 +3969,8 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
       expect(terminal.state.status).toBe('failed');
     }
     // Exit event marked intentional.
-    const exitEvt = events.find(e => e.event === 'runtime_exit');
-    expect(
-      exitEvt && exitEvt.event === 'runtime_exit' && exitEvt.intentional,
-    ).toBe(true);
+    const exitEvt = events.find((e) => e.event === 'runtime_exit');
+    expect(exitEvt && exitEvt.event === 'runtime_exit' && exitEvt.intentional).toBe(true);
   });
 
   it('B3: init watchdog fire flips phase=draining so deliver during the kill window refuses draining', async () => {
@@ -3946,7 +3991,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     // SIGTERM/SIGKILL grace keeps the dying handle observable while
     // deliver races against the retry respawn.
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         binary: NO_OUTPUT_FIXTURE,
         buildArgs: () => [NO_OUTPUT_FIXTURE, '--ignore-sigterm'],
@@ -3958,24 +4003,30 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
       sigkillTimeoutMs: 1_500,
     });
     await supervisor.start(baseStartParams);
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_init_timeout'),
-      3_000,
-    );
+    await waitFor(() => events.some((e) => e.event === 'runtime_init_timeout'), 3_000);
     // At this instant phase should be 'draining' (the child is alive
     // because --ignore-sigterm swallows SIGTERM; SIGKILL won't land
     // for another 800ms).
-    const deliverRes = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [11],
-      kind: 'message',
-      text: 'during-kill-window',
-      deliveries: [{ delivery_id: 11, seq: 11, presentation: testDeliveryPresentation('during-kill-window') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const deliverRes = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [11],
+        kind: 'message',
+        text: 'during-kill-window',
+        deliveries: [
+          {
+            delivery_id: 11,
+            seq: 11,
+            presentation: testDeliveryPresentation('during-kill-window'),
+          },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(deliverRes.disposition).toBe('refused');
     if (deliverRes.disposition === 'refused') {
       // 'draining' is the deliver-gate signal that the runtime is being
@@ -3986,7 +4037,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     // Sanity: the child eventually exits via SIGKILL and the
     // supervisor emits a terminal runtime_exit so the test cleanup
     // doesn't hang.
-    await waitFor(() => events.some(e => e.event === 'runtime_exit'), 4_000);
+    await waitFor(() => events.some((e) => e.event === 'runtime_exit'), 4_000);
   });
 
   it('B3 + retry: phase=draining after watchdog fire does NOT block onChildExit retry-respawn (init_retrying still fires + new handle spawns)', async () => {
@@ -4007,7 +4058,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     // the handler before the timer fires; 800ms SIGTERM grace so the
     // dying handle stays observable.
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
         binary: NO_OUTPUT_FIXTURE,
         buildArgs: () => [NO_OUTPUT_FIXTURE, '--ignore-sigterm'],
@@ -4021,32 +4072,28 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     const startRes = await supervisor.start(baseStartParams);
     assertStarted(startRes);
     const originalPid = startRes.pid;
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_init_timeout'),
-      3_000,
-    );
+    await waitFor(() => events.some((e) => e.event === 'runtime_init_timeout'), 3_000);
     // Deliver inside the draining window must refuse.
-    const midDeliver = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [42],
-      kind: 'message',
-      text: 'x',
-      deliveries: [{ delivery_id: 42, seq: 42, presentation: testDeliveryPresentation('x') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const midDeliver = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [42],
+        kind: 'message',
+        text: 'x',
+        deliveries: [{ delivery_id: 42, seq: 42, presentation: testDeliveryPresentation('x') }],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(midDeliver.disposition).toBe('refused');
-    if (midDeliver.disposition === 'refused')
-      expect(midDeliver.reason).toBe('draining');
+    if (midDeliver.disposition === 'refused') expect(midDeliver.reason).toBe('draining');
     // Wait for the retry event + the new spawn to happen (SIGKILL
     // will eventually take the SIGTERM-ignoring child down).
     await waitFor(
-      () =>
-        events.some(
-          e => e.event === 'runtime_init_retrying' && e.retry_attempt === 1,
-        ),
+      () => events.some((e) => e.event === 'runtime_init_retrying' && e.retry_attempt === 1),
       4_000,
     );
     await waitFor(() => {
@@ -4066,7 +4113,7 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     // The retry's new handle inherits no draining state from the old
     // one — confirms phase=draining set by failInitWatchdog did NOT
     // leak across the respawn boundary.
-    const retryingEvent = events.find(e => e.event === 'runtime_init_retrying');
+    const retryingEvent = events.find((e) => e.event === 'runtime_init_retrying');
     expect(
       retryingEvent && retryingEvent.event === 'runtime_init_retrying'
         ? retryingEvent.retry_attempt
@@ -4076,16 +4123,13 @@ describe('Supervisor 3c-b — round-2 regressions (Cindy `HyC05fC-FEs94uoZ` B2/B
     // terminalReason='timeout', mapped via resolveRun (Cindy: init
     // watchdog precedence over intentional/code in reason mapping).
     const timeoutTerminal = events.find(
-      e =>
-        e.event === 'runtime_state' &&
-        e.state.terminalReason === 'timeout',
+      (e) => e.event === 'runtime_state' && e.state.terminalReason === 'timeout',
     );
     expect(timeoutTerminal).toBeDefined();
     // Cleanup: tear down the retry's runtime.
     await supervisor.stopAll({});
   });
 });
-
 
 describe('Supervisor 3c-b — lifecycle lock', () => {
   it('concurrent start+start on the same key returns the idempotent success arm (lock serializes)', async () => {
@@ -4097,13 +4141,21 @@ describe('Supervisor 3c-b — lifecycle lock', () => {
     assertStarted(a);
     assertStarted(b);
     expect(a.pid).toBe(b.pid);
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('concurrent start+stop on the same key serializes (stop sees the live handle)', async () => {
     const { supervisor } = make3cSupervisor();
     const startP = supervisor.start(baseStartParams);
-    const stopP = supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    const stopP = supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
     const [s, st] = await Promise.all([startP, stopP]);
     assertStarted(s);
     expect(st).toMatchObject({ mode: 'hard', stopped: true });
@@ -4149,9 +4201,9 @@ describe('Supervisor 3c-b — lifecycle lock', () => {
 describe('Supervisor 3c-b — compaction watchdog', () => {
   it('compaction_started + no compaction_finished within compactionStaleMs → runtime_compaction_stale + run-state stacks compactionStale:true (keeps compacting:true)', async () => {
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
-        parseLine: line => {
+        parseLine: (line) => {
           if (line.includes('COMPACT_START')) return [{ kind: 'compaction_started' as const }];
           return [];
         },
@@ -4161,31 +4213,32 @@ describe('Supervisor 3c-b — compaction watchdog', () => {
       sigtermToSigkillMs: 30,
     });
     await supervisor.start(baseStartParams);
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_compaction_stale'),
-      2_000,
-    );
-    const stale = events.find(e => e.event === 'runtime_compaction_stale');
+    await waitFor(() => events.some((e) => e.event === 'runtime_compaction_stale'), 2_000);
+    const stale = events.find((e) => e.event === 'runtime_compaction_stale');
     if (stale && stale.event === 'runtime_compaction_stale') {
       expect(stale.elapsed_ms).toBeGreaterThanOrEqual(80);
     }
     // The most recent runtime_state carries both compacting:true and
     // compactionStale:true. (CM contract — UI shows "still compacting,
     // stale" not "no longer compacting".)
-    const stateEmits = events.filter(e => e.event === 'runtime_state');
+    const stateEmits = events.filter((e) => e.event === 'runtime_state');
     const last = stateEmits[stateEmits.length - 1];
     if (last && last.event === 'runtime_state') {
       expect(last.state.compacting).toBe(true);
       expect(last.state.compactionStale).toBe(true);
     }
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('compaction_stale does NOT kill the child (status() still shows the live pid)', async () => {
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
-        parseLine: line => {
+        parseLine: (line) => {
           if (line.includes('COMPACT_START')) return [{ kind: 'compaction_started' as const }];
           return [];
         },
@@ -4196,21 +4249,22 @@ describe('Supervisor 3c-b — compaction watchdog', () => {
     });
     const res = await supervisor.start(baseStartParams);
     assertStarted(res);
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_compaction_stale'),
-      2_000,
-    );
+    await waitFor(() => events.some((e) => e.event === 'runtime_compaction_stale'), 2_000);
     const snap = supervisor.status({ conversation_id: 'Conversation0001', agent_id: 'a1' });
     expect(snap.runtimes[0]?.pid).toBe(res.pid);
     expect(snap.runtimes[0]?.phase).toBe('ready');
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('compaction_finished cancels the watchdog (no stale event fires)', async () => {
     const { supervisor, events } = make3cSupervisor({
-      driverOverride: base => ({
+      driverOverride: (base) => ({
         ...base,
-        parseLine: line => {
+        parseLine: (line) => {
           if (line.includes('COMPACT_START')) return [{ kind: 'compaction_started' as const }];
           if (line.includes('COMPACT_END')) return [{ kind: 'compaction_finished' as const }];
           return [];
@@ -4224,8 +4278,12 @@ describe('Supervisor 3c-b — compaction watchdog', () => {
     // Wait longer than compactionStaleMs; the finished event should
     // have cleared the watchdog so no stale fires.
     await wait(400);
-    expect(events.find(e => e.event === 'runtime_compaction_stale')).toBeUndefined();
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    expect(events.find((e) => e.event === 'runtime_compaction_stale')).toBeUndefined();
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 });
 
@@ -4284,14 +4342,19 @@ function makeStatefulCodexLikeDriver(): {
     initPreProtocolCapMs: 5 * 60_000,
     initPostProtocolMs: 60_000,
     buildArgs: () => [FIXTURE, '--echo-stdin'],
-    applyEnv: env => ({ ...env }),
+    applyEnv: (env) => ({ ...env }),
     readyToEncode: () => state.ready,
     encodeStdinMessage: (text: string) => encodeStreamJsonUser(text),
     encodeInterruptControl: () => null,
     parseLine: () => [],
     classifyInitProgress: () => null,
   };
-  return { driver, flipReady: () => { state.ready = true; } };
+  return {
+    driver,
+    flipReady: () => {
+      state.ready = true;
+    },
+  };
 }
 
 describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)', () => {
@@ -4303,38 +4366,43 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
     const { supervisor, events } = makeSupervisorWithDriver(driver);
     await supervisor.start(baseStartParams);
     await waitFor(() =>
-      events.some(e => e.event === 'runtime_output' && e.chunk.includes('READY')),
+      events.some((e) => e.event === 'runtime_output' && e.chunk.includes('READY')),
     );
 
     // ready_for_drain MUST NOT have fired yet — readyToEncode() is
     // false so the gate is held closed.
-    expect(events.some(e => e.event === 'runtime_ready_for_drain')).toBe(false);
+    expect(events.some((e) => e.event === 'runtime_ready_for_drain')).toBe(false);
 
-    const res = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [201, 202],
-      kind: 'message',
-      text: 'hi from backend',
-      deliveries: [
-        { delivery_id: 201, seq: 201, presentation: testDeliveryPresentation('hi from backend') },
-        { delivery_id: 202, seq: 202, presentation: testDeliveryPresentation('hi from backend') },
-      ],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const res = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [201, 202],
+        kind: 'message',
+        text: 'hi from backend',
+        deliveries: [
+          { delivery_id: 201, seq: 201, presentation: testDeliveryPresentation('hi from backend') },
+          { delivery_id: 202, seq: 202, presentation: testDeliveryPresentation('hi from backend') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(res).toEqual({
       disposition: 'refused',
       reason: 'startup_pending',
     });
     // No stdin write should have surfaced — fixture would echo
     // STDIN:{...} on every received line.
-    const echoed = events.some(
-      e => e.event === 'runtime_output' && e.chunk.includes('STDIN:'),
-    );
+    const echoed = events.some((e) => e.event === 'runtime_output' && e.chunk.includes('STDIN:'));
     expect(echoed).toBe(false);
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('deliver post-ready: encodeStdinMessage returns null → admitted then async runtime_delivery_failed reason:driver_refused (fail loud)', async () => {
@@ -4356,7 +4424,7 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
       initPreProtocolCapMs: 5 * 60_000,
       initPostProtocolMs: 60_000,
       buildArgs: () => [FIXTURE, '--echo-stdin'],
-      applyEnv: env => ({ ...env }),
+      applyEnv: (env) => ({ ...env }),
       readyToEncode: () => true,
       encodeStdinMessage: () => null, // driver bug
       encodeInterruptControl: () => null,
@@ -4366,35 +4434,42 @@ describe('Supervisor 3b — Option A v2 deliver arms (Cindy `UMGu36zoTDVuKWXi`)'
     const { supervisor, events } = makeSupervisorWithDriver(driver);
     await supervisor.start(baseStartParams);
     await waitFor(() =>
-      events.some(e => e.event === 'runtime_output' && e.chunk.includes('READY')),
+      events.some((e) => e.event === 'runtime_output' && e.chunk.includes('READY')),
     );
     // ready_for_drain fires because readyToEncode()=true and no
     // startup-batch gate.
-    await waitFor(() =>
-      events.some(e => e.event === 'runtime_ready_for_drain'),
-    );
+    await waitFor(() => events.some((e) => e.event === 'runtime_ready_for_drain'));
 
-    const res = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [301],
-      kind: 'message',
-      text: 'bytes',
-      deliveries: [{ delivery_id: 301, seq: 301, presentation: testDeliveryPresentation('bytes') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const res = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [301],
+        kind: 'message',
+        text: 'bytes',
+        deliveries: [
+          { delivery_id: 301, seq: 301, presentation: testDeliveryPresentation('bytes') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(res.disposition).toBe('admitted');
     await waitFor(() =>
       events.some(
-        e =>
+        (e) =>
           e.event === 'runtime_delivery_failed' &&
           e.delivery_ids.includes(301) &&
           e.reason === 'driver_refused',
       ),
     );
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 });
 
@@ -4418,11 +4493,11 @@ describe('Supervisor 3b — Option A v2 ready_for_drain gate by readyToEncode (C
     const { supervisor, events } = makeSupervisorWithDriver(driver);
     await supervisor.start(baseStartParams);
     await waitFor(() =>
-      events.some(e => e.event === 'runtime_output' && e.chunk.includes('READY')),
+      events.some((e) => e.event === 'runtime_output' && e.chunk.includes('READY')),
     );
     // Pre-flip: gate stays closed.
     await wait(40);
-    expect(events.some(e => e.event === 'runtime_ready_for_drain')).toBe(false);
+    expect(events.some((e) => e.event === 'runtime_ready_for_drain')).toBe(false);
 
     // Flip via stdin echo trick: feed a line through the fixture's
     // echo path so the supervisor sees a stdout line that parseLine
@@ -4435,7 +4510,11 @@ describe('Supervisor 3b — Option A v2 ready_for_drain gate by readyToEncode (C
     // driver-arg fixture instead: --emit-line THREAD_STARTED makes
     // the fixture write that line on stdout shortly after READY.
     // (Switch driverArgs by rebuilding the driver inline.)
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
 
     // ── second supervisor with the same driver but the fixture
     //    configured to actually emit the THREAD_STARTED line.
@@ -4450,15 +4529,14 @@ describe('Supervisor 3b — Option A v2 ready_for_drain gate by readyToEncode (C
     };
     const second = makeSupervisorWithDriver(driver2);
     await second.supervisor.start(baseStartParams);
-    await waitFor(() =>
-      second.events.some(e => e.event === 'runtime_ready_for_drain'),
-      2_000,
-    );
+    await waitFor(() => second.events.some((e) => e.event === 'runtime_ready_for_drain'), 2_000);
     // Exactly one ready_for_drain after the flip.
-    expect(
-      second.events.filter(e => e.event === 'runtime_ready_for_drain').length,
-    ).toBe(1);
-    await second.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    expect(second.events.filter((e) => e.event === 'runtime_ready_for_drain').length).toBe(1);
+    await second.supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 });
 
@@ -4480,37 +4558,31 @@ describe('Supervisor 3b — Option A v2 deferred SPAWN batch on stateful driver 
       return [];
     };
     const { supervisor, events } = makeSupervisorWithDriver(driver);
-    await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [701, 702],
-      kind: 'message',
-      text: 'boot codex',
-      deliveries: [
-        { delivery_id: 701, seq: 701, presentation: testDeliveryPresentation('boot codex') },
-        { delivery_id: 702, seq: 702, presentation: testDeliveryPresentation('boot codex') },
-      ],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [701, 702],
+        kind: 'message',
+        text: 'boot codex',
+        deliveries: [
+          { delivery_id: 701, seq: 701, presentation: testDeliveryPresentation('boot codex') },
+          { delivery_id: 702, seq: 702, presentation: testDeliveryPresentation('boot codex') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
 
     // Eventually the fixture emits THREAD_STARTED → parseLine flips
     // ready → tryConsumeStartupDelivery encodes + writes → consumed +
     // ready_for_drain fire in that order.
-    await waitFor(
-      () => events.some(e => e.event === 'runtime_ready_for_drain'),
-      2_000,
-    );
-    const consumed = events.find(
-      e => e.event === 'runtime_delivery_consumed',
-    );
-    const idxConsumed = events.findIndex(
-      e => e.event === 'runtime_delivery_consumed',
-    );
-    const idxReady = events.findIndex(
-      e => e.event === 'runtime_ready_for_drain',
-    );
+    await waitFor(() => events.some((e) => e.event === 'runtime_ready_for_drain'), 2_000);
+    const consumed = events.find((e) => e.event === 'runtime_delivery_consumed');
+    const idxConsumed = events.findIndex((e) => e.event === 'runtime_delivery_consumed');
+    const idxReady = events.findIndex((e) => e.event === 'runtime_ready_for_drain');
     expect(consumed).toBeDefined();
     if (consumed && consumed.event === 'runtime_delivery_consumed') {
       expect(consumed.delivery_ids).toEqual([701, 702]);
@@ -4518,22 +4590,23 @@ describe('Supervisor 3b — Option A v2 deferred SPAWN batch on stateful driver 
     expect(idxConsumed).toBeGreaterThanOrEqual(0);
     expect(idxReady).toBeGreaterThan(idxConsumed);
     // Exactly one ready_for_drain across the deferred path.
-    expect(
-      events.filter(e => e.event === 'runtime_ready_for_drain').length,
-    ).toBe(1);
+    expect(events.filter((e) => e.event === 'runtime_ready_for_drain').length).toBe(1);
     // The stdin write actually happened (echo confirms).
     await waitFor(
-      () => events.some(
-        e => e.event === 'runtime_output' && e.chunk.includes('STDIN:{"type":"user"'),
-      ),
+      () =>
+        events.some(
+          (e) => e.event === 'runtime_output' && e.chunk.includes('STDIN:{"type":"user"'),
+        ),
       2_000,
     );
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 });
-
-
 
 describe('Supervisor — runtime_deliver metadata validation', () => {
   it('hard-rejects a deliver whose deliveries[] id-set does not match delivery_ids', async () => {
@@ -4541,29 +4614,39 @@ describe('Supervisor — runtime_deliver metadata validation', () => {
     try {
       await supervisor.start(baseStartParams);
       await expect(
-        supervisor.deliver({
-          runtime_generation: 1,
-          conversation_id: 'Conversation0001',
-          target: { conversation_id: 'Conversation0001', workspace: null },
-          agent_id: 'a1',
-          delivery_ids: [1, 2],
-          kind: 'message',
-          text: 'mismatched batch',
-          deliveries: [
-            {
-              delivery_id: 1,
-              seq: 1,
-              presentation: testDeliveryPresentation('delivery-text'),
-            },
-          ],
-          spawn_options: baseStartParams.options,
-        }, { owner: 'test-owner' }),
+        supervisor.deliver(
+          {
+            runtime_generation: 1,
+            conversation_id: 'Conversation0001',
+            target: { conversation_id: 'Conversation0001', workspace: null },
+            agent_id: 'a1',
+            delivery_ids: [1, 2],
+            kind: 'message',
+            text: 'mismatched batch',
+            deliveries: [
+              {
+                delivery_id: 1,
+                seq: 1,
+                presentation: testDeliveryPresentation('delivery-text'),
+              },
+            ],
+            spawn_options: baseStartParams.options,
+          },
+          { owner: 'test-owner' },
+        ),
       ).rejects.toThrow(/delivery metadata mismatch/);
     } finally {
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
-      }).catch(() => undefined);
+      await supervisor
+        .stop({
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: 'Conversation0001',
+            agent_id: 'a1',
+          },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
+        .catch(() => undefined);
     }
   });
 });
@@ -4573,20 +4656,23 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
     const { supervisor, events } = makeSupervisor({
       driverArgs: ['--echo-stdin'],
     });
-    const res = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [7, 8],
-      kind: 'message',
-      text: 'boot via deliver',
-      deliveries: [
-        { delivery_id: 7, seq: 7, presentation: testDeliveryPresentation('boot via deliver') },
-        { delivery_id: 8, seq: 8, presentation: testDeliveryPresentation('boot via deliver') },
-      ],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const res = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [7, 8],
+        kind: 'message',
+        text: 'boot via deliver',
+        deliveries: [
+          { delivery_id: 7, seq: 7, presentation: testDeliveryPresentation('boot via deliver') },
+          { delivery_id: 8, seq: 8, presentation: testDeliveryPresentation('boot via deliver') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(res.disposition).toBe('spawning');
     if (res.disposition !== 'spawning') throw new Error('unreachable');
     expect(typeof res.pid).toBe('number');
@@ -4594,16 +4680,12 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
 
     // The daemon wrote the batch to stdin (fixture echoes it back).
     await waitFor(() =>
-      events.some(
-        e =>
-          e.event === 'runtime_output' &&
-          e.chunk.includes('STDIN:{"type":"user"'),
-      ),
+      events.some((e) => e.event === 'runtime_output' && e.chunk.includes('STDIN:{"type":"user"')),
     );
     // Custody is ack'd on the UNIFIED family, keyed by delivery_ids.
     await waitFor(() =>
       events.some(
-        e =>
+        (e) =>
           e.event === 'runtime_delivery_consumed' &&
           e.delivery_ids.length === 2 &&
           e.delivery_ids[0] === 7 &&
@@ -4611,9 +4693,12 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       ),
     );
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
-
 
   it('response-loss ownership union: expanded, subset, and deferred-overlap retries release each id exactly once in FIFO order', async () => {
     class ControlledWriteChild extends EventEmitter {
@@ -4643,40 +4728,40 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
     });
     try {
       await supervisor.start(baseStartParams);
-      await waitFor(() =>
-        supervisor.status({
-          conversation_id: 'Conversation0001',
-          agent_id: 'a1',
-        }).runtimes[0]?.phase === 'ready',
+      await waitFor(
+        () =>
+          supervisor.status({
+            conversation_id: 'Conversation0001',
+            agent_id: 'a1',
+          }).runtimes[0]?.phase === 'ready',
       );
       const batch = (ids: number[]) => {
-        const presentations = ids.map(id => ({
+        const presentations = ids.map((id) => ({
           body: `msg-${id}`,
           instruction: 'other' as const,
         }));
         return {
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: ids,
-        kind: 'message' as const,
-        text: composeRuntimeDeliveryPresentation(
-          presentations,
-          'silverhand message send',
-        ),
-        deliveries: ids.map((id, index) => ({
-          delivery_id: id,
-          seq: id,
-          presentation: presentations[index]!,
-        })),
-        spawn_options: baseStartParams.options,
+          runtime_generation: 1,
+          conversation_id: 'Conversation0001',
+          target: { conversation_id: 'Conversation0001', workspace: null },
+          agent_id: 'a1',
+          delivery_ids: ids,
+          kind: 'message' as const,
+          text: composeRuntimeDeliveryPresentation(presentations, 'silverhand message send'),
+          deliveries: ids.map((id, index) => ({
+            delivery_id: id,
+            seq: id,
+            presentation: presentations[index]!,
+          })),
+          spawn_options: baseStartParams.options,
         };
       };
       const writtenText = (index: number): string =>
-        (JSON.parse(child.writes[index]!) as {
-          message: { content: string };
-        }).message.content;
+        (
+          JSON.parse(child.writes[index]!) as {
+            message: { content: string };
+          }
+        ).message.content;
 
       // [42] is already admitted and writing when its response disappears.
       expect(await supervisor.deliver(batch([42]), { owner: 'conn-1' })).toMatchObject({
@@ -4703,16 +4788,12 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       await waitForDeliveryConsumed(events, 43);
       expect(
         events.filter(
-          event =>
-            event.event === 'runtime_delivery_consumed'
-            && event.delivery_ids.includes(42),
+          (event) => event.event === 'runtime_delivery_consumed' && event.delivery_ids.includes(42),
         ),
       ).toHaveLength(1);
       expect(
         events.filter(
-          event =>
-            event.event === 'runtime_delivery_consumed'
-            && event.delivery_ids.includes(43),
+          (event) => event.event === 'runtime_delivery_consumed' && event.delivery_ids.includes(43),
         ),
       ).toHaveLength(1);
 
@@ -4730,8 +4811,9 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       await waitForDeliveryConsumed(events, 50);
       expect(
         events.filter(
-          event => event.event === 'runtime_delivery_consumed'
-            && (event.delivery_ids.includes(50) || event.delivery_ids.includes(51)),
+          (event) =>
+            event.event === 'runtime_delivery_consumed' &&
+            (event.delivery_ids.includes(50) || event.delivery_ids.includes(51)),
         ),
       ).toHaveLength(1);
 
@@ -4755,21 +4837,31 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       await waitFor(() => child.writes.length === 6);
       child.writeCallbacks.shift()?.();
       await waitForDeliveryConsumed(events, 62);
-      expect(child.writes.slice(3).map(write =>
-        [60, 61, 62].find(id => write.includes(`msg-${id}`))
-      )).toEqual([60, 61, 62]);
+      expect(
+        child.writes
+          .slice(3)
+          .map((write) => [60, 61, 62].find((id) => write.includes(`msg-${id}`))),
+      ).toEqual([60, 61, 62]);
       for (const id of [60, 61, 62]) {
-        expect(events.filter(event =>
-          event.event === 'runtime_delivery_consumed'
-          && event.delivery_ids.includes(id)
-        )).toHaveLength(1);
+        expect(
+          events.filter(
+            (event) =>
+              event.event === 'runtime_delivery_consumed' && event.delivery_ids.includes(id),
+          ),
+        ).toHaveLength(1);
       }
     } finally {
-      await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1,
-        mode: 'hard',
-      }).catch(() => undefined);
+      await supervisor
+        .stop({
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: 'Conversation0001',
+            agent_id: 'a1',
+          },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
+        .catch(() => undefined);
     }
   });
 
@@ -4782,10 +4874,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       readonly stdout = new EventEmitter();
       readonly stderr = new EventEmitter();
       readonly stdin = {
-        write: (
-          _line: string,
-          _cb?: (err?: Error | null) => void,
-        ): boolean => true,
+        write: (_line: string, _cb?: (err?: Error | null) => void): boolean => true,
         end: () => {},
         destroyed: false,
         once: () => {},
@@ -4796,44 +4885,51 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       }
     }
     const stub = new HungStdinStub();
-    const spawnFn = (
-      _b: string,
-      _a: ReadonlyArray<string>,
-      _o: SpawnOptions,
-    ): ChildProcess => stub as unknown as ChildProcess;
+    const spawnFn = (_b: string, _a: ReadonlyArray<string>, _o: SpawnOptions): ChildProcess =>
+      stub as unknown as ChildProcess;
     const { supervisor, events } = makeSupervisor({ spawnFn });
     // Put a batch in flight via the deliver SPAWN arm; the hung stdin
     // stub keeps consumeStartupDelivery from settling, so
     // `startupDelivery !== null` stays true.
-    await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [1, 2],
-      kind: 'message',
-      text: 'boot',
-      deliveries: [
-        { delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('boot') },
-        { delivery_id: 2, seq: 2, presentation: testDeliveryPresentation('boot') },
-      ],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
-    const res = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [99],
-      kind: 'message',
-      text: 'race',
-      deliveries: [{ delivery_id: 99, seq: 99, presentation: testDeliveryPresentation('race') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [1, 2],
+        kind: 'message',
+        text: 'boot',
+        deliveries: [
+          { delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('boot') },
+          { delivery_id: 2, seq: 2, presentation: testDeliveryPresentation('boot') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
+    const res = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [99],
+        kind: 'message',
+        text: 'race',
+        deliveries: [{ delivery_id: 99, seq: 99, presentation: testDeliveryPresentation('race') }],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(res).toEqual({ disposition: 'refused', reason: 'startup_pending' });
-    expect(events.some(e => e.event === 'runtime_ready_for_drain')).toBe(false);
+    expect(events.some((e) => e.event === 'runtime_ready_for_drain')).toBe(false);
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('REFUSE arm: handle stuck draining (SIGKILL-timeout safety net) → refused draining', async () => {
@@ -4863,11 +4959,8 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       }
     }
     const stub = new NoExitStub();
-    const spawnFn = (
-      _b: string,
-      _a: ReadonlyArray<string>,
-      _o: SpawnOptions,
-    ): ChildProcess => stub as unknown as ChildProcess;
+    const spawnFn = (_b: string, _a: ReadonlyArray<string>, _o: SpawnOptions): ChildProcess =>
+      stub as unknown as ChildProcess;
     const { supervisor } = makeSupervisor({
       spawnFn,
       sigtermToSigkillMs: 10,
@@ -4878,21 +4971,27 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
     await wait(5);
     const stopRes = await supervisor.stop({
       runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-      runtime_generation: 1, mode: 'hard',
+      runtime_generation: 1,
+      mode: 'hard',
     });
     // Safety net resolved without a real exit — handle stays draining.
     expect(stopRes).toEqual({ mode: 'hard', stopped: false, exit_code: null });
-    const res = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [5],
-      kind: 'message',
-      text: 'during drain',
-      deliveries: [{ delivery_id: 5, seq: 5, presentation: testDeliveryPresentation('during drain') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const res = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [5],
+        kind: 'message',
+        text: 'during drain',
+        deliveries: [
+          { delivery_id: 5, seq: 5, presentation: testDeliveryPresentation('during drain') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(res).toEqual({ disposition: 'refused', reason: 'draining' });
   });
 
@@ -4918,7 +5017,7 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
       initPreProtocolCapMs: 5 * 60_000,
       initPostProtocolMs: 60_000,
       buildArgs: () => [FIXTURE, '--echo-stdin'],
-      applyEnv: env => ({ ...env }),
+      applyEnv: (env) => ({ ...env }),
       encodeStdinMessage: () => null,
       encodeInterruptControl: () => null,
       parseLine: () => [],
@@ -4928,42 +5027,47 @@ describe('Supervisor Stage 2 — runtime_deliver (#task:1417)', () => {
     // Bare start (no batch) → the handle comes up live and reaches ready.
     await supervisor.start(baseStartParams);
     await waitFor(() =>
-      events.some(
-        e => e.event === 'runtime_output' && e.chunk.includes('READY'),
-      ),
+      events.some((e) => e.event === 'runtime_output' && e.chunk.includes('READY')),
     );
 
-    const res = await supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [77],
-      kind: 'message',
-      text: 'to a live oneShot',
-      deliveries: [{ delivery_id: 77, seq: 77, presentation: testDeliveryPresentation('to a live oneShot') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const res = await supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [77],
+        kind: 'message',
+        text: 'to a live oneShot',
+        deliveries: [
+          { delivery_id: 77, seq: 77, presentation: testDeliveryPresentation('to a live oneShot') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
 
     expect(res).toEqual({ disposition: 'refused', reason: 'startup_pending' });
     // SYNC refuse — no admit, no delivery ack, and crucially no async
     // driver_refused failure emitted for this delivery.
     await wait(20);
     expect(
-      events.some(
-        e => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(77),
-      ),
+      events.some((e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(77)),
     ).toBe(false);
     expect(
       events.some(
-        e =>
+        (e) =>
           e.event === 'runtime_delivery_failed' &&
           e.delivery_ids.includes(77) &&
           e.reason === 'driver_refused',
       ),
     ).toBe(false);
 
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 });
 
@@ -5067,7 +5171,9 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         firstSpawn = false;
         return stub as unknown as ChildProcess;
       },
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+      }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
@@ -5090,15 +5196,18 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
           delivery_ids: ids,
           kind: 'message',
           text: `msg-${ids.join('_')}`,
-          deliveries: ids.map(id => ({ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`msg-${ids.join('_')}`) })),
+          deliveries: ids.map((id) => ({
+            delivery_id: id,
+            seq: id,
+            presentation: testDeliveryPresentation(`msg-${ids.join('_')}`),
+          })),
           spawn_options: opts.startOptions ?? baseStartParams.options,
         },
         { owner },
       );
     const consumedFor = (id: number) =>
       spy.events.filter(
-        e =>
-          e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(id),
+        (e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(id),
       );
     return {
       get stub() {
@@ -5115,11 +5224,17 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
   it.each(['direct', 'gated'] as const)(
     '%s: a structured multi-id deferred batch preserves one canonical payload and one atomic consumed group',
-    async mode => {
+    async (mode) => {
       const h = makeDriven(mode);
       const presentations = [
-        { body: '[msg_id=mA sender=system type=system target=#conv:supervisorConv01 time=2026-01-01T00:00:00+00:00]\nA', instruction: 'system' as const },
-        { body: '[msg_id=mB sender=system type=system target=#conv:supervisorConv01 time=2026-01-01T00:00:01+00:00]\nB', instruction: 'system' as const },
+        {
+          body: '[msg_id=mA sender=system type=system target=#conv:supervisorConv01 time=2026-01-01T00:00:00+00:00]\nA',
+          instruction: 'system' as const,
+        },
+        {
+          body: '[msg_id=mB sender=system type=system target=#conv:supervisorConv01 time=2026-01-01T00:00:01+00:00]\nB',
+          instruction: 'system' as const,
+        },
       ];
       const canonical = composeRuntimeDeliveryPresentation(
         presentations,
@@ -5153,25 +5268,25 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         if (mode === 'gated') {
           h.drive([{ kind: 'turn_end' }]);
           await waitFor(() =>
-            h.events.some(event =>
-              event.event === 'runtime_parsed_event'
-              && event.parsed.kind === 'turn_end'
-            )
+            h.events.some(
+              (event) => event.event === 'runtime_parsed_event' && event.parsed.kind === 'turn_end',
+            ),
           );
         }
 
         // Immediate admission establishes the model-visible baseline.
         const beforeImmediate = h.stub.written.length;
-        expect((await h.supervisor.deliver(
-          structured([72, 73]),
-          { owner: 'structured-owner' },
-        )).disposition).toBe('admitted');
+        expect(
+          (await h.supervisor.deliver(structured([72, 73]), { owner: 'structured-owner' }))
+            .disposition,
+        ).toBe('admitted');
         await waitFor(() => h.stub.written.length === beforeImmediate + 1);
         expect(decoded(h.stub.written.at(-1)!)).toBe(canonical);
         await waitForDeliveryConsumed(h.events, 72);
-        const immediateSettlements = h.events.filter(event =>
-          event.event === 'runtime_delivery_consumed'
-          && event.delivery_ids.some(id => id === 72 || id === 73)
+        const immediateSettlements = h.events.filter(
+          (event) =>
+            event.event === 'runtime_delivery_consumed' &&
+            event.delivery_ids.some((id) => id === 72 || id === 73),
         );
         expect(immediateSettlements).toHaveLength(1);
         expect(immediateSettlements[0]).toMatchObject({
@@ -5186,18 +5301,18 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         } else {
           h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
           await waitFor(() =>
-            h.events.some(event =>
-              event.event === 'runtime_parsed_event'
-              && event.parsed.kind === 'tool_call'
-            )
+            h.events.some(
+              (event) =>
+                event.event === 'runtime_parsed_event' && event.parsed.kind === 'tool_call',
+            ),
           );
           beforeDeferred = h.stub.written.length;
         }
 
-        expect((await h.supervisor.deliver(
-          structured([70, 71]),
-          { owner: 'structured-owner' },
-        )).disposition).toBe('deferred');
+        expect(
+          (await h.supervisor.deliver(structured([70, 71]), { owner: 'structured-owner' }))
+            .disposition,
+        ).toBe('deferred');
         expect(h.stub.written).toHaveLength(beforeDeferred);
 
         if (mode === 'direct') {
@@ -5210,21 +5325,27 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         await waitFor(() => h.stub.written.length === beforeDeferred + 1);
         expect(decoded(h.stub.written.at(-1)!)).toBe(canonical);
         await waitForDeliveryConsumed(h.events, 70);
-        const deferredSettlements = h.events.filter(event =>
-          event.event === 'runtime_delivery_consumed'
-          && event.delivery_ids.some(id => id === 70 || id === 71)
+        const deferredSettlements = h.events.filter(
+          (event) =>
+            event.event === 'runtime_delivery_consumed' &&
+            event.delivery_ids.some((id) => id === 70 || id === 71),
         );
         expect(deferredSettlements).toHaveLength(1);
         expect(deferredSettlements[0]).toMatchObject({
           delivery_ids: [70, 71],
         });
-
       } finally {
-        await h.supervisor.stop({
-          runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-          runtime_generation: 1,
-          mode: 'hard',
-        }).catch(() => undefined);
+        await h.supervisor
+          .stop({
+            runtime_scope: {
+              kind: 'conversation',
+              conversation_id: 'Conversation0001',
+              agent_id: 'a1',
+            },
+            runtime_generation: 1,
+            mode: 'hard',
+          })
+          .catch(() => undefined);
       }
     },
   );
@@ -5268,11 +5389,17 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       // it is never consumed here (the backend re-drives it as a fresh row).
       expect(h.consumedFor(101)).toHaveLength(0);
     } finally {
-      await h.supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1,
-        mode: 'hard',
-      }).catch(() => undefined);
+      await h.supervisor
+        .stop({
+          runtime_scope: {
+            kind: 'conversation',
+            conversation_id: 'Conversation0001',
+            agent_id: 'a1',
+          },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
+        .catch(() => undefined);
     }
   });
 
@@ -5282,7 +5409,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       sessionScope: 'agent',
     });
     const h = makeDriven('gated', undefined, undefined, { startOptions });
-    const presentations = [10, 11].map(id => ({
+    const presentations = [10, 11].map((id) => ({
       body: `msg-${id}`,
       instruction: 'other' as const,
     }));
@@ -5297,10 +5424,10 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       delivery_ids: [...ids],
       kind: 'message' as const,
       text: composeRuntimeDeliveryPresentation(
-        ids.map(id => presentations[id === 10 ? 0 : 1]!),
+        ids.map((id) => presentations[id === 10 ? 0 : 1]!),
         'silverhand message send',
       ),
-      deliveries: ids.map(id => ({
+      deliveries: ids.map((id) => ({
         delivery_id: id,
         seq: id,
         presentation: presentations[id === 10 ? 0 : 1]!,
@@ -5314,19 +5441,18 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       h.drive([{ kind: 'session_init', sessionId: 's1' }]);
       await waitForDeliveryConsumed(h.events, 1);
       h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
-      await waitFor(() => h.events.some(event =>
-        event.event === 'runtime_parsed_event'
-        && event.parsed.kind === 'tool_call'
-      ));
+      await waitFor(() =>
+        h.events.some(
+          (event) => event.event === 'runtime_parsed_event' && event.parsed.kind === 'tool_call',
+        ),
+      );
 
-      expect((await h.supervisor.deliver(
-        batch([10, 11]),
-        { owner: 'owner-A' },
-      )).disposition).toBe('deferred');
-      expect((await h.supervisor.deliver(
-        batch([10]),
-        { owner: 'owner-B' },
-      )).disposition).toBe('deferred');
+      expect((await h.supervisor.deliver(batch([10, 11]), { owner: 'owner-A' })).disposition).toBe(
+        'deferred',
+      );
+      expect((await h.supervisor.deliver(batch([10]), { owner: 'owner-B' })).disposition).toBe(
+        'deferred',
+      );
       h.supervisor.cleanupDeferredForOwner('owner-A');
 
       const before = h.stub.written.length;
@@ -5336,17 +5462,17 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       expect(text).toContain('msg-10');
       expect(text).not.toContain('msg-11');
       expect(text).not.toMatch(/runtime_scope|workdir=/u);
-      expect(text).not.toContain(
-        join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'),
-      );
+      expect(text).not.toContain(join(SUPERVISOR_AGENTS_ROOT, 'a1', 'workspaces', 'ws1'));
       await waitForDeliveryConsumed(h.events, 10);
       expect(h.consumedFor(11)).toHaveLength(0);
     } finally {
-      await h.supervisor.stop({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-        runtime_generation: 1,
-        mode: 'hard',
-      }).catch(() => undefined);
+      await h.supervisor
+        .stop({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
+        .catch(() => undefined);
     }
   });
 
@@ -5363,56 +5489,69 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       conversationId: string,
       workspace: { id: string; name: string } | null,
       id: number,
-    ) => h.supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: conversationId,
-      target: { conversation_id: conversationId, workspace },
-      agent_id: 'a1',
-      delivery_ids: [id],
-      kind: 'message',
-      text: `origin-${conversationId}`,
-      deliveries: [{ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`origin-${conversationId}`) }],
-      spawn_options: startOptions,
-    }, { owner: 'owner-A' });
-    try {
-      const fromA = await deliver(
-        'Conversation0001',
-        { id: 'ws1', name: 'one' },
-        1,
+    ) =>
+      h.supervisor.deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: conversationId,
+          target: { conversation_id: conversationId, workspace },
+          agent_id: 'a1',
+          delivery_ids: [id],
+          kind: 'message',
+          text: `origin-${conversationId}`,
+          deliveries: [
+            {
+              delivery_id: id,
+              seq: id,
+              presentation: testDeliveryPresentation(`origin-${conversationId}`),
+            },
+          ],
+          spawn_options: startOptions,
+        },
+        { owner: 'owner-A' },
       );
+    try {
+      const fromA = await deliver('Conversation0001', { id: 'ws1', name: 'one' }, 1);
       expect(fromA.disposition).toBe('spawning');
       if (fromA.disposition === 'refused') throw new Error('A was refused');
       await waitForDeliveryConsumed(h.events, 1);
       h.drive([{ kind: 'session_init', sessionId: 'agent-slot-vendor-session' }]);
-      await waitFor(() => h.events.some(event =>
-        event.event === 'runtime_parsed_event'
-        && event.parsed.kind === 'session_init'
-      ));
-      h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
-      await waitFor(() => h.events.some(event =>
-        event.event === 'runtime_state'
-        && event.conversation_id === 'Conversation0001'
-        && event.state.conversationId === 'Conversation0001'
-      ));
-      const focusBoundary = h.events.length;
-      const fromB = await deliver(
-        'Conversation0002',
-        { id: 'ws2', name: 'two' },
-        2,
+      await waitFor(() =>
+        h.events.some(
+          (event) => event.event === 'runtime_parsed_event' && event.parsed.kind === 'session_init',
+        ),
       );
+      h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
+      await waitFor(() =>
+        h.events.some(
+          (event) =>
+            event.event === 'runtime_state' &&
+            event.conversation_id === 'Conversation0001' &&
+            event.state.conversationId === 'Conversation0001',
+        ),
+      );
+      const focusBoundary = h.events.length;
+      const fromB = await deliver('Conversation0002', { id: 'ws2', name: 'two' }, 2);
       expect(fromB.disposition).toBe('admitted');
       if (fromB.disposition === 'refused') throw new Error('B was refused');
       await waitForDeliveryConsumed(h.events, 2);
       h.drive([{ kind: 'text', text: 'visible from B' }, { kind: 'turn_end' }]);
-      await waitFor(() => h.events.slice(focusBoundary).some(event =>
-        event.event === 'runtime_state'
-        && event.state.status === 'idle'
-        && event.state.terminalReason === 'turn_ended'
-      ));
-      const bStates = h.events.slice(focusBoundary).filter(
-        (event): event is Extract<EventFrame, { event: 'runtime_state' }> =>
-          event.event === 'runtime_state',
+      await waitFor(() =>
+        h.events
+          .slice(focusBoundary)
+          .some(
+            (event) =>
+              event.event === 'runtime_state' &&
+              event.state.status === 'idle' &&
+              event.state.terminalReason === 'turn_ended',
+          ),
       );
+      const bStates = h.events
+        .slice(focusBoundary)
+        .filter(
+          (event): event is Extract<EventFrame, { event: 'runtime_state' }> =>
+            event.event === 'runtime_state',
+        );
       expect(bStates.length).toBeGreaterThan(0);
       for (const frame of bStates) {
         expect(frame.conversation_id).toBe('Conversation0002');
@@ -5426,11 +5565,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       // Return to A after a workspace-less direct-message origin. The semantic
       // `dm:@handle` spelling is covered by the real CLI subprocess matrix;
       // here the host proves that A → B → DM → A remains one vendor process.
-      const backToA = await deliver(
-        'Conversation0001',
-        { id: 'ws1', name: 'one' },
-        4,
-      );
+      const backToA = await deliver('Conversation0001', { id: 'ws1', name: 'one' }, 4);
       expect(backToA.disposition).toBe('admitted');
       if (backToA.disposition === 'refused') throw new Error('return to A was refused');
       await waitForDeliveryConsumed(h.events, 4);
@@ -5439,10 +5574,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       expect(fromB.pid).toBe(fromInbox.pid);
       expect(fromInbox.pid).toBe(backToA.pid);
       expect(h.supervisor.status({}).runtimes).toHaveLength(1);
-      expect(h.events.filter(event =>
-        event.event === 'runtime_parsed_event'
-        && event.parsed.kind === 'session_init'
-      )).toHaveLength(1);
+      expect(
+        h.events.filter(
+          (event) => event.event === 'runtime_parsed_event' && event.parsed.kind === 'session_init',
+        ),
+      ).toHaveLength(1);
       const visible = h.stub.written.map(decoded);
       for (const text of visible) expect(text).not.toContain('target=');
       for (const text of visible) {
@@ -5450,11 +5586,13 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
         expect(text).not.toContain(SUPERVISOR_AGENTS_ROOT);
       }
     } finally {
-      await h.supervisor.stop({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-        runtime_generation: 1,
-        mode: 'hard',
-      }).catch(() => undefined);
+      await h.supervisor
+        .stop({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
+        .catch(() => undefined);
     }
   });
 
@@ -5469,48 +5607,57 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       ['Conversation0001', 'stale'],
       ['Conversation0002', 'stale'],
     ]);
-    vi.stubGlobal('fetch', vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
-      const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
-      const conversationId = typeof body['conversation_id'] === 'string'
-        ? body['conversation_id']
-        : /^#conv:([^/]+)/.exec(String(body['target']))?.[1]
-          ?? 'Conversation0001';
-      const url = String(input);
-      const bodies = posted.get(conversationId) ?? [];
-      bodies.push(body);
-      posted.set(conversationId, bodies);
-      if (url.endsWith('/stale-message-resolution')) {
-        return new Response(JSON.stringify({ resolved: true }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      if (responses.get(conversationId) === 'stale') {
-        return new Response(JSON.stringify({
-          error: {
-            code: 'conflict',
-            message: 'message stale',
-            details: {
-              subkind: 'message_stale',
-              stale_event_id: `stale-${conversationId}`,
-              target_conversation_id: conversationId,
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        const conversationId =
+          typeof body['conversation_id'] === 'string'
+            ? body['conversation_id']
+            : (/^#conv:([^/]+)/.exec(String(body['target']))?.[1] ?? 'Conversation0001');
+        const url = String(input);
+        const bodies = posted.get(conversationId) ?? [];
+        bodies.push(body);
+        posted.set(conversationId, bodies);
+        if (url.endsWith('/stale-message-resolution')) {
+          return new Response(JSON.stringify({ resolved: true }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        if (responses.get(conversationId) === 'stale') {
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  stale_event_id: `stale-${conversationId}`,
+                  target_conversation_id: conversationId,
+                },
+              },
+            }),
+            {
+              status: 409,
+              headers: { 'content-type': 'application/json' },
             },
+          );
+        }
+        return new Response(
+          JSON.stringify({
+            message_id: `sent-${conversationId}`,
+            message_seq: 3,
+            conversation_id: conversationId,
+            thread_root_id: null,
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
           },
-        }), {
-          status: 409,
-          headers: { 'content-type': 'application/json' },
-        });
-      }
-      return new Response(JSON.stringify({
-        message_id: `sent-${conversationId}`,
-        message_seq: 3,
-        conversation_id: conversationId,
-        thread_root_id: null,
-      }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      });
-    }));
+        );
+      }),
+    );
     const send = (conversationId: string, content: string) =>
       h.supervisor.agentMessageSend({
         runtime_scope: { kind: 'agent' },
@@ -5556,12 +5703,14 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
       // ── stale-resolve surface (symmetric) ──
       // A mismatched id supersedes here too, echoing the live id.
-      expect(await h.supervisor.agentStaleResolve({
-        runtime_scope: { kind: 'agent' },
-        agent_id: 'a1',
-        stale_event_id: 'stale-Conversation0001',
-        resolution_reason: 'obsolete',
-      })).toEqual({
+      expect(
+        await h.supervisor.agentStaleResolve({
+          runtime_scope: { kind: 'agent' },
+          agent_id: 'a1',
+          stale_event_id: 'stale-Conversation0001',
+          resolution_reason: 'obsolete',
+        }),
+      ).toEqual({
         ok: true,
         resolved: false,
         reason: 'stale_event_superseded',
@@ -5571,12 +5720,14 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       // Resolve the LIVE id → resolved, POSTing the backend-resolved target
       // conversation VERBATIM as the authz subject (F17), then clearing the
       // single held event.
-      expect(await h.supervisor.agentStaleResolve({
-        runtime_scope: { kind: 'agent' },
-        agent_id: 'a1',
-        stale_event_id: 'stale-Conversation0002',
-        resolution_reason: 'obsolete',
-      })).toEqual({ ok: true, resolved: true });
+      expect(
+        await h.supervisor.agentStaleResolve({
+          runtime_scope: { kind: 'agent' },
+          agent_id: 'a1',
+          stale_event_id: 'stale-Conversation0002',
+          resolution_reason: 'obsolete',
+        }),
+      ).toEqual({ ok: true, resolved: true });
       expect(posted.get('Conversation0002')?.at(-1)).toMatchObject({
         conversation_id: 'Conversation0002',
         stale_event_id: 'stale-Conversation0002',
@@ -5586,21 +5737,26 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       // ── the OTHER outcome: pendingStaleEvent === null → true absence ──
       // receive reports `no_pending_stale`; resolve reports the (distinctly
       // named) `no_pending_stale_event`. Neither carries a live id.
-      expect((await receive('stale-Conversation0002', 'control:cleared')).outcome)
-        .toBe('no_pending_stale');
-      expect(await h.supervisor.agentStaleResolve({
-        runtime_scope: { kind: 'agent' },
-        agent_id: 'a1',
-        stale_event_id: 'stale-anything',
-        resolution_reason: 'obsolete',
-      })).toEqual({ ok: true, resolved: false, reason: 'no_pending_stale_event' });
+      expect((await receive('stale-Conversation0002', 'control:cleared')).outcome).toBe(
+        'no_pending_stale',
+      );
+      expect(
+        await h.supervisor.agentStaleResolve({
+          runtime_scope: { kind: 'agent' },
+          agent_id: 'a1',
+          stale_event_id: 'stale-anything',
+          resolution_reason: 'obsolete',
+        }),
+      ).toEqual({ ok: true, resolved: false, reason: 'no_pending_stale_event' });
     } finally {
       vi.unstubAllGlobals();
-      await h.supervisor.stop({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-        runtime_generation: 1,
-        mode: 'hard',
-      }).catch(() => undefined);
+      await h.supervisor
+        .stop({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
+        .catch(() => undefined);
     }
   });
 
@@ -5616,48 +5772,58 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       sessionScope: 'agent',
     });
     const h = makeDriven('direct', undefined, undefined, { startOptions });
-    let arm: 'stale' | 'ok' | 'conflict_other' | 'stale_unactionable' | 'server_error' =
-      'stale';
-    vi.stubGlobal('fetch', vi.fn(async () => {
-      const conflict = (details: Record<string, unknown> | null) =>
-        new Response(JSON.stringify({
-          error: { code: 'conflict', message: 'nope', ...(details ? { details } : {}) },
-        }), { status: 409, headers: { 'content-type': 'application/json' } });
-      switch (arm) {
-        case 'stale':
-          return conflict({
-            subkind: 'message_stale',
-            stale_event_id: 'stale-1',
-            target_conversation_id: 'Conversation0001',
-          });
-        case 'stale_unactionable':
-          // Right subkind, but no actionable anchor — `extractStaleConflict`
-          // fails CLOSED (no armed event), so there is nothing to report as a
-          // stale refusal either.
-          return conflict({ subkind: 'message_stale' });
-        case 'conflict_other':
-          return conflict({ subkind: 'something_else' });
-        case 'server_error':
-          return new Response('boom', { status: 500 });
-        case 'ok':
-          return new Response(JSON.stringify({
-            message_id: 'sent-1',
-            message_seq: 3,
-            conversation_id: 'Conversation0001',
-            thread_root_id: null,
-          }), { status: 200, headers: { 'content-type': 'application/json' } });
-      }
-    }));
-    const staleFrames = () => h.events.filter(
-      (event): event is Extract<EventFrame, { event: 'runtime_message_stale' }> =>
-        event.event === 'runtime_message_stale',
+    let arm: 'stale' | 'ok' | 'conflict_other' | 'stale_unactionable' | 'server_error' = 'stale';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        const conflict = (details: Record<string, unknown> | null) =>
+          new Response(
+            JSON.stringify({
+              error: { code: 'conflict', message: 'nope', ...(details ? { details } : {}) },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        switch (arm) {
+          case 'stale':
+            return conflict({
+              subkind: 'message_stale',
+              stale_event_id: 'stale-1',
+              target_conversation_id: 'Conversation0001',
+            });
+          case 'stale_unactionable':
+            // Right subkind, but no actionable anchor — `extractStaleConflict`
+            // fails CLOSED (no armed event), so there is nothing to report as a
+            // stale refusal either.
+            return conflict({ subkind: 'message_stale' });
+          case 'conflict_other':
+            return conflict({ subkind: 'something_else' });
+          case 'server_error':
+            return new Response('boom', { status: 500 });
+          case 'ok':
+            return new Response(
+              JSON.stringify({
+                message_id: 'sent-1',
+                message_seq: 3,
+                conversation_id: 'Conversation0001',
+                thread_root_id: null,
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            );
+        }
+      }),
     );
-    const send = () => h.supervisor.agentMessageSend({
-      runtime_scope: { kind: 'agent' },
-      target: '#conv:Conversation0001',
-      agent_id: 'a1',
-      content: 'hello',
-    });
+    const staleFrames = () =>
+      h.events.filter(
+        (event): event is Extract<EventFrame, { event: 'runtime_message_stale' }> =>
+          event.event === 'runtime_message_stale',
+      );
+    const send = () =>
+      h.supervisor.agentMessageSend({
+        runtime_scope: { kind: 'agent' },
+        target: '#conv:Conversation0001',
+        agent_id: 'a1',
+        content: 'hello',
+      });
     try {
       expect((await h.deliver([1])).disposition).toBe('spawning');
       await waitForDeliveryConsumed(h.events, 1);
@@ -5692,11 +5858,13 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       expect(staleFrames()).toHaveLength(2);
     } finally {
       vi.unstubAllGlobals();
-      await h.supervisor.stop({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-        runtime_generation: 1,
-        mode: 'hard',
-      }).catch(() => undefined);
+      await h.supervisor
+        .stop({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
+        .catch(() => undefined);
     }
   });
 
@@ -5716,37 +5884,55 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     // Held in a container, not a `let`: TS narrows a `let` assigned only inside a
     // callback back to `null` at the call site.
     const parked: { release: (() => void) | null } = { release: null };
-    const sendReached = new Promise<void>(resolveReached => {
-      vi.stubGlobal('fetch', vi.fn(async () => {
-        await new Promise<void>(release => {
-          parked.release = release;
-          resolveReached();
-        });
-        return new Response(JSON.stringify({
-          error: {
-            code: 'conflict',
-            message: 'message stale',
-            details: {
-              subkind: 'message_stale',
-              stale_event_id: 'stale-1',
-              target_conversation_id: 'Conversation0001',
-            },
-          },
-        }), { status: 409, headers: { 'content-type': 'application/json' } });
-      }));
+    const sendReached = new Promise<void>((resolveReached) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          await new Promise<void>((release) => {
+            parked.release = release;
+            resolveReached();
+          });
+          return new Response(
+            JSON.stringify({
+              error: {
+                code: 'conflict',
+                message: 'message stale',
+                details: {
+                  subkind: 'message_stale',
+                  stale_event_id: 'stale-1',
+                  target_conversation_id: 'Conversation0001',
+                },
+              },
+            }),
+            { status: 409, headers: { 'content-type': 'application/json' } },
+          );
+        }),
+      );
     });
     const deliverTo = (conversationId: string, workspace: string, id: number) =>
-      h.supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: conversationId,
-        target: { conversation_id: conversationId, workspace: { id: workspace, name: workspace } },
-        agent_id: 'a1',
-        delivery_ids: [id],
-        kind: 'message',
-        text: `origin-${conversationId}`,
-        deliveries: [{ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`origin-${conversationId}`) }],
-        spawn_options: startOptions,
-      }, { owner: 'owner-A' });
+      h.supervisor.deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: conversationId,
+          target: {
+            conversation_id: conversationId,
+            workspace: { id: workspace, name: workspace },
+          },
+          agent_id: 'a1',
+          delivery_ids: [id],
+          kind: 'message',
+          text: `origin-${conversationId}`,
+          deliveries: [
+            {
+              delivery_id: id,
+              seq: id,
+              presentation: testDeliveryPresentation(`origin-${conversationId}`),
+            },
+          ],
+          spawn_options: startOptions,
+        },
+        { owner: 'owner-A' },
+      );
     try {
       expect((await deliverTo('Conversation0001', 'ws1', 1)).disposition).toBe('spawning');
       await waitForDeliveryConsumed(h.events, 1);
@@ -5767,10 +5953,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       // test could pass on a focus that never moved.
       expect((await deliverTo('Conversation0002', 'ws2', 2)).disposition).toBe('admitted');
       await waitForDeliveryConsumed(h.events, 2);
-      expect(h.events.find(event =>
-        event.event === 'runtime_delivery_consumed'
-        && event.delivery_ids.includes(2),
-      )).toMatchObject({ conversation_id: 'Conversation0002' });
+      expect(
+        h.events.find(
+          (event) => event.event === 'runtime_delivery_consumed' && event.delivery_ids.includes(2),
+        ),
+      ).toMatchObject({ conversation_id: 'Conversation0002' });
 
       parked.release?.();
       expect(await inFlight).toMatchObject({ ok: false, status: 409 });
@@ -5783,11 +5970,13 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       expect(staleFrames[0]?.conversation_id).toBe('Conversation0001');
     } finally {
       vi.unstubAllGlobals();
-      await h.supervisor.stop({
-        runtime_scope: { kind: 'agent', agent_id: 'a1' },
-        runtime_generation: 1,
-        mode: 'hard',
-      }).catch(() => undefined);
+      await h.supervisor
+        .stop({
+          runtime_scope: { kind: 'agent', agent_id: 'a1' },
+          runtime_generation: 1,
+          mode: 'hard',
+        })
+        .catch(() => undefined);
     }
   });
 
@@ -5822,10 +6011,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
     await (
       supervisor as unknown as {
-        internalRespawnForRetry(
-          params: typeof baseStartParams,
-          attempt: number,
-        ): Promise<void>;
+        internalRespawnForRetry(params: typeof baseStartParams, attempt: number): Promise<void>;
       }
     ).internalRespawnForRetry(baseStartParams, 1);
     expect(supervisor.status({ agent_id: 'a1' })).toEqual({
@@ -6032,7 +6218,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     expect(h.consumedFor(1)).toHaveLength(1);
     expect(h.stub.written).toHaveLength(1);
 
-    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await h.supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('crash/restart convergence (#task:1563 §8): reservation + deferred queue die with the runtime — per-entry child_exit settle, never consumed; respawn-with-batch admits and re-arms the reservation', async () => {
@@ -6129,7 +6319,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       for (const id of [2, 3]) {
         expect(
           h.events.filter(
-            event =>
+            (event) =>
               event.event === 'runtime_delivery_failed' &&
               event.delivery_ids.includes(id) &&
               event.reason === 'child_exit',
@@ -6143,8 +6333,12 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
   it('prompt-boundary falsifier (#task:1565): deliveries during an active prompt DEFER; the prompt response reopens the boundary → ONE combined prompt, batch-boundary admission', async () => {
     const logs: Array<Record<string, unknown>> = [];
     const logger = {
-      info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
-      warn: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      info: (f: unknown) => {
+        if (f && typeof f === 'object') logs.push(f as Record<string, unknown>);
+      },
+      warn: (f: unknown) => {
+        if (f && typeof f === 'object') logs.push(f as Record<string, unknown>);
+      },
       error: () => {},
     } as unknown as DaemonLogger;
     const h = makeDriven('direct', 'prompt-boundary', logger);
@@ -6161,22 +6355,28 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       return baseEncode(text, sess, opts);
     };
     const baseParse = h.driver.parseLine.bind(h.driver);
-    h.driver.parseLine = line => {
+    h.driver.parseLine = (line) => {
       const events = baseParse(line);
-      if (events.some(e => e.kind === 'turn_end')) promptActive = false;
+      if (events.some((e) => e.kind === 'turn_end')) promptActive = false;
       return events;
     };
     h.driver.readyToEncode = () => !promptActive;
 
     const deliverSeq = (id: number, seq: number) =>
-      h.supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: [id], kind: 'message',
-        text: `m${id}`,
-        deliveries: [{ delivery_id: id, seq, presentation: testDeliveryPresentation(`m${id}`) }],
-        spawn_options: baseStartParams.options,
-      }, { owner: 'test-owner' });
+      h.supervisor.deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: 'Conversation0001',
+          target: { conversation_id: 'Conversation0001', workspace: null },
+          agent_id: 'a1',
+          delivery_ids: [id],
+          kind: 'message',
+          text: `m${id}`,
+          deliveries: [{ delivery_id: id, seq, presentation: testDeliveryPresentation(`m${id}`) }],
+          spawn_options: baseStartParams.options,
+        },
+        { owner: 'test-owner' },
+      );
 
     // Spawn-with-batch [1] (seq 10): the write IS the prompt → boundary
     // closes.
@@ -6201,20 +6401,16 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     h.drive([{ kind: 'turn_end' }]);
     await waitForDeliveryConsumed(h.events, 2);
     const combined = h.events.filter(
-      e =>
-        e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(2),
+      (e) => e.event === 'runtime_delivery_consumed' && e.delivery_ids.includes(2),
     );
     expect(combined).toHaveLength(1);
     // FIFO is part of the acceptance contract (no reorder): assert the
     // consumed id ORDER verbatim — no .sort() masking — and that the
     // combined payload writes m2 before m3 on the wire.
     expect(
-      combined[0]!.event === 'runtime_delivery_consumed' &&
-        [...combined[0]!.delivery_ids],
+      combined[0]!.event === 'runtime_delivery_consumed' && [...combined[0]!.delivery_ids],
     ).toEqual([2, 3]);
-    const combinedWrite = h.stub.written.find(
-      w => w.includes('m2') && w.includes('m3'),
-    );
+    const combinedWrite = h.stub.written.find((w) => w.includes('m2') && w.includes('m3'));
     expect(combinedWrite).toBeTruthy();
     expect(combinedWrite!.indexOf('m2')).toBeLessThan(combinedWrite!.indexOf('m3'));
 
@@ -6226,14 +6422,22 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     h.drive([{ kind: 'turn_end' }]);
     await waitForDeliveryConsumed(h.events, 4);
 
-    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await h.supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it("B' (#task:1558): tool-boundary-steer writes immediately mid-turn (compaction is the only hold)", async () => {
     const logs: Array<Record<string, unknown>> = [];
     const logger = {
-      info: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
-      warn: (f: unknown) => { if (f && typeof f === 'object') logs.push(f as Record<string, unknown>); },
+      info: (f: unknown) => {
+        if (f && typeof f === 'object') logs.push(f as Record<string, unknown>);
+      },
+      warn: (f: unknown) => {
+        if (f && typeof f === 'object') logs.push(f as Record<string, unknown>);
+      },
       error: () => {},
     } as unknown as DaemonLogger;
     const h = makeDriven('gated', 'tool-boundary-steer', logger);
@@ -6245,17 +6449,20 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     };
 
     // Spawn with seq so the turn becomes active (admission with seq).
-    const spawn0 = await h.supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [1],
-      kind: 'message',
-      text: 'first',
-      deliveries: [{ delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('first') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const spawn0 = await h.supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [1],
+        kind: 'message',
+        text: 'first',
+        deliveries: [{ delivery_id: 1, seq: 1, presentation: testDeliveryPresentation('first') }],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(spawn0.disposition).toBe('spawning');
     h.drive([{ kind: 'session_init', sessionId: 's1' }]);
     await waitForDeliveryConsumed(h.events, 1);
@@ -6264,21 +6471,24 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     // closed. tool-boundary-steer must still write immediately.
     h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
     await waitFor(() =>
-      h.events.some(
-        e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'tool_call',
-      ),
+      h.events.some((e) => e.event === 'runtime_parsed_event' && e.parsed.kind === 'tool_call'),
     );
-    const d2 = await h.supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [2],
-      kind: 'message',
-      text: 'steer me in',
-      deliveries: [{ delivery_id: 2, seq: 2, presentation: testDeliveryPresentation('steer me in') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const d2 = await h.supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [2],
+        kind: 'message',
+        text: 'steer me in',
+        deliveries: [
+          { delivery_id: 2, seq: 2, presentation: testDeliveryPresentation('steer me in') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(d2.disposition).toBe('admitted');
     await waitForDeliveryConsumed(h.events, 2);
     const uuid2 = minted[minted.length - 1];
@@ -6289,27 +6499,34 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     h.drive([{ kind: 'compaction_started' }]);
     await waitFor(() =>
       h.events.some(
-        e =>
-          e.event === 'runtime_parsed_event' &&
-          e.parsed.kind === 'compaction_started',
+        (e) => e.event === 'runtime_parsed_event' && e.parsed.kind === 'compaction_started',
       ),
     );
-    const d3 = await h.supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null },
-      agent_id: 'a1',
-      delivery_ids: [3],
-      kind: 'message',
-      text: 'wait for compaction',
-      deliveries: [{ delivery_id: 3, seq: 3, presentation: testDeliveryPresentation('wait for compaction') }],
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const d3 = await h.supervisor.deliver(
+      {
+        runtime_generation: 1,
+        conversation_id: 'Conversation0001',
+        target: { conversation_id: 'Conversation0001', workspace: null },
+        agent_id: 'a1',
+        delivery_ids: [3],
+        kind: 'message',
+        text: 'wait for compaction',
+        deliveries: [
+          { delivery_id: 3, seq: 3, presentation: testDeliveryPresentation('wait for compaction') },
+        ],
+        spawn_options: baseStartParams.options,
+      },
+      { owner: 'test-owner' },
+    );
     expect(d3.disposition).toBe('deferred');
     h.drive([{ kind: 'compaction_finished' }]);
     await waitForDeliveryConsumed(h.events, 3);
 
-    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await h.supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('P1-1 falsifier (#1558 final gate): a turn_end crossing the write await window must not be overwritten back into reserved', async () => {
@@ -6325,14 +6542,24 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       pendingWriteCb: ((err?: Error | null) => void) | null = null;
       readonly stdin = {
         write: (_l: string, cb?: (err?: Error | null) => void): boolean => {
-          if (this.parkWrites) { this.pendingWriteCb = cb ?? null; }
-          else setImmediate(() => cb?.());
+          if (this.parkWrites) {
+            this.pendingWriteCb = cb ?? null;
+          } else setImmediate(() => cb?.());
           return true;
         },
-        end: () => {}, destroyed: false, once: () => {},
+        end: () => {},
+        destroyed: false,
+        once: () => {},
       };
-      resolveParkedWrite(): void { const cb = this.pendingWriteCb; this.pendingWriteCb = null; cb?.(); }
-      kill(): boolean { setImmediate(() => this.emit('exit', 0, null)); return true; }
+      resolveParkedWrite(): void {
+        const cb = this.pendingWriteCb;
+        this.pendingWriteCb = null;
+        cb?.();
+      }
+      kill(): boolean {
+        setImmediate(() => this.emit('exit', 0, null));
+        return true;
+      }
     }
     const stub = new ParkedStub();
     const base = makeProgrammableDriver([], 'self_inits').driver;
@@ -6340,7 +6567,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     const driver: Driver = {
       ...base,
       releaseProfile: 'next-turn-batch',
-      parseLine: () => { const out = nextParse; nextParse = []; return out; },
+      parseLine: () => {
+        const out = nextParse;
+        nextParse = [];
+        return out;
+      },
     };
     const spy = makeEmitSpy();
     const supervisor = new Supervisor({
@@ -6349,20 +6580,36 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
       driverFor: () => driver,
       resolveRuntime: async (_k, fb) => ({ binary: fb, version: null }),
       spawnFn: () => stub as unknown as ChildProcess,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: SUPERVISOR_AGENTS_ROOT }),
+      runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+        agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
+      }),
       controlPlaneServerUrl: () => 'http://127.0.0.1:8765',
       sigtermToSigkillMs: 50,
       sigkillTimeoutMs: 200,
     });
-    const drive = (events: ParsedEvent[]) => { nextParse = events; stub.stdout.emit('data', 'line\n'); };
-    const deliver = (ids: number[]) => supervisor.deliver({
-      runtime_generation: 1,
-      conversation_id: 'Conversation0001',
-      target: { conversation_id: 'Conversation0001', workspace: null }, agent_id: 'a1', delivery_ids: ids, kind: 'message',
-      text: `m-${ids.join('_')}`,
-      deliveries: ids.map(id => ({ delivery_id: id, seq: id, presentation: testDeliveryPresentation(`m-${ids.join('_')}`) })),
-      spawn_options: baseStartParams.options,
-    }, { owner: 'test-owner' });
+    const drive = (events: ParsedEvent[]) => {
+      nextParse = events;
+      stub.stdout.emit('data', 'line\n');
+    };
+    const deliver = (ids: number[]) =>
+      supervisor.deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: 'Conversation0001',
+          target: { conversation_id: 'Conversation0001', workspace: null },
+          agent_id: 'a1',
+          delivery_ids: ids,
+          kind: 'message',
+          text: `m-${ids.join('_')}`,
+          deliveries: ids.map((id) => ({
+            delivery_id: id,
+            seq: id,
+            presentation: testDeliveryPresentation(`m-${ids.join('_')}`),
+          })),
+          spawn_options: baseStartParams.options,
+        },
+        { owner: 'test-owner' },
+      );
 
     // Spawn-with-batch [1]: park its write, complete its turn (turn_end)
     // while the write callback is parked, THEN resolve the write.
@@ -6372,9 +6619,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     await waitFor(() => stub.pendingWriteCb !== null, 1_000);
     drive([{ kind: 'turn_end' }]);
     await waitFor(() =>
-      spy.events.some(
-        e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'turn_end',
-      ),
+      spy.events.some((e) => e.event === 'runtime_parsed_event' && e.parsed.kind === 'turn_end'),
     );
     stub.parkWrites = false;
     stub.resolveParkedWrite();
@@ -6386,7 +6631,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     const d2 = await deliver([2]);
     expect(d2.disposition).toBe('admitted');
     await waitForDeliveryConsumed(spy.events, 2);
-    await supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('P1-2 falsifier (#1558 final gate): a drain-all flush takes a bounded prefix and leaves the ordered remainder for the next boundary', async () => {
@@ -6450,7 +6699,16 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     expect(h.consumedFor(2)).toHaveLength(0);
 
     (h.driver as { releaseProfile: string }).releaseProfile = 'native-steer';
-    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' })
+    await h.supervisor
+      .stop({
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'Conversation0001',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
+      })
       .catch(() => undefined);
   });
 
@@ -6542,14 +6800,18 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     // No single consumed carries both — direct never combines.
     expect(
       h.events.some(
-        e =>
+        (e) =>
           e.event === 'runtime_delivery_consumed' &&
           e.delivery_ids.includes(2) &&
           e.delivery_ids.includes(3),
       ),
     ).toBe(false);
 
-    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await h.supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('owner-scoped cleanup discards only the dropped connection’s deferred entries', async () => {
@@ -6562,9 +6824,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     // Mid-turn: two owners each defer a delivery.
     h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
     await waitFor(() =>
-      h.events.some(
-        e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'tool_call',
-      ),
+      h.events.some((e) => e.event === 'runtime_parsed_event' && e.parsed.kind === 'tool_call'),
     );
     expect((await h.deliver([10], 'owner-A')).disposition).toBe('deferred');
     expect((await h.deliver([20], 'owner-B')).disposition).toBe('deferred');
@@ -6573,21 +6833,23 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     h.supervisor.cleanupDeferredForOwner('owner-A');
     await wait(20);
     expect(
-      h.events.some(e => e.event === 'runtime_delivery_consumed'
-        ? e.delivery_ids.includes(10) : false),
+      h.events.some((e) =>
+        e.event === 'runtime_delivery_consumed' ? e.delivery_ids.includes(10) : false,
+      ),
     ).toBe(false);
-    expect(
-      h.events.some(e => e.event === 'runtime_delivery_failed'),
-    ).toBe(false);
+    expect(h.events.some((e) => e.event === 'runtime_delivery_failed')).toBe(false);
 
     // turn_end: only owner-B's surviving [20] flushes; A's [10] is gone.
     h.drive([{ kind: 'turn_end' }]);
     await waitForDeliveryConsumed(h.events, 20);
     expect(h.consumedFor(10)).toHaveLength(0);
 
-    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await h.supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
-
 
   it('reconnect/reclaim race: a same-id-set re-submit under a NEW owner rebinds the queued entry, so the OLD owner’s cleanup no longer drops it (Cindy P1)', async () => {
     // The orphan Cindy P1 flags: owner A defers [42] mid-turn; the backend
@@ -6605,9 +6867,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
     h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
     await waitFor(() =>
-      h.events.some(
-        e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'tool_call',
-      ),
+      h.events.some((e) => e.event === 'runtime_parsed_event' && e.parsed.kind === 'tool_call'),
     );
 
     // A defers [42]; then B re-submits the SAME id-set before A's cleanup.
@@ -6623,7 +6883,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     await waitForDeliveryConsumed(h.events, 42);
     expect(h.consumedFor(42)).toHaveLength(1);
 
-    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await h.supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 
   it('same-owner re-submit of a queued id-set is idempotent (no double-queue, one consumed)', async () => {
@@ -6635,9 +6899,7 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
 
     h.drive([{ kind: 'tool_call', name: 'Bash', input: {} }]);
     await waitFor(() =>
-      h.events.some(
-        e => e.event === 'runtime_parsed_event' && e.parsed.kind === 'tool_call',
-      ),
+      h.events.some((e) => e.event === 'runtime_parsed_event' && e.parsed.kind === 'tool_call'),
     );
 
     // Same owner defers [7] twice — the second is deduped, not double-queued.
@@ -6649,7 +6911,11 @@ describe('Supervisor Stage 3 — daemon mid-turn deferred queue', () => {
     // Exactly one consumed carrying [7] — dedup held.
     expect(h.consumedFor(7)).toHaveLength(1);
 
-    await h.supervisor.stop({ runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' }, runtime_generation: 1, mode: 'hard' });
+    await h.supervisor.stop({
+      runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
+      runtime_generation: 1,
+      mode: 'hard',
+    });
   });
 });
 
@@ -7128,7 +7394,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     const h = makePullHarness();
     h.stubBackendFreshnessGuard();
     let releasePurge!: () => void;
-    const holdPurge = new Promise<void>(resolve => {
+    const holdPurge = new Promise<void>((resolve) => {
       releasePurge = resolve;
     });
     try {
@@ -7151,8 +7417,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       await expect(purge).resolves.toMatchObject({ quiesced_count: 1 });
       expect(
         h.events.filter(
-          event => event.event === 'runtime_delivery_failed'
-            && event.delivery_ids.includes(2),
+          (event) => event.event === 'runtime_delivery_failed' && event.delivery_ids.includes(2),
         ),
       ).toHaveLength(1);
     } finally {
@@ -7372,9 +7637,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       settle!(false);
       await wait(30);
       expect(h.consumedFor(2)).toHaveLength(0);
-      expect(
-        h.events.some(e => e.event === 'runtime_delivery_failed'),
-      ).toBe(false);
+      expect(h.events.some((e) => e.event === 'runtime_delivery_failed')).toBe(false);
 
       // The restored row is undelivered again, so the runtime's field of
       // view is still stale: a non-bypass retry honestly 409s (freshness
@@ -7387,9 +7650,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       h.drive([{ kind: 'turn_end' }]);
       await waitForDeliveryConsumed(h.events, 2);
       expect(h.consumedFor(2)).toHaveLength(1);
-      expect(
-        h.stub.written.filter(w => w.includes('msg-2')),
-      ).toHaveLength(1);
+      expect(h.stub.written.filter((w) => w.includes('msg-2'))).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();
       await h.stop();
@@ -7559,7 +7820,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
     }
   });
 
-  it('one pull per handle: a rejected second call cannot clear the first call\'s waiter — the first fulfills on ARRIVAL, far before its deadline (P1-3)', async () => {
+  it("one pull per handle: a rejected second call cannot clear the first call's waiter — the first fulfills on ARRIVAL, far before its deadline (P1-3)", async () => {
     const h = makePullHarness();
     h.stubBackendFreshnessGuard();
     try {
@@ -7645,13 +7906,11 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       settle!(true);
       await waitForDeliveryConsumed(h.events, 4);
       expect(h.consumedFor(4)).toHaveLength(1);
-      expect(
-        h.stub.written.filter(w => w.includes('msg-4')),
-      ).toHaveLength(1);
+      expect(h.stub.written.filter((w) => w.includes('msg-4'))).toHaveLength(1);
       // The pulled batch itself was consumed exactly once and never
       // written to stdin.
       expect(h.consumedFor(2)).toHaveLength(1);
-      expect(h.stub.written.filter(w => w.includes('msg-2'))).toHaveLength(0);
+      expect(h.stub.written.filter((w) => w.includes('msg-2'))).toHaveLength(0);
     } finally {
       vi.unstubAllGlobals();
       await h.stop();
@@ -7688,7 +7947,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       await wait(30);
       expect(h.stub.written.length).toBe(writesAfterBoot);
       expect(h.consumedFor(2)).toHaveLength(1);
-      expect(h.stub.written.filter(w => w.includes('msg-2'))).toHaveLength(0);
+      expect(h.stub.written.filter((w) => w.includes('msg-2'))).toHaveLength(0);
     } finally {
       vi.unstubAllGlobals();
       await h.stop();
@@ -7707,35 +7966,35 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       expect(result.outcome).toBe('batch_queue_drained');
 
       h.supervisor.cleanupDeferredForOwner('owner-A');
-      const presentations = [2, 3].map(id => ({
+      const presentations = [2, 3].map((id) => ({
         body: `msg-${id}`,
         instruction: 'other' as const,
       }));
-      const retry = await h.supervisor.deliver({
-        runtime_generation: 1,
-        conversation_id: 'Conversation0001',
-        target: { conversation_id: 'Conversation0001', workspace: null },
-        agent_id: 'a1',
-        delivery_ids: [2, 3],
-        kind: 'message',
-        text: composeRuntimeDeliveryPresentation(
-          presentations,
-          'silverhand message send',
-        ),
-        deliveries: [2, 3].map((id, index) => ({
-          delivery_id: id,
-          seq: id,
-          presentation: presentations[index]!,
-        })),
-        spawn_options: baseStartParams.options,
-      }, { owner: 'owner-B' });
+      const retry = await h.supervisor.deliver(
+        {
+          runtime_generation: 1,
+          conversation_id: 'Conversation0001',
+          target: { conversation_id: 'Conversation0001', workspace: null },
+          agent_id: 'a1',
+          delivery_ids: [2, 3],
+          kind: 'message',
+          text: composeRuntimeDeliveryPresentation(presentations, 'silverhand message send'),
+          deliveries: [2, 3].map((id, index) => ({
+            delivery_id: id,
+            seq: id,
+            presentation: presentations[index]!,
+          })),
+          spawn_options: baseStartParams.options,
+        },
+        { owner: 'owner-B' },
+      );
       expect(retry.disposition).toBe('deferred');
 
       // Reservation handoff owns/consumes 2 exactly once and never writes it.
       settle!(true);
       await waitForDeliveryConsumed(h.events, 2);
       expect(h.consumedFor(2)).toHaveLength(1);
-      expect(h.stub.written.filter(write => write.includes('msg-2'))).toHaveLength(0);
+      expect(h.stub.written.filter((write) => write.includes('msg-2'))).toHaveLength(0);
 
       // Novel 3 remains behind the reservation, then releases once at the
       // next proven boundary. FIFO is reservation 2 → deferred 3.
@@ -7743,8 +8002,8 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       await waitForDeliveryConsumed(h.events, 3);
       expect(h.consumedFor(3)).toHaveLength(1);
       expect(h.stub.written.length).toBe(writesAfterBoot + 1);
-      expect(h.stub.written.filter(write => write.includes('msg-3'))).toHaveLength(1);
-      expect(h.stub.written.filter(write => write.includes('msg-2'))).toHaveLength(0);
+      expect(h.stub.written.filter((write) => write.includes('msg-3'))).toHaveLength(1);
+      expect(h.stub.written.filter((write) => write.includes('msg-2'))).toHaveLength(0);
     } finally {
       vi.unstubAllGlobals();
       await h.stop();
@@ -7775,14 +8034,14 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       h.drive([{ kind: 'turn_end' }]);
       await waitForDeliveryConsumed(h.events, 2);
       expect(h.consumedFor(2)).toHaveLength(1);
-      expect(h.stub.written.filter(w => w.includes('msg-2'))).toHaveLength(1);
+      expect(h.stub.written.filter((w) => w.includes('msg-2'))).toHaveLength(1);
     } finally {
       vi.unstubAllGlobals();
       await h.stop();
     }
   });
 
-  it('P1-2 settlement-before-send: with the response in the peer\'s hands and the server write callback NOT yet executed, a resend BLOCKS on the settlement barrier, then lands', async () => {
+  it("P1-2 settlement-before-send: with the response in the peer's hands and the server write callback NOT yet executed, a resend BLOCKS on the settlement barrier, then lands", async () => {
     const h = makePullHarness();
     const postedBodies = h.stubBackendFreshnessGuard();
     try {
@@ -7806,7 +8065,7 @@ describe('Supervisor #task:1614 — agent_stale_receive deferred pull (custody c
       // barrier releases; the barrier itself is unconditional on the
       // pending reservation, freshness aside.)
       let retryResolved: Awaited<ReturnType<typeof send>> | null = null;
-      const retry = send(h.supervisor, 'forced draft', undefined, true).then(r => {
+      const retry = send(h.supervisor, 'forced draft', undefined, true).then((r) => {
         retryResolved = r;
         return r;
       });
@@ -8040,11 +8299,11 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
     const base = makeFakeDriver(['--echo-stdin']);
     const driver: Driver = {
       ...base,
-      bindRuntimeVersion: version => {
+      bindRuntimeVersion: (version) => {
         boundVersions.push(version);
         seen = version;
       },
-      buildArgs: ctx => {
+      buildArgs: (ctx) => {
         versionAtBuildArgs.push(seen);
         return base.buildArgs(ctx);
       },
@@ -8084,8 +8343,13 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
       expect(spawnedArgs.flat()).not.toContain('--version');
     } finally {
       await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'Conversation0001',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
       });
     }
   });
@@ -8095,7 +8359,7 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
     const base = makeFakeDriver();
     const driver: Driver = {
       ...base,
-      bindRuntimeVersion: version => boundVersions.push(version),
+      bindRuntimeVersion: (version) => boundVersions.push(version),
     };
 
     const spy = makeEmitSpy();
@@ -8107,8 +8371,7 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
         binary: fallback,
         version: null,
       }),
-      spawnFn: (bin, args, options) =>
-        spawn(execPath, [bin, ...args.slice(1)], options),
+      spawnFn: (bin, args, options) => spawn(execPath, [bin, ...args.slice(1)], options),
       runtimeStartResolveDeps: testRuntimeStartResolveDeps({
         agentHomeRootDir: SUPERVISOR_AGENTS_ROOT,
       }),
@@ -8122,8 +8385,13 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
       expect(boundVersions).toEqual([null]);
     } finally {
       await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'Conversation0001',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
       });
     }
   });
@@ -8180,8 +8448,13 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
       expect(instances[0]!.releaseProfile).toBe('next-turn-batch');
 
       await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'Conversation0001',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
       });
       generation = 1;
       expect((await supervisor.start(qoderStartParams)).started).toBe(true);
@@ -8192,8 +8465,13 @@ describe('Supervisor — runtime version binding on the spawn path (#task:1909)'
       expect(instances[0]!.releaseProfile).toBe('next-turn-batch');
     } finally {
       await supervisor.stop({
-        runtime_scope: { kind: 'conversation', conversation_id: 'Conversation0001', agent_id: 'a1' },
-        runtime_generation: 1, mode: 'hard',
+        runtime_scope: {
+          kind: 'conversation',
+          conversation_id: 'Conversation0001',
+          agent_id: 'a1',
+        },
+        runtime_generation: 1,
+        mode: 'hard',
       });
     }
   });

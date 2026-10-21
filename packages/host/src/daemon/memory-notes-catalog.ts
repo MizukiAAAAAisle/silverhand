@@ -1,9 +1,6 @@
 import { open, readdir } from 'node:fs/promises';
 import { extname, join, relative, sep } from 'node:path';
-import type {
-  MemoryNoteCatalogEntry,
-  MemoryNotesCatalog,
-} from '@silverhand/shared';
+import type { MemoryNoteCatalogEntry, MemoryNotesCatalog } from '@silverhand/shared';
 import { parseDocument } from 'yaml';
 import { z } from 'zod';
 
@@ -21,7 +18,7 @@ const MemoryNoteFrontmatterSchema = z
       .trim()
       .min(1)
       .max(200)
-      .refine(value => !/[\r\n\u0085\u2028\u2029]/u.test(value)),
+      .refine((value) => !/[\r\n\u0085\u2028\u2029]/u.test(value)),
     metadata: z
       .object({
         category: z.enum(['user', 'feedback', 'project']),
@@ -30,18 +27,14 @@ const MemoryNoteFrontmatterSchema = z
   })
   .passthrough();
 
-type ParsedNote =
-  | { kind: 'entry'; entry: MemoryNoteCatalogEntry }
-  | { kind: 'skip' };
+type ParsedNote = { kind: 'entry'; entry: MemoryNoteCatalogEntry } | { kind: 'skip' };
 
 /**
  * Build the current L2 note catalog from daemon-local files. The server never
  * receives note paths, metadata, or bodies. Symlinks are skipped so recursive
  * enumeration cannot escape the agent-owned notes directory.
  */
-export async function readMemoryNotesCatalog(
-  l2Dir: string,
-): Promise<MemoryNotesCatalog> {
+export async function readMemoryNotesCatalog(l2Dir: string): Promise<MemoryNotesCatalog> {
   const notesDir = join(l2Dir, 'notes');
   const paths = await collectMarkdownFiles(notesDir);
   paths.sort();
@@ -85,10 +78,7 @@ async function collectMarkdownFiles(dir: string): Promise<string[]> {
   return paths;
 }
 
-async function readCatalogNote(
-  absolutePath: string,
-  catalogPath: string,
-): Promise<ParsedNote> {
+async function readCatalogNote(absolutePath: string, catalogPath: string): Promise<ParsedNote> {
   let text: string;
   try {
     text = await readPrefix(absolutePath, MEMORY_NOTE_FRONTMATTER_READ_CAP_BYTES);
@@ -100,9 +90,7 @@ async function readCatalogNote(
   const lines = body.split(/\r?\n/u);
   if (lines[0]?.trim() !== '---') return { kind: 'skip' };
 
-  const closingLine = lines.findIndex(
-    (line, index) => index > 0 && line.trim() === '---',
-  );
+  const closingLine = lines.findIndex((line, index) => index > 0 && line.trim() === '---');
   if (closingLine < 0) {
     return { kind: 'skip' };
   }
@@ -138,11 +126,7 @@ async function readPrefix(path: string, capBytes: number): Promise<string> {
     const buffer = Buffer.alloc(capBytes + 1);
     const { bytesRead } = await handle.read(buffer, 0, capBytes + 1, 0);
     let cut = Math.min(bytesRead, capBytes);
-    while (
-      cut > 0 &&
-      buffer[cut] !== undefined &&
-      (buffer[cut]! & 0xc0) === 0x80
-    ) {
+    while (cut > 0 && buffer[cut] !== undefined && (buffer[cut]! & 0xc0) === 0x80) {
       cut -= 1;
     }
     return buffer.subarray(0, cut).toString('utf8');

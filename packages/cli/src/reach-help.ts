@@ -103,9 +103,7 @@ export function reachHelpErrorEntry(
   }
   if (current.length > 0) lines.push(current);
   return lines
-    .map((line, index) =>
-      index === 0 ? label.padEnd(textColumn) + line : indent + line,
-    )
+    .map((line, index) => (index === 0 ? label.padEnd(textColumn) + line : indent + line))
     .join('\n');
 }
 
@@ -123,10 +121,7 @@ export function reachHelpParagraphSection(operation: AddressedOperation): string
   return paragraph === null ? '' : `${paragraph}\n\n`;
 }
 
-export function reachHelpErrorRow(
-  operation: AddressedOperation,
-  textColumn: number,
-): string {
+export function reachHelpErrorRow(operation: AddressedOperation, textColumn: number): string {
   const entry = reachHelpErrorEntry(operation, textColumn);
   return entry === null ? '' : `${entry}\n`;
 }

@@ -69,9 +69,7 @@ export interface AvatarFileLike {
   type: string;
 }
 
-export function validateAvatarFile(
-  file: AvatarFileLike,
-): AvatarValidationError | null {
+export function validateAvatarFile(file: AvatarFileLike): AvatarValidationError | null {
   if (file.size <= 0) {
     return { code: 'avatar_missing', message: 'Avatar file is empty.' };
   }

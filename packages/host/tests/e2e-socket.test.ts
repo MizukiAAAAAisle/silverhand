@@ -35,9 +35,7 @@ async function setupFixture(
   const pidFilePath = join(dir, 'daemon.pid');
   const logDir = join(dir, 'logs');
   const runtimePidRootDir = join(dir, 'runtime-pids');
-  const localOutboundSocketPath = opts.withLocalOutbound
-    ? join(dir, 'daemon-outbound.sock')
-    : null;
+  const localOutboundSocketPath = opts.withLocalOutbound ? join(dir, 'daemon-outbound.sock') : null;
   const daemon = await runDaemon({
     socketPath,
     pidFilePath,
@@ -64,7 +62,11 @@ describe('e2e — real Unix socket', () => {
   const clients: HostClient[] = [];
 
   afterEach(async () => {
-    while (clients.length) await clients.pop()!.close().catch(() => {});
+    while (clients.length)
+      await clients
+        .pop()!
+        .close()
+        .catch(() => {});
     while (fixtures.length) {
       const f = fixtures.pop()!;
       await f.daemon.stop('test_done').catch(() => {});
@@ -184,21 +186,16 @@ describe('e2e — real Unix socket', () => {
     expect(raw).not.toContain('"line"');
     const lines = raw
       .split('\n')
-      .filter(l => l.length > 0)
-      .map(l => JSON.parse(l) as Record<string, unknown>);
+      .filter((l) => l.length > 0)
+      .map((l) => JSON.parse(l) as Record<string, unknown>);
     const malformed = lines.find(
-      l =>
-        l.kind === 'connection' &&
-        (l as { action?: string }).action === 'frame_parse_failed',
+      (l) => l.kind === 'connection' && (l as { action?: string }).action === 'frame_parse_failed',
     );
     expect(malformed).toBeDefined();
     // splitNdjson strips the trailing newline before passing the line
     // to JSON.parse, so the logged byte count is `bad` minus the `\n`.
-    expect(malformed!.line_bytes).toBe(
-      Buffer.byteLength(bad, 'utf8') - 1,
-    );
+    expect(malformed!.line_bytes).toBe(Buffer.byteLength(bad, 'utf8') - 1);
     expect(typeof malformed!.parse_error).toBe('string');
     rmSync(f.dir, { recursive: true, force: true });
   });
-
 });

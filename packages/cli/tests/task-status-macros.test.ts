@@ -40,10 +40,7 @@ function fakeListClient(): {
 
 function fakeUpdateClient(): {
   client: {
-    updateTaskStatus: (input: {
-      task_number: number;
-      status: string;
-    }) => Promise<{ ok: true }>;
+    updateTaskStatus: (input: { task_number: number; status: string }) => Promise<{ ok: true }>;
   };
   capture: () => { task_number: number; status: string } | null;
 } {
@@ -51,7 +48,7 @@ function fakeUpdateClient(): {
   return {
     capture: () => last,
     client: {
-      updateTaskStatus: async input => {
+      updateTaskStatus: async (input) => {
         last = input;
         return { ok: true } as const;
       },
@@ -170,12 +167,7 @@ describe('task list --status filter macros', () => {
       args: parsedFlags({ status: ['active,done'] }),
     });
     // active expands to 3, then done is added → 4 distinct values.
-    expect(capture()!.status).toEqual([
-      'todo',
-      'in_progress',
-      'in_review',
-      'done',
-    ]);
+    expect(capture()!.status).toEqual(['todo', 'in_progress', 'in_review', 'done']);
   });
 
   it('deduplicates overlapping macros without losing order', async () => {
@@ -210,9 +202,7 @@ describe('task list --status filter macros', () => {
     expect(err.message).toContain('--status');
     expect(err.message).toContain('bogus');
     expect(err.details).toMatchObject({ flag: 'status', value: 'bogus' });
-    expect(err.details!.allowed).toEqual(
-      expect.arrayContaining(['todo', 'active', 'all']),
-    );
+    expect(err.details!.allowed).toEqual(expect.arrayContaining(['todo', 'active', 'all']));
   });
 });
 
@@ -255,13 +245,13 @@ describe('task status --status mutation guards', () => {
 
   it.each(['active', 'open', 'pending', 'all'] as const)(
     'rejects list-only macro %s with enum_invalid + reason=list_only_macro',
-    async macro => {
+    async (macro) => {
       let caught: unknown;
       try {
         await status.run({
           env,
           client: {
-            updateTaskStatus: async () => ({ ok: true } as const),
+            updateTaskStatus: async () => ({ ok: true }) as const,
             // eslint-disable-next-line @typescript-eslint/no-explicit-any
           } as any,
           args: parsedStatusArgs('7', { status: macro }),
@@ -281,13 +271,7 @@ describe('task status --status mutation guards', () => {
         value: macro,
         reason: 'list_only_macro',
       });
-      expect(err.details!.allowed).toEqual([
-        'todo',
-        'in_progress',
-        'in_review',
-        'done',
-        'closed',
-      ]);
+      expect(err.details!.allowed).toEqual(['todo', 'in_progress', 'in_review', 'done', 'closed']);
     },
   );
 });

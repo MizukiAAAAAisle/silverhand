@@ -74,8 +74,7 @@ ${reachHelpErrorRow('channel_fork_source', 39)}  workspace_scope_required (400) 
     if (!title || !contextSummary || !initialPrompt) {
       throw new CliError({
         code: 'validation_error',
-        message:
-          'channel create requires --title, --context-summary, and --initial-prompt',
+        message: 'channel create requires --title, --context-summary, and --initial-prompt',
         retriable: false,
       });
     }
@@ -90,8 +89,7 @@ ${reachHelpErrorRow('channel_fork_source', 39)}  workspace_scope_required (400) 
 
 const listCommand: Command = {
   verb: 'list',
-  summary:
-    "List the agent's channels and DMs, plus public channels it has not joined.",
+  summary: "List the agent's channels and DMs, plus public channels it has not joined.",
   help: `silverhand channel list [--workspace-id <id>]
 
 Lists two sets of conversations in one result: the channels and

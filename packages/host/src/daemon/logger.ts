@@ -107,7 +107,7 @@ export function createDaemonLogger(opts: DaemonLoggerOptions): DaemonLogger {
     warn: (obj, msg) => write('warn', obj, msg),
     error: (obj, msg) => write('error', obj, msg),
     close: () =>
-      new Promise<void>(resolve => {
+      new Promise<void>((resolve) => {
         stream.end(() => resolve());
       }),
   };
@@ -142,9 +142,7 @@ function defaultDaemonLogLevel(): SilverhandLogLevel {
 }
 
 export function createDaemonLogControl(
-  initialLevel: SilverhandLogLevel = parseSilverhandLogLevel(
-    process.env[SILVERHAND_LOG_LEVEL_ENV],
-  ),
+  initialLevel: SilverhandLogLevel = parseSilverhandLogLevel(process.env[SILVERHAND_LOG_LEVEL_ENV]),
 ): DaemonLogControl {
   let globalLevel = initialLevel;
   const windows = new Map<string, { expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
@@ -163,7 +161,7 @@ export function createDaemonLogControl(
 
   return {
     getGlobalLevel: () => globalLevel,
-    setGlobalLevel: level => {
+    setGlobalLevel: (level) => {
       globalLevel = level;
     },
     enableConversationDebug: (conversationId, expiresAt) => {
@@ -176,10 +174,10 @@ export function createDaemonLogControl(
       timer.unref?.();
       windows.set(conversationId, { expiresAt, timer });
     },
-    disableConversationDebug: conversationId => {
+    disableConversationDebug: (conversationId) => {
       clearWindow(conversationId);
     },
-    getConversationDebugStatus: conversationId => {
+    getConversationDebugStatus: (conversationId) => {
       purgeExpired(conversationId);
       const existing = windows.get(conversationId);
       return existing

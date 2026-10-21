@@ -17,7 +17,7 @@ import { spawnDaemonChild, type SpawnProcessImpl } from '../src/spawn.js';
 import { HOST_PROTOCOL_VERSION } from '../src/protocol.js';
 import { wireFixtures } from './fixtures/wire/wire-fixtures.js';
 
-const READY_FIXTURE = wireFixtures.find(f => f.name === 'event/ready');
+const READY_FIXTURE = wireFixtures.find((f) => f.name === 'event/ready');
 if (!READY_FIXTURE) throw new Error('expected wireFixtures to include event/ready');
 const READY_BASE = JSON.parse(READY_FIXTURE.frame.trim()) as Record<string, unknown>;
 if (READY_BASE.protocol_version !== HOST_PROTOCOL_VERSION) {
@@ -85,12 +85,8 @@ async function captureSpawnArgs(
     ...(opts.localOutboundSocketPath !== undefined
       ? { localOutboundSocketPath: opts.localOutboundSocketPath }
       : {}),
-    ...(opts.runtimePidRootDir !== undefined
-      ? { runtimePidRootDir: opts.runtimePidRootDir }
-      : {}),
-    ...(opts.computersRootDir !== undefined
-      ? { computersRootDir: opts.computersRootDir }
-      : {}),
+    ...(opts.runtimePidRootDir !== undefined ? { runtimePidRootDir: opts.runtimePidRootDir } : {}),
+    ...(opts.computersRootDir !== undefined ? { computersRootDir: opts.computersRootDir } : {}),
     ...(opts.silverhandStateRootDir !== undefined
       ? { silverhandStateRootDir: opts.silverhandStateRootDir }
       : {}),
@@ -102,7 +98,7 @@ async function captureSpawnArgs(
       : {}),
   });
   // Let the supervisor register its stdout listener, then hand it ready.
-  await new Promise(resolve => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   child.stdout.emit('data', readyFrame(socketPath));
   await pending;
   return captured;
@@ -220,5 +216,4 @@ describe('spawnDaemonChild — local outbound socket arg forwarding (D5.a-3)', (
     });
     expect(nullArgs).not.toContain('--control-plane-server-url-path');
   });
-
 });

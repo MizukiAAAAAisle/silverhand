@@ -1,21 +1,10 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
-import type {
-  AgentWorkspaceTreeNode,
-} from '@silverhand/shared';
-import type {
-  AgentWorkspaceTreeParams,
-  AgentWorkspaceTreeResult,
-} from '../../protocol.js';
+import type { AgentWorkspaceTreeNode } from '@silverhand/shared';
+import type { AgentWorkspaceTreeParams, AgentWorkspaceTreeResult } from '../../protocol.js';
 import { AgentWorkspaceFsError } from './error.js';
-import {
-  isAllowedSegmentName,
-  resolveAgentHomeBase,
-} from './parse-virtual-path.js';
-import {
-  resolveAgentWorkspaceBaseDir,
-  type ResolveAgentWorkspaceBaseDeps,
-} from './source.js';
+import { isAllowedSegmentName, resolveAgentHomeBase } from './parse-virtual-path.js';
+import { resolveAgentWorkspaceBaseDir, type ResolveAgentWorkspaceBaseDeps } from './source.js';
 
 /**
  * Daemon handler for `agent_workspace_tree` (#task:811).
@@ -45,8 +34,7 @@ import {
  * a transient banner instead of a misleading "no files found" empty
  * state.
  */
-export interface ListAgentWorkspaceTreeDeps
-  extends ResolveAgentWorkspaceBaseDeps {}
+export interface ListAgentWorkspaceTreeDeps extends ResolveAgentWorkspaceBaseDeps {}
 
 const MAX_NODES = 5000;
 
@@ -151,10 +139,7 @@ async function walkDir(
 /** Per-parent sort: directories before files, alphabetic within each
  *  kind. The result, combined with the recursive descendant push in
  *  `walkDir`, produces tree preorder. */
-function compareEntries(
-  a: import('node:fs').Dirent,
-  b: import('node:fs').Dirent,
-): number {
+function compareEntries(a: import('node:fs').Dirent, b: import('node:fs').Dirent): number {
   const aDir = a.isDirectory();
   const bDir = b.isDirectory();
   if (aDir !== bDir) return aDir ? -1 : 1;

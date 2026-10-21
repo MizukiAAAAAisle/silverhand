@@ -50,9 +50,7 @@ describe('parseMcpConfig', () => {
   });
 
   it('rejects unknown server keys (strict)', () => {
-    const r = parseMcpConfig(
-      JSON.stringify({ mcpServers: { a: { command: 'x', bogus: 1 } } }),
-    );
+    const r = parseMcpConfig(JSON.stringify({ mcpServers: { a: { command: 'x', bogus: 1 } } }));
     expect(r.ok).toBe(false);
   });
 
@@ -62,9 +60,7 @@ describe('parseMcpConfig', () => {
   });
 
   it('rejects a bad server name', () => {
-    const r = parseMcpConfig(
-      JSON.stringify({ mcpServers: { 'bad name!': { command: 'x' } } }),
-    );
+    const r = parseMcpConfig(JSON.stringify({ mcpServers: { 'bad name!': { command: 'x' } } }));
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error).toMatch(/server name/);
   });
@@ -77,12 +73,8 @@ describe('parseMcpConfig', () => {
 
 describe('runtimeMcpServerName', () => {
   it('prefixes with the scope domain', () => {
-    expect(runtimeMcpServerName('profile', 'github')).toBe(
-      'silverhand_profile__github',
-    );
-    expect(runtimeMcpServerName('workspace', 'github')).toBe(
-      'silverhand_workspace__github',
-    );
+    expect(runtimeMcpServerName('profile', 'github')).toBe('silverhand_profile__github');
+    expect(runtimeMcpServerName('workspace', 'github')).toBe('silverhand_workspace__github');
   });
 });
 

@@ -90,14 +90,7 @@ const PROXY_ENV_KEYS = [
 ] as const;
 
 /** Noisy-but-notable package-manager / editor context — names only. */
-const NOTABLE_ENV_PREFIXES = [
-  'npm_',
-  'YARN_',
-  'PNPM_',
-  'VSCODE_',
-  'TERM_PROGRAM',
-  '__CF',
-] as const;
+const NOTABLE_ENV_PREFIXES = ['npm_', 'YARN_', 'PNPM_', 'VSCODE_', 'TERM_PROGRAM', '__CF'] as const;
 
 /**
  * Any key matching this is treated as sensitive: the value is NEVER logged,
@@ -187,10 +180,8 @@ export function summarizeSilverhandEnvPresence(
   const presentKeys: string[] = [];
   const missingKeys: string[] = [];
   for (const key of REQUIRED_SILVERHAND_ENV_KEYS) {
-    if (
-      key === SILVERHAND_CONVERSATION_ID_ENV
-      && options.conversationIdRequired === false
-    ) continue;
+    if (key === SILVERHAND_CONVERSATION_ID_ENV && options.conversationIdRequired === false)
+      continue;
     const value = env[key];
     if (typeof value === 'string' && value.length > 0) {
       presentKeys.push(key);
@@ -357,10 +348,7 @@ export function redactSpawnArgs(args: readonly string[]): string[] {
     // the following value token. Guard on `!startsWith('-')` so a boolean flag
     // doesn't swallow the next flag as if it were a value.
     const isFlag = arg.startsWith('-');
-    if (
-      REDACT_VALUE_AFTER_FLAG.has(arg) ||
-      (isFlag && SENSITIVE_ARG_PATTERN.test(arg))
-    ) {
+    if (REDACT_VALUE_AFTER_FLAG.has(arg) || (isFlag && SENSITIVE_ARG_PATTERN.test(arg))) {
       out.push(arg);
       const next = args[i + 1];
       if (next !== undefined && !next.startsWith('-')) {
@@ -397,10 +385,7 @@ export interface SpawnErrorInfo {
  * which libuv has no UV_* code for) to something an operator can act on.
  */
 export function describeSpawnError(err: unknown): SpawnErrorInfo {
-  const e = err as
-    | (NodeJS.ErrnoException & { spawnargs?: unknown })
-    | null
-    | undefined;
+  const e = err as (NodeJS.ErrnoException & { spawnargs?: unknown }) | null | undefined;
   const info: SpawnErrorInfo = {
     message: e?.message ?? String(err),
     readable: '',
@@ -441,8 +426,7 @@ function explainSpawnFailure(info: SpawnErrorInfo): string {
   }
   if (code === 'ENOENT' || errno === -2) {
     return (
-      'ENOENT (errno 2): no such file — the resolved binary path does not ' +
-      'exist at exec time.'
+      'ENOENT (errno 2): no such file — the resolved binary path does not ' + 'exist at exec time.'
     );
   }
   const parts: string[] = [];

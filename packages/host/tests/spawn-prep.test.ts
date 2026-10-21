@@ -14,7 +14,7 @@ import { prepareSpawnFiles, type SpawnPrepHandle } from '../src/daemon/spawn-pre
 const handles: SpawnPrepHandle[] = [];
 
 afterEach(async () => {
-  await Promise.all(handles.splice(0).map(handle => handle.cleanup()));
+  await Promise.all(handles.splice(0).map((handle) => handle.cleanup()));
 });
 
 describe('prepareSpawnFiles', () => {
@@ -126,11 +126,7 @@ describe('prepareSpawnFiles', () => {
     });
     expect(handle.silverhandShimEnvPresence).toEqual({
       all_present: true,
-      present_keys: [
-        SILVERHAND_AGENT_ID_ENV,
-        SILVERHAND_SERVER_URL_ENV,
-        SILVERHAND_AUTH_TOKEN_ENV,
-      ],
+      present_keys: [SILVERHAND_AGENT_ID_ENV, SILVERHAND_SERVER_URL_ENV, SILVERHAND_AUTH_TOKEN_ENV],
       missing_keys: [],
     });
   });

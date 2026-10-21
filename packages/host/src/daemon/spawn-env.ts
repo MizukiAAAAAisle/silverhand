@@ -31,9 +31,7 @@ export interface DaemonSpawnEnvInput {
   baseProcessEnv?: NodeJS.ProcessEnv;
 }
 
-export function buildDaemonSpawnEnv(
-  input: DaemonSpawnEnvInput,
-): NodeJS.ProcessEnv {
+export function buildDaemonSpawnEnv(input: DaemonSpawnEnvInput): NodeJS.ProcessEnv {
   const options = input.options;
   let env = input.driver.applyEnv(input.baseProcessEnv ?? process.env);
   if (
@@ -59,9 +57,7 @@ export function buildDaemonSpawnEnv(
     [SILVERHAND_AGENT_ID_ENV]: input.agentId,
     [SILVERHAND_SERVER_URL_ENV]: silverhandServerUrl,
     [SILVERHAND_AUTH_TOKEN_ENV]: options.env_policy.silverhand.auth_token,
-    ...(input.daemonSocketPath
-      ? { [SILVERHAND_DAEMON_SOCKET_ENV]: input.daemonSocketPath }
-      : {}),
+    ...(input.daemonSocketPath ? { [SILVERHAND_DAEMON_SOCKET_ENV]: input.daemonSocketPath } : {}),
     ...(input.lastDeliveredSeqPath
       ? { [SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV]: input.lastDeliveredSeqPath }
       : {}),

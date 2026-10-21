@@ -151,9 +151,7 @@ export const CreateConversationChannelInputSchema = z.object({
  * `{ title: { title, key } }`, which no route accepts. Route handlers read the
  * parsed value off `safeParse` and never need this name.
  */
-export type CreateConversationChannelInput = z.input<
-  typeof CreateConversationChannelInputSchema
->;
+export type CreateConversationChannelInput = z.input<typeof CreateConversationChannelInputSchema>;
 
 //
 // Identity + routing metadata for a conversation, returned by
@@ -236,9 +234,7 @@ export const ConversationAgentRuntimeDtoSchema = z.object({
   pid: z.number().nullable(),
   status: ConversationAgentStatusSchema,
 });
-export type ConversationAgentRuntimeDto = z.infer<
-  typeof ConversationAgentRuntimeDtoSchema
->;
+export type ConversationAgentRuntimeDto = z.infer<typeof ConversationAgentRuntimeDtoSchema>;
 
 /** Human membership in a conversation (v25). Parallel to
  *  `ConversationAgentDto` minus the process-lifecycle fields. */
@@ -314,21 +310,16 @@ export type MemberRemovabilityDto = z.infer<typeof MemberRemovabilityDtoSchema>;
 export const ConversationMembersResponseSchema = z.object({
   members: z.array(MemberDtoSchema),
 });
-export type ConversationMembersResponse = z.infer<
-  typeof ConversationMembersResponseSchema
->;
+export type ConversationMembersResponse = z.infer<typeof ConversationMembersResponseSchema>;
 
 /** Response shape for `GET /api/conversations/:id/members` — the roster plus
  *  this viewer's per-member removability (one entry per member). A superset of
  *  {@link ConversationMembersResponseSchema}, so a caller that only needs the
  *  roster can keep reading it as one. */
-export const ConversationMembersReadResponseSchema =
-  ConversationMembersResponseSchema.extend({
-    member_removability: z.array(MemberRemovabilityDtoSchema),
-  });
-export type ConversationMembersReadResponse = z.infer<
-  typeof ConversationMembersReadResponseSchema
->;
+export const ConversationMembersReadResponseSchema = ConversationMembersResponseSchema.extend({
+  member_removability: z.array(MemberRemovabilityDtoSchema),
+});
+export type ConversationMembersReadResponse = z.infer<typeof ConversationMembersReadResponseSchema>;
 
 export const AddConversationMemberByIdInputSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -347,9 +338,7 @@ export const AddConversationMemberInputSchema = z.union([
   AddConversationMemberByIdInputSchema,
   AddConversationMemberByHandleInputSchema,
 ]);
-export type AddConversationMemberInput = z.infer<
-  typeof AddConversationMemberInputSchema
->;
+export type AddConversationMemberInput = z.infer<typeof AddConversationMemberInputSchema>;
 
 export const ClearSessionResponseSchema = z.object({
   ok: z.literal(true),
@@ -358,12 +347,8 @@ export const ClearSessionResponseSchema = z.object({
 });
 export type ClearSessionResponse = z.infer<typeof ClearSessionResponseSchema>;
 
-export const ConversationActivityPayloadSchema = z
-  .record(z.string(), z.unknown())
-  .nullable();
-export type ConversationActivityPayload = z.infer<
-  typeof ConversationActivityPayloadSchema
->;
+export const ConversationActivityPayloadSchema = z.record(z.string(), z.unknown()).nullable();
+export type ConversationActivityPayload = z.infer<typeof ConversationActivityPayloadSchema>;
 
 export const ConversationActivityEventSchema = z.object({
   id: z.number().int(),
@@ -373,9 +358,7 @@ export const ConversationActivityEventSchema = z.object({
   payload: ConversationActivityPayloadSchema,
   created_at: z.number().int(),
 });
-export type ConversationActivityEvent = z.infer<
-  typeof ConversationActivityEventSchema
->;
+export type ConversationActivityEvent = z.infer<typeof ConversationActivityEventSchema>;
 
 export const ConversationActivityListResponseSchema = z.object({
   events: z.array(ConversationActivityEventSchema),
@@ -425,9 +408,7 @@ export const ChannelLeaveBlockedReasonSchema = z.enum([
   'channel_owner',
   'last_human_member',
 ]);
-export type ChannelLeaveBlockedReason = z.infer<
-  typeof ChannelLeaveBlockedReasonSchema
->;
+export type ChannelLeaveBlockedReason = z.infer<typeof ChannelLeaveBlockedReasonSchema>;
 
 /** Response for `GET /api/channels/:id`. Carries the channel identity plus the
  *  route-computed, per-viewer capability carriers — all viewer-scoped, so they
@@ -644,9 +625,7 @@ export type DirectPairListResponse = z.infer<typeof DirectPairListResponseSchema
 export const DirectPairsChangedPayloadSchema = z.object({
   conversation_id: z.string(),
 });
-export type DirectPairsChangedPayload = z.infer<
-  typeof DirectPairsChangedPayloadSchema
->;
+export type DirectPairsChangedPayload = z.infer<typeof DirectPairsChangedPayloadSchema>;
 
 /** Body for `PATCH /api/channels/:id/archive`. Same toggle shape as the
  *  workspace archive endpoint. Archive is purely organizational — agents
@@ -674,10 +653,7 @@ export const UpdateChannelInputSchema = z
     visibility: ConversationVisibilitySchema.optional(),
   })
   .refine(
-    input =>
-      (input.title !== undefined ? 1 : 0)
-        + (input.visibility !== undefined ? 1 : 0)
-      === 1,
+    (input) => (input.title !== undefined ? 1 : 0) + (input.visibility !== undefined ? 1 : 0) === 1,
     { message: 'exactly one of `title` or `visibility` must be provided' },
   );
 /** The REQUEST BODY, `z.input` — see {@link CreateConversationChannelInput} for
@@ -690,20 +666,16 @@ export type UpdateChannelInput = z.input<typeof UpdateChannelInputSchema>;
  *  to a single workspace, omitted = all workspaces visible to the
  *  caller. */
 export const ArchivedChannelsQueryInputSchema = z.object({
-  workspace_id: z
-    .preprocess(
-      v => (typeof v === 'string' && v.trim() === '' ? undefined : v),
-      z.string().optional(),
-    ),
-  since: z
-    .preprocess(
-      v => (v === '' || v === undefined ? undefined : v),
-      z.coerce.number().int().nonnegative().optional(),
-    ),
+  workspace_id: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? undefined : v),
+    z.string().optional(),
+  ),
+  since: z.preprocess(
+    (v) => (v === '' || v === undefined ? undefined : v),
+    z.coerce.number().int().nonnegative().optional(),
+  ),
 });
-export type ArchivedChannelsQueryInput = z.infer<
-  typeof ArchivedChannelsQueryInputSchema
->;
+export type ArchivedChannelsQueryInput = z.infer<typeof ArchivedChannelsQueryInputSchema>;
 
 /** Row in the global archived-channels list. This index is a deliberately
  *  cross-cutting recovery surface: it spans both channel-like collections
@@ -721,9 +693,7 @@ export const ArchivedChannelListItemDtoSchema = z.object({
     archived_at: z.number().nullable(),
   }),
 });
-export type ArchivedChannelListItemDto = z.infer<
-  typeof ArchivedChannelListItemDtoSchema
->;
+export type ArchivedChannelListItemDto = z.infer<typeof ArchivedChannelListItemDtoSchema>;
 
 export const ArchivedChannelsDtoSchema = z.object({
   channels: z.array(ArchivedChannelListItemDtoSchema),
@@ -731,9 +701,9 @@ export const ArchivedChannelsDtoSchema = z.object({
 export type ArchivedChannelsDto = z.infer<typeof ArchivedChannelsDtoSchema>;
 
 /** Canonical agent-scoped activity: id is an upsert key across generations. */
-export const AgentStreamActivityEventSchema = ConversationActivityEventSchema
-  .omit({ conversation_id: true })
-  .extend({ agent_id: z.string() });
+export const AgentStreamActivityEventSchema = ConversationActivityEventSchema.omit({
+  conversation_id: true,
+}).extend({ agent_id: z.string() });
 export type AgentStreamActivityEvent = z.infer<typeof AgentStreamActivityEventSchema>;
 export const AgentStreamActivityListResponseSchema = z.object({
   agent_id: z.string(),

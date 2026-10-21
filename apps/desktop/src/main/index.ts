@@ -820,7 +820,9 @@ async function passwordRecovery(input: PasswordRecoveryCall): Promise<PasswordRe
   if (switchingServer || backend?.kind !== "remote") return changed;
   const isCurrent = clientSessionGeneration.capture();
   const path =
-    input.action === "request" ? authPaths.passwordRecoveryRequest : authPaths.passwordRecoveryReset;
+    input.action === "request"
+      ? authPaths.passwordRecoveryRequest
+      : authPaths.passwordRecoveryReset;
   try {
     const res = await backendFetch(backendUrl(path), {
       method: "POST",

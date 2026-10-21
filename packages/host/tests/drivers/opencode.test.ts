@@ -51,7 +51,7 @@ function makeSpawnCtx(overrides: Partial<DriverSpawnContext> = {}): {
 }
 
 async function tick(): Promise<void> {
-  await new Promise(r => queueMicrotask(() => r(undefined)));
+  await new Promise((r) => queueMicrotask(() => r(undefined)));
 }
 
 function parseLast(io: CapturedIO): any {
@@ -71,11 +71,7 @@ describe('OpenCodeDriver static config', () => {
   it('builds opencode acp args with cwd', () => {
     const { ctx, cleanup } = makeSpawnCtx();
     try {
-      expect(new OpenCodeDriver().buildArgs(ctx)).toEqual([
-        'acp',
-        '--cwd',
-        ctx.workspacePath,
-      ]);
+      expect(new OpenCodeDriver().buildArgs(ctx)).toEqual(['acp', '--cwd', ctx.workspacePath]);
     } finally {
       cleanup();
     }
@@ -132,9 +128,7 @@ describe('OpenCodeDriver ACP handshake', () => {
       });
       expect(d.readyToEncode()).toBe(false);
 
-      expect(
-        d.parseLine(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} })),
-      ).toEqual([]);
+      expect(d.parseLine(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }))).toEqual([]);
       expect(parseLast(io)).toMatchObject({
         id: 2,
         method: 'session/new',
@@ -301,12 +295,8 @@ describe('OpenCodeDriver prompt-boundary contract (#task:1565, probed on opencod
     d.bindIO(io);
     await tick();
     d.parseLine(JSON.stringify({ jsonrpc: '2.0', id: 1, result: {} }));
-    d.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: 2, result: { sessionId: 'ses_1' } }),
-    );
-    d.parseLine(
-      JSON.stringify({ jsonrpc: '2.0', id: 3, result: { configOptions: [] } }),
-    );
+    d.parseLine(JSON.stringify({ jsonrpc: '2.0', id: 2, result: { sessionId: 'ses_1' } }));
+    d.parseLine(JSON.stringify({ jsonrpc: '2.0', id: 3, result: { configOptions: [] } }));
     return { d, io, cleanup };
   }
 
@@ -366,8 +356,8 @@ describe('OpenCodeDriver prompt-boundary contract (#task:1565, probed on opencod
           error: { code: -32000, message: 'model backend unavailable' },
         }),
       );
-      expect(events.some(e => e.kind === 'error')).toBe(true);
-      expect(events.some(e => e.kind === 'turn_end')).toBe(true);
+      expect(events.some((e) => e.kind === 'error')).toBe(true);
+      expect(events.some((e) => e.kind === 'turn_end')).toBe(true);
       expect(d.readyToEncode()).toBe(true);
     } finally {
       cleanup();
@@ -501,7 +491,7 @@ describe('OpenCodeDriver ACP event mapping', () => {
         input: { cwd: '/tmp/agent', command: 'silverhand message send' },
       },
     ]);
-    expect(refined.some(e => e.kind === 'tool_call')).toBe(false);
+    expect(refined.some((e) => e.kind === 'tool_call')).toBe(false);
 
     // A terminal update carrying revised params emits BOTH — the refinement
     // for the row and the existing completion marker.
@@ -609,15 +599,28 @@ describe('OpenCodeDriver ACP event mapping', () => {
   });
 });
 
-
 it('keeps ACP result bodies out of parsed events', () => {
   for (const sessionUpdate of ['tool_call', 'tool_call_update']) {
-    const events = new OpenCodeDriver().parseLine(JSON.stringify({ jsonrpc: '2.0', method: 'session/update', params: { sessionId: 'marker-session', update: { sessionUpdate, toolCallId: 'marker-call', status: 'completed', rawOutput: 'private body', content: [{ type: 'text', text: 'private body' }] } } }));
-    expect(events.some(event => event.kind === 'tool_output')).toBe(true);
+    const events = new OpenCodeDriver().parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'session/update',
+        params: {
+          sessionId: 'marker-session',
+          update: {
+            sessionUpdate,
+            toolCallId: 'marker-call',
+            status: 'completed',
+            rawOutput: 'private body',
+            content: [{ type: 'text', text: 'private body' }],
+          },
+        },
+      }),
+    );
+    expect(events.some((event) => event.kind === 'tool_output')).toBe(true);
     expect(JSON.stringify(events)).not.toContain('private body');
   }
 });
-
 
 it.each([
   { kinds: ['allow_once', 'allow_always', 'reject_once'], selected: 'allow_always' },
@@ -626,39 +629,75 @@ it.each([
   { kinds: ['reject_once'], selected: null },
   { kinds: [], selected: null },
 ])('OpenCode permission preference: $kinds', async ({ kinds, selected }) => {
-  const {ctx, cleanup} = makeSpawnCtx();
+  const { ctx, cleanup } = makeSpawnCtx();
   try {
     const driver = new OpenCodeDriver();
     const io = makeIO(ctx);
     driver.bindIO(io);
     await tick();
-    driver.parseLine(JSON.stringify({jsonrpc: '2.0', id: 91, method: 'session/request_permission', params: {
-      options: kinds.map(kind => ({kind, optionId: kind, name: kind})),
-    }}));
+    driver.parseLine(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 91,
+        method: 'session/request_permission',
+        params: {
+          options: kinds.map((kind) => ({ kind, optionId: kind, name: kind })),
+        },
+      }),
+    );
     await tick();
-    expect(parseLast(io)).toEqual({jsonrpc: '2.0', id: 91, result: {outcome:
-      selected ? {outcome: 'selected', optionId: selected} : {outcome: 'cancelled'},
-    }});
-  } finally { cleanup(); }
+    expect(parseLast(io)).toEqual({
+      jsonrpc: '2.0',
+      id: 91,
+      result: {
+        outcome: selected ? { outcome: 'selected', optionId: selected } : { outcome: 'cancelled' },
+      },
+    });
+  } finally {
+    cleanup();
+  }
 });
 
 it.each([
-  { policy: {shouldAllow: () => true}, selected: 'allow_always' },
-  { policy: {shouldAllow: () => false}, selected: 'reject_once' },
+  { policy: { shouldAllow: () => true }, selected: 'allow_always' },
+  { policy: { shouldAllow: () => false }, selected: 'reject_once' },
   { policy: undefined, selected: 'reject_once' },
-] satisfies Array<{policy: AcpPermissionPolicy | undefined; selected: string}>)('uses the common ACP allow order while preserving denial: $selected', async ({policy, selected}) => {
-  const {ctx, cleanup} = makeSpawnCtx();
-  try {
-    const client = new AcpClient({runtimeLabel: 'test adapter', permissionPolicy: policy,
-      buildInitializeParams: () => ({}), buildSessionParams: () => ({}),
-    });
-    const io = makeIO(ctx);
-    client.bindIO(io);
-    await tick();
-    client.parseLine(JSON.stringify({jsonrpc: '2.0', id: 92, method: 'session/request_permission', params: {
-      options: ['allow_always', 'allow_once', 'reject_always', 'reject_once'].map(kind => ({kind, optionId: kind, name: kind})),
-    }}));
-    await tick();
-    expect(parseLast(io)).toEqual({jsonrpc: '2.0', id: 92, result: {outcome: {outcome: 'selected', optionId: selected}}});
-  } finally { cleanup(); }
-});
+] satisfies Array<{ policy: AcpPermissionPolicy | undefined; selected: string }>)(
+  'uses the common ACP allow order while preserving denial: $selected',
+  async ({ policy, selected }) => {
+    const { ctx, cleanup } = makeSpawnCtx();
+    try {
+      const client = new AcpClient({
+        runtimeLabel: 'test adapter',
+        permissionPolicy: policy,
+        buildInitializeParams: () => ({}),
+        buildSessionParams: () => ({}),
+      });
+      const io = makeIO(ctx);
+      client.bindIO(io);
+      await tick();
+      client.parseLine(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: 92,
+          method: 'session/request_permission',
+          params: {
+            options: ['allow_always', 'allow_once', 'reject_always', 'reject_once'].map((kind) => ({
+              kind,
+              optionId: kind,
+              name: kind,
+            })),
+          },
+        }),
+      );
+      await tick();
+      expect(parseLast(io)).toEqual({
+        jsonrpc: '2.0',
+        id: 92,
+        result: { outcome: { outcome: 'selected', optionId: selected } },
+      });
+    } finally {
+      cleanup();
+    }
+  },
+);

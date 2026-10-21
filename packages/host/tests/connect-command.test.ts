@@ -2,10 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import {
-  assembleConnectCommand,
-  buildConnectArgv,
-} from '@silverhand/shared';
+import { assembleConnectCommand, buildConnectArgv } from '@silverhand/shared';
 import {
   defaultConnectRuntimePaths,
   discoverStopTarget,
@@ -87,12 +84,15 @@ describe('silverhand-daemon connect command', () => {
 
   it('fails loud when the requested connect-token env var is missing', () => {
     expect(
-      parseConnectArgv([
-        '--server-url',
-        'http://127.0.0.1:18080',
-        '--connect-token-env',
-        'SILVERHAND_DAEMON_CONNECT_TOKEN',
-      ], {}),
+      parseConnectArgv(
+        [
+          '--server-url',
+          'http://127.0.0.1:18080',
+          '--connect-token-env',
+          'SILVERHAND_DAEMON_CONNECT_TOKEN',
+        ],
+        {},
+      ),
     ).toMatchObject({
       ok: false,
       exitCode: 1,
@@ -329,19 +329,13 @@ describe('silverhand-daemon connect command', () => {
     const stateRoot = '/home/u/.silverhand';
     const p = defaultConnectRuntimePaths('host/1', stateRoot);
     expect(p.socketPath).toBe(`${stateRoot}/run/connect-host_1/daemon.sock`);
-    expect(p.pidFilePath).toBe(
-      `${stateRoot}/run/connect-host_1/silverhand-daemon.pid`,
-    );
+    expect(p.pidFilePath).toBe(`${stateRoot}/run/connect-host_1/silverhand-daemon.pid`);
     expect(p.runStateDir).toBe(`${stateRoot}/run/connect-host_1`);
     expect(p.runtimePidRootDir).toBe(`${stateRoot}/run/connect-host_1/runtime-pids`);
     expect(p.logDir).toBe(`${stateRoot}/logs/connect-host_1`);
-    expect(p.launcherLogPath).toBe(
-      `${stateRoot}/logs/connect-host_1/connect-launcher.log`,
-    );
+    expect(p.launcherLogPath).toBe(`${stateRoot}/logs/connect-host_1/connect-launcher.log`);
     expect(p.agentHomeRootDir).toBe(`${stateRoot}/computers/host_1/agents`);
-    expect(p.proxyConfigPath).toBe(
-      `${stateRoot}/computers/host_1/proxy-config.json`,
-    );
+    expect(p.proxyConfigPath).toBe(`${stateRoot}/computers/host_1/proxy-config.json`);
   });
 
   it('an explicit data root stays flat and self-contained (never redirected)', () => {
@@ -357,9 +351,9 @@ describe('silverhand-daemon connect command', () => {
 
   it('stop maps a reserved-namespace root to the default profile BY INVARIANT and anything else flat', () => {
     const stateRoot = '/home/u/.silverhand';
-    expect(
-      stopRuntimePaths(`${stateRoot}/computers/host_1`, stateRoot).pidFilePath,
-    ).toBe(`${stateRoot}/run/connect-host_1/silverhand-daemon.pid`);
+    expect(stopRuntimePaths(`${stateRoot}/computers/host_1`, stateRoot).pidFilePath).toBe(
+      `${stateRoot}/run/connect-host_1/silverhand-daemon.pid`,
+    );
     expect(stopRuntimePaths('/data/custom', stateRoot).pidFilePath).toBe(
       '/data/custom/silverhand-daemon.pid',
     );

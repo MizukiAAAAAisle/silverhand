@@ -49,14 +49,7 @@ export const SILVERHAND_COMMAND_DOMAINS = [
           'one exception: an address flag (--target) takes a whole delivery ' +
           'address verbatim, #conv: prefix and all. ' +
           'Wrap URLs next to non-ASCII punctuation in <...> or Markdown link syntax.',
-        verbs: [
-          'send',
-          'stale-resolve',
-          'stale-receive',
-          'react',
-          'history',
-          'search',
-        ],
+        verbs: ['send', 'stale-resolve', 'stale-receive', 'react', 'history', 'search'],
       },
     ],
   },
@@ -70,15 +63,7 @@ export const SILVERHAND_COMMAND_DOMAINS = [
         guidance:
           'Claim substantive untracked work before starting. A failed claim means ' +
           'stop, and task state must be updated before reporting completion.',
-        verbs: [
-          'list',
-          'create',
-          'claim',
-          'unclaim',
-          'status',
-          'edit',
-          'detail',
-        ],
+        verbs: ['list', 'create', 'claim', 'unclaim', 'status', 'edit', 'detail'],
       },
     ],
   },
@@ -101,8 +86,7 @@ export const SILVERHAND_COMMAND_DOMAINS = [
       },
       {
         noun: 'member',
-        summary:
-          'Add an existing workspace member to an addressed conversation.',
+        summary: 'Add an existing workspace member to an addressed conversation.',
         verbs: ['add'],
       },
     ],
@@ -125,8 +109,7 @@ export const SILVERHAND_COMMAND_DOMAINS = [
       {
         noun: 'schedule',
         summary: 'Create, list, or cancel self-wake schedules.',
-        guidance:
-          'Schedule only when no human message will naturally trigger the follow-up.',
+        guidance: 'Schedule only when no human message will naturally trigger the follow-up.',
         verbs: ['create', 'list', 'cancel'],
       },
     ],
@@ -155,15 +138,7 @@ export const SILVERHAND_COMMAND_DOMAINS = [
           {
             facet: 'mcp',
             summary: "Manage this agent's custom MCP servers.",
-            verbs: [
-              'get',
-              'set',
-              'add',
-              'remove',
-              'clear',
-              'validate',
-              'probe',
-            ],
+            verbs: ['get', 'set', 'add', 'remove', 'clear', 'validate', 'probe'],
           },
         ],
       },
@@ -171,10 +146,8 @@ export const SILVERHAND_COMMAND_DOMAINS = [
   },
 ] as const satisfies readonly SilverhandCommandDomainManifest[];
 
-export type SilverhandCommandDomain =
-  (typeof SILVERHAND_COMMAND_DOMAINS)[number];
-export type SilverhandCommandNoun =
-  SilverhandCommandDomain['nouns'][number]['noun'];
+export type SilverhandCommandDomain = (typeof SILVERHAND_COMMAND_DOMAINS)[number];
+export type SilverhandCommandNoun = SilverhandCommandDomain['nouns'][number]['noun'];
 
 export function silverhandCommandNouns(): readonly SilverhandCommandNounManifest[] {
   const nouns: SilverhandCommandNounManifest[] = [];

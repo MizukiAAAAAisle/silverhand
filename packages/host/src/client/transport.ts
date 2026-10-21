@@ -52,10 +52,7 @@ export interface Transport {
    *  again to reopen. Idempotent. */
   close(): void;
   /** Subscribe to events. Returns an unsubscribe function. */
-  on<K extends keyof TransportEvents>(
-    event: K,
-    handler: TransportEvents[K],
-  ): () => void;
+  on<K extends keyof TransportEvents>(event: K, handler: TransportEvents[K]): () => void;
   /** True after `connect()` resolves and before `disconnect` fires. */
   isConnected(): boolean;
 }

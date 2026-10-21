@@ -10,10 +10,7 @@
 // deliberate contract change (see `DirectPairListResponseSchema` for its one
 // legitimate trigger), not something that can drift back in.
 import { describe, expect, it } from 'vitest';
-import {
-  ConversationRefSchema,
-  type ConversationRef,
-} from '../src/api/conversation.js';
+import { ConversationRefSchema, type ConversationRef } from '../src/api/conversation.js';
 import { ConversationPlacementKindSchema } from '../src/db/schema.js';
 
 const workspaceRef: ConversationRef = {
@@ -45,22 +42,20 @@ describe('ConversationRef — workspace-arm narrowing', () => {
     // Enumerated from the placement enum rather than hardcoded, so a NEW
     // workspace-less placement kind cannot be added without landing here.
     const workspaceLess = ConversationPlacementKindSchema.options.filter(
-      kind => kind !== 'workspace',
+      (kind) => kind !== 'workspace',
     );
     expect(workspaceLess).toEqual(['direct_pair']);
     for (const placement_kind of workspaceLess) {
-      expect(
-        ConversationRefSchema.safeParse({ ...workspaceRef, placement_kind })
-          .success,
-      ).toBe(false);
+      expect(ConversationRefSchema.safeParse({ ...workspaceRef, placement_kind }).success).toBe(
+        false,
+      );
     }
   });
 
   it('rejects a null workspace coordinate (the pseudo-coordinate #task:2035 removed)', () => {
-    expect(
-      ConversationRefSchema.safeParse({ ...workspaceRef, workspace_id: null })
-        .success,
-    ).toBe(false);
+    expect(ConversationRefSchema.safeParse({ ...workspaceRef, workspace_id: null }).success).toBe(
+      false,
+    );
   });
 
   it('narrows the static type too, not just the parse', () => {

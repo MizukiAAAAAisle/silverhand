@@ -38,9 +38,9 @@ describe('reference position contract', () => {
     expect(contract.addressed.length).toBeGreaterThan(0);
   });
 
-  it.each(contract.addressed)('addresses: $name', testCase => {
+  it.each(contract.addressed)('addresses: $name', (testCase) => {
     expect(
-      extractMessageReferences(testCase.content).map(reference => ({
+      extractMessageReferences(testCase.content).map((reference) => ({
         kind: reference.kind,
         handle: reference.handle,
       })),

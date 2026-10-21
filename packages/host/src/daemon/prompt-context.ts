@@ -6,10 +6,7 @@ import type {
   WorkspaceMemoryIndexEntry,
 } from '@silverhand/shared';
 import { isAgentHomeWorkspaceId } from '@silverhand/shared';
-import type {
-  ResolvedStartOptions,
-  ResolvedWorkspaceRef,
-} from './runtime-start-resolve.js';
+import type { ResolvedStartOptions, ResolvedWorkspaceRef } from './runtime-start-resolve.js';
 import { isResolvedAgentStartOptions } from './runtime-start-resolve.js';
 import { readMemoryNotesCatalog } from './memory-notes-catalog.js';
 
@@ -41,13 +38,8 @@ async function readFileWithCap(path: string, capBytes: number): Promise<Injected
 export async function buildPromptContextFromRuntimeStartOptions(
   options: ResolvedStartOptions,
 ): Promise<DriverPromptContext> {
-  const roleSystemPromptPath = join(
-    options.agent.home_dir,
-    'system_prompt.md',
-  );
-  const roleSystemPrompt = await readFile(roleSystemPromptPath, 'utf-8').catch(
-    () => '',
-  );
+  const roleSystemPromptPath = join(options.agent.home_dir, 'system_prompt.md');
+  const roleSystemPrompt = await readFile(roleSystemPromptPath, 'utf-8').catch(() => '');
 
   const agentScoped = isResolvedAgentStartOptions(options);
   const workspaceLess = !agentScoped && options.workspace === null;
@@ -59,15 +51,14 @@ export async function buildPromptContextFromRuntimeStartOptions(
   } else {
     currentMemoryDir = memoryDirFor(options.workspace);
   }
-  const currentMemory = currentMemoryDir === null
-    ? { kind: 'missing' as const }
-    : await readFileWithCap(
-        join(currentMemoryDir, 'MEMORY.md'),
-        MEMORY_INJECT_CAP_BYTES,
-      );
-  const memoryNotesCatalog = currentMemoryDir === null
-    ? { entries: [], omittedCount: 0 }
-    : await readMemoryNotesCatalog(currentMemoryDir);
+  const currentMemory =
+    currentMemoryDir === null
+      ? { kind: 'missing' as const }
+      : await readFileWithCap(join(currentMemoryDir, 'MEMORY.md'), MEMORY_INJECT_CAP_BYTES);
+  const memoryNotesCatalog =
+    currentMemoryDir === null
+      ? { entries: [], omittedCount: 0 }
+      : await readMemoryNotesCatalog(currentMemoryDir);
 
   return {
     agentId: options.agent.id,
@@ -78,9 +69,7 @@ export async function buildPromptContextFromRuntimeStartOptions(
     roleSystemPrompt,
     currentMemory,
     memoryNotesCatalog,
-    workspaceMemoryIndex: buildWorkspaceMemoryIndexFromRuntimeStartOptions(
-      options,
-    ),
+    workspaceMemoryIndex: buildWorkspaceMemoryIndexFromRuntimeStartOptions(options),
     sessionContext: agentScoped
       ? {
           kind: 'agent',
@@ -96,20 +85,20 @@ export async function buildPromptContextFromRuntimeStartOptions(
             members: options.session.members,
           }
         : {
-          kind: 'conversation',
-          conversationId: options.session.conversation_id,
-          computerId: options.computer_id,
-          workspaceName: options.workspace.name,
-          workspacePath: options.workspace.path,
-          // A COORDINATE, not a decoded word (#task:2075). The daemon still READS
-          // the physical `agent_home` — that is what selects a path-resolution
-          // strategy (`runtime-start-resolve.ts`) — but it no longer publishes a
-          // container word derived from it; the prompt renderer asks
-          // `isAgentHomeWorkspaceId` itself.
-          workspaceId: options.workspace.id,
-          sessionTitle: options.session.title,
-          members: options.session.members,
-        },
+            kind: 'conversation',
+            conversationId: options.session.conversation_id,
+            computerId: options.computer_id,
+            workspaceName: options.workspace.name,
+            workspacePath: options.workspace.path,
+            // A COORDINATE, not a decoded word (#task:2075). The daemon still READS
+            // the physical `agent_home` — that is what selects a path-resolution
+            // strategy (`runtime-start-resolve.ts`) — but it no longer publishes a
+            // container word derived from it; the prompt renderer asks
+            // `isAgentHomeWorkspaceId` itself.
+            workspaceId: options.workspace.id,
+            sessionTitle: options.session.title,
+            members: options.session.members,
+          },
   };
 }
 
@@ -117,9 +106,8 @@ function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
   options: ResolvedStartOptions,
 ): WorkspaceMemoryIndexEntry[] {
   if (isResolvedAgentStartOptions(options)) return [];
-  return options.workspace_memory_index.map(workspace => {
-    const isCurrent = options.workspace !== null
-      && workspace.id === options.workspace.id;
+  return options.workspace_memory_index.map((workspace) => {
+    const isCurrent = options.workspace !== null && workspace.id === options.workspace.id;
     // Labels a WORKSPACE. It said `(DM)` until #task:2069 (an agent was told
     // "DM" for the container a human saw as Agent Space), then a decoded
     // container word until #task:2075. Now it asks the ID CONVENTION, which is
@@ -127,10 +115,9 @@ function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
     // an entry whose stored word says `agent_home` but whose id is NOT this
     // agent's home is a foreign/corrupt ref (it already fails soft to
     // `memoryPath: null`) and no longer gets labelled an Agent Space either.
-    const baseLabel =
-      isAgentHomeWorkspaceId(workspace.id, options.agent.id)
-        ? `${workspace.name} (Agent Space)`
-        : workspace.name;
+    const baseLabel = isAgentHomeWorkspaceId(workspace.id, options.agent.id)
+      ? `${workspace.name} (Agent Space)`
+      : workspace.name;
     return {
       label: isCurrent ? `${baseLabel} (current)` : baseLabel,
       // path === null → no local realization on this computer yet; the
@@ -138,17 +125,12 @@ function buildWorkspaceMemoryIndexFromRuntimeStartOptions(
       memoryPath:
         workspace.path === null
           ? null
-          : join(
-              memoryDirFor({ ...workspace, path: workspace.path }),
-              'MEMORY.md',
-            ),
+          : join(memoryDirFor({ ...workspace, path: workspace.path }), 'MEMORY.md'),
     };
   });
 }
 
-function activeProfilePromptDir(
-  workspace: ResolvedWorkspaceRef | undefined,
-): string {
+function activeProfilePromptDir(workspace: ResolvedWorkspaceRef | undefined): string {
   // relocation-v1 §7 task 1 — the agent cwd IS its L2 root for BOTH kinds now
   // (regular = the workspace bundle root; agent_home = the L1 home), so the
   // prompt's profile dir is always `.` (MEMORY.md at `./MEMORY.md`, notes at

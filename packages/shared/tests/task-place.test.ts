@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  TaskSummaryDtoSchema,
-  type TaskSummaryDto,
-} from '../src/api/task.js';
+import { TaskSummaryDtoSchema, type TaskSummaryDto } from '../src/api/task.js';
 
 const base = {
   id: 'task-1',

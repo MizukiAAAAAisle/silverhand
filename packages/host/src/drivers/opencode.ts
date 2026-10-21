@@ -1,15 +1,6 @@
 import { SILVERHAND_OPENCODE_AGENT } from '@silverhand/shared';
-import {
-  AcpClient,
-  type AcpPermissionPolicy,
-  type AcpRuntimeAdapter,
-} from './acp.js';
-import {
-  type Driver,
-  type DriverIO,
-  type DriverSpawnContext,
-  type ParsedEvent,
-} from './index.js';
+import { AcpClient, type AcpPermissionPolicy, type AcpRuntimeAdapter } from './acp.js';
+import { type Driver, type DriverIO, type DriverSpawnContext, type ParsedEvent } from './index.js';
 
 const OPENCODE_PERMISSION_POLICY: AcpPermissionPolicy = {
   // Match the rest of Silverhand's agent runtimes: the runtime process is

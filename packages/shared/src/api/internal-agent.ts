@@ -9,10 +9,7 @@ import {
 } from '../db/schema.js';
 import { ChannelTitleSchema } from './conversation.js';
 import { UnresolvedReferencesSchema } from './message-reference.js';
-import {
-  MessageAttachmentIdsInputSchema,
-  hasMessagePayload,
-} from './_zod-helpers.js';
+import { MessageAttachmentIdsInputSchema, hasMessagePayload } from './_zod-helpers.js';
 import { AttachmentSnapshotSchema } from './attachment.js';
 import type { MessageAuthorDto } from './message-author.js';
 import { ReactionAggregateDtoSchema } from './reactions.js';
@@ -36,56 +33,50 @@ export const AgentStaleResolutionReasonSchema = z.enum([
   'obsolete',
   'force_send',
 ]);
-export type AgentStaleResolutionReason = z.infer<
-  typeof AgentStaleResolutionReasonSchema
->;
+export type AgentStaleResolutionReason = z.infer<typeof AgentStaleResolutionReasonSchema>;
 
-export const AgentSendStaleResolutionReasonSchema = z.enum([
-  'unaffected',
-  'revised',
-  'force_send',
-]);
-export type AgentSendStaleResolutionReason = z.infer<
-  typeof AgentSendStaleResolutionReasonSchema
->;
+export const AgentSendStaleResolutionReasonSchema = z.enum(['unaffected', 'revised', 'force_send']);
+export type AgentSendStaleResolutionReason = z.infer<typeof AgentSendStaleResolutionReasonSchema>;
 
-export const AgentSendMessageInputSchema = z.object({
-  content: z.string(),
-  /**
-   * WHERE this message goes — an absolute address, and the only destination
-   * coordinate on this door (#task:2021 P4-4).
-   *
-   * REQUIRED, with no ambient default: the sending conversation is where the
-   * agent's credential lives, not where its words go, and an omitted target used
-   * to mean "here" — the one spelling that becomes wrong the moment an agent
-   * serves more than one stream. The CLI refuses the send before it reaches this
-   * schema (`target_required`) so the correction can name the agent's own stream;
-   * a request that reaches the server without one is a client bug, not a default.
-   *
-   * A STRING, parsed by `parseDeliveryTargetInput` — the grammar has exactly one
-   * authority (`delivery-target.ts`) and this schema deliberately does not
-   * restate any part of it. So no length bound either: the request body is
-   * already bounded, and an address the grammar refuses is `target_malformed`,
-   * which is the same answer a bound would have produced with a worse reason.
-   */
-  target: z.string().min(1),
-  /** Correlates a retry/bypass send with a prior `message_stale` response.
-   *  This is observability-only: missing or malformed stale-resolution
-   *  telemetry must not become a send gate. */
-  stale_event_id: z.string().min(1).optional(),
-  stale_resolution_reason: AgentSendStaleResolutionReasonSchema.optional(),
-  /** Explicit agent escape hatch for stale-context sends. Used by
-   *  `silverhand message send --anyway`; the backend logs the bypass but
-   *  does not run the freshness guard for this one send. */
-  freshness_bypass: z.boolean().optional(),
-  /** Optional attachment ids previously returned by `upload_file`.
-   *  Server validates each id belongs to the same channel as the
-   *  resolved target conversation. */
-  attachment_ids: MessageAttachmentIdsInputSchema,
-}).refine(hasMessagePayload, {
-  message: 'message must include text or at least one attachment',
-  path: ['content'],
-});
+export const AgentSendMessageInputSchema = z
+  .object({
+    content: z.string(),
+    /**
+     * WHERE this message goes — an absolute address, and the only destination
+     * coordinate on this door (#task:2021 P4-4).
+     *
+     * REQUIRED, with no ambient default: the sending conversation is where the
+     * agent's credential lives, not where its words go, and an omitted target used
+     * to mean "here" — the one spelling that becomes wrong the moment an agent
+     * serves more than one stream. The CLI refuses the send before it reaches this
+     * schema (`target_required`) so the correction can name the agent's own stream;
+     * a request that reaches the server without one is a client bug, not a default.
+     *
+     * A STRING, parsed by `parseDeliveryTargetInput` — the grammar has exactly one
+     * authority (`delivery-target.ts`) and this schema deliberately does not
+     * restate any part of it. So no length bound either: the request body is
+     * already bounded, and an address the grammar refuses is `target_malformed`,
+     * which is the same answer a bound would have produced with a worse reason.
+     */
+    target: z.string().min(1),
+    /** Correlates a retry/bypass send with a prior `message_stale` response.
+     *  This is observability-only: missing or malformed stale-resolution
+     *  telemetry must not become a send gate. */
+    stale_event_id: z.string().min(1).optional(),
+    stale_resolution_reason: AgentSendStaleResolutionReasonSchema.optional(),
+    /** Explicit agent escape hatch for stale-context sends. Used by
+     *  `silverhand message send --anyway`; the backend logs the bypass but
+     *  does not run the freshness guard for this one send. */
+    freshness_bypass: z.boolean().optional(),
+    /** Optional attachment ids previously returned by `upload_file`.
+     *  Server validates each id belongs to the same channel as the
+     *  resolved target conversation. */
+    attachment_ids: MessageAttachmentIdsInputSchema,
+  })
+  .refine(hasMessagePayload, {
+    message: 'message must include text or at least one attachment',
+    path: ['content'],
+  });
 export type AgentSendMessageInput = z.infer<typeof AgentSendMessageInputSchema>;
 
 export const AgentResolveStaleMessageInputSchema = z.object({
@@ -93,9 +84,7 @@ export const AgentResolveStaleMessageInputSchema = z.object({
   stale_event_id: z.string().min(1),
   resolution_reason: z.literal('obsolete'),
 });
-export type AgentResolveStaleMessageInput = z.infer<
-  typeof AgentResolveStaleMessageInputSchema
->;
+export type AgentResolveStaleMessageInput = z.infer<typeof AgentResolveStaleMessageInputSchema>;
 
 export const AgentSendMessageOutputSchema = z.object({
   message_id: z.string(),
@@ -155,9 +144,7 @@ export const AgentCreateChannelInputSchema = z.object({
 /** The REQUEST BODY an agent's CLI constructs — `z.input`, for the same reason as
  *  `CreateConversationChannelInput`: the title travels as the string the agent
  *  wrote, and the branded canonical pair exists only after the server parses it. */
-export type AgentCreateChannelInput = z.input<
-  typeof AgentCreateChannelInputSchema
->;
+export type AgentCreateChannelInput = z.input<typeof AgentCreateChannelInputSchema>;
 
 /**
  * Agent-initiated conversation member add (#task:2021 P4-4).
@@ -181,18 +168,15 @@ export const AgentAddConversationMemberInputSchema = z.object({
    */
   target: z.string().min(1),
 });
-export type AgentAddConversationMemberInput = z.infer<
-  typeof AgentAddConversationMemberInputSchema
->;
+export type AgentAddConversationMemberInput = z.infer<typeof AgentAddConversationMemberInputSchema>;
 
 /** Agent voluntary thread follow/unfollow (reply-cluster §5 B / §8). The
  *  thread is identified by a *message id* — the cluster root, or any reply
- *  in it (the server normalizes a reply to its canonical root). */export const AgentFollowThreadInputSchema = z.object({
-  root_message_id: z.string().min(1),
-});
-export type AgentFollowThreadInput = z.infer<
-  typeof AgentFollowThreadInputSchema
->;
+ *  in it (the server normalizes a reply to its canonical root). */ export const AgentFollowThreadInputSchema =
+  z.object({
+    root_message_id: z.string().min(1),
+  });
+export type AgentFollowThreadInput = z.infer<typeof AgentFollowThreadInputSchema>;
 
 export const AgentFollowThreadOutputSchema = z.object({
   /** Canonical cluster root the follow/unfollow resolved to. */
@@ -202,9 +186,7 @@ export const AgentFollowThreadOutputSchema = z.object({
    *  (false = was not following). */
   changed: z.boolean(),
 });
-export type AgentFollowThreadOutput = z.infer<
-  typeof AgentFollowThreadOutputSchema
->;
+export type AgentFollowThreadOutput = z.infer<typeof AgentFollowThreadOutputSchema>;
 
 /** Structured detail attached to the backend `has_open_tasks` error so
  *  the CLI can render a list of the offending tasks without re-parsing
@@ -216,12 +198,10 @@ export const ThreadCloseOpenTaskDetailSchema = z.object({
   assignee_name: z.string().nullable(),
   assignee_agent_id: z.string().nullable(),
 });
-export type ThreadCloseOpenTaskDetail = z.infer<
-  typeof ThreadCloseOpenTaskDetailSchema
->;
+export type ThreadCloseOpenTaskDetail = z.infer<typeof ThreadCloseOpenTaskDetailSchema>;
 
 const ReadHistoryOptionalSeqSchema = z.preprocess(
-  value => (value === '' || value === undefined ? undefined : value),
+  (value) => (value === '' || value === undefined ? undefined : value),
   // #task:2341: sequence numbers are JS-safe integers on BOTH wires — a coerced
   // value beyond MAX_SAFE_INTEGER is rejected (not silently rounded), matching the
   // Rust `CoercedNumber` gate so the accepted value is byte-identical.
@@ -234,7 +214,7 @@ const ReadHistoryOptionalSeqSchema = z.preprocess(
 );
 
 const ReadHistoryOptionalLimitSchema = z.preprocess(
-  value => (value === '' || value === undefined ? undefined : value),
+  (value) => (value === '' || value === undefined ? undefined : value),
   z.coerce
     .number()
     .int()
@@ -283,10 +263,9 @@ export const AgentReadHistoryInputSchema = z
     limit: ReadHistoryOptionalLimitSchema,
   })
   .refine(
-    value =>
-      [value.before_seq, value.after_seq, value.around_message_id].filter(
-        v => v !== undefined,
-      ).length <= 1,
+    (value) =>
+      [value.before_seq, value.after_seq, value.around_message_id].filter((v) => v !== undefined)
+        .length <= 1,
     {
       message:
         'pass at most one of before_seq, after_seq, or around_message_id; omit all to read the latest window',
@@ -356,9 +335,7 @@ export type MessageSenderRef = z.infer<typeof MessageSenderRefSchema>;
  *  {@link MessageSenderRef}. No re-adjudication: `status` / `kind` / `id` are
  *  taken verbatim from the single resolver's result — only the renderer-only
  *  fields are dropped. `null` in ⇒ `null` out (system). */
-export function senderRefFromAuthor(
-  author: MessageAuthorDto | null,
-): MessageSenderRef | null {
+export function senderRefFromAuthor(author: MessageAuthorDto | null): MessageSenderRef | null {
   if (author === null) return null;
   if (author.status === 'unresolved') {
     return {
@@ -521,17 +498,11 @@ export type AgentListChannelsDto = z.infer<typeof AgentListChannelsDtoSchema>;
 /** Where a search actually landed. OUTPUT ONLY — an input never carries
  *  it. The caller passes at most one selector and the scope is derived
  *  from that, so there is no mode+selector pair that can disagree. */
-export const AgentSearchMessagesScopeSchema = z.enum([
-  'current',
-  'workspace',
-  'conversation',
-]);
-export type AgentSearchMessagesScope = z.infer<
-  typeof AgentSearchMessagesScopeSchema
->;
+export const AgentSearchMessagesScopeSchema = z.enum(['current', 'workspace', 'conversation']);
+export type AgentSearchMessagesScope = z.infer<typeof AgentSearchMessagesScopeSchema>;
 
 const AgentSearchMessagesLimitSchema = z.preprocess(
-  value => (value === '' || value === undefined ? undefined : value),
+  (value) => (value === '' || value === undefined ? undefined : value),
   z.coerce
     .number()
     .int()
@@ -583,9 +554,7 @@ export const AgentSearchMessagesInputSchema = z
       });
     }
   });
-export type AgentSearchMessagesInput = z.infer<
-  typeof AgentSearchMessagesInputSchema
->;
+export type AgentSearchMessagesInput = z.infer<typeof AgentSearchMessagesInputSchema>;
 
 export const AgentSearchMessageHitSchema = z.object({
   message_ref: MessageRefSchema,
@@ -648,9 +617,7 @@ export const ConversationLogDebugInputSchema = z
     enabled: z.boolean(),
   })
   .strict();
-export type ConversationLogDebugInput = z.infer<
-  typeof ConversationLogDebugInputSchema
->;
+export type ConversationLogDebugInput = z.infer<typeof ConversationLogDebugInputSchema>;
 
 export const ConversationLogDebugStatusSchema = z
   .object({
@@ -660,6 +627,4 @@ export const ConversationLogDebugStatusSchema = z
     daemonSynced: z.boolean().optional(),
   })
   .strict();
-export type ConversationLogDebugStatus = z.infer<
-  typeof ConversationLogDebugStatusSchema
->;
+export type ConversationLogDebugStatus = z.infer<typeof ConversationLogDebugStatusSchema>;

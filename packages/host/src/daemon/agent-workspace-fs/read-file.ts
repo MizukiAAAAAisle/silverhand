@@ -1,14 +1,8 @@
 import { promises as fs } from 'node:fs';
-import type {
-  AgentWorkspaceFileReadParams,
-  AgentWorkspaceFileReadResult,
-} from '../../protocol.js';
+import type { AgentWorkspaceFileReadParams, AgentWorkspaceFileReadResult } from '../../protocol.js';
 import { AgentWorkspaceFsError } from './error.js';
 import { parseAndResolveVirtualPath } from './parse-virtual-path.js';
-import {
-  resolveAgentWorkspaceBaseDir,
-  type ResolveAgentWorkspaceBaseDeps,
-} from './source.js';
+import { resolveAgentWorkspaceBaseDir, type ResolveAgentWorkspaceBaseDeps } from './source.js';
 
 /**
  * Daemon handler for `agent_workspace_file_read` (#task:811).
@@ -39,8 +33,7 @@ import {
  *  - `fs_unavailable` — hard fs failure (perm/IO/EROFS); 503.
  *  - `internal_error` — anything else; 500.
  */
-export interface ReadAgentWorkspaceFileDeps
-  extends ResolveAgentWorkspaceBaseDeps {}
+export interface ReadAgentWorkspaceFileDeps extends ResolveAgentWorkspaceBaseDeps {}
 
 /** Product preview cap. Transport independently allows a complete successful
  * workspace-file result up to 4MiB: 6 × 512KiB worst JSON escaping plus
@@ -82,10 +75,7 @@ export async function readAgentWorkspaceFile(
   // forbidden_path). Refuse directories here: a `not_found` is the
   // honest answer for "no readable file at this path".
   if (!resolved.lstat.isFile()) {
-    throw new AgentWorkspaceFsError(
-      'not_found',
-      'path is not a regular file',
-    );
+    throw new AgentWorkspaceFsError('not_found', 'path is not a regular file');
   }
   // Bounded read: open + a loop of `read(buf, offset, …, offset)` calls
   // that fills the buffer up to MAX_PREVIEW_BYTES + 1 bytes (or hits

@@ -52,7 +52,4 @@ export const MessageReferenceSchema: z.ZodType<Reference> = z
  * the actor's kind is no part of it: a per-surface copy is how one of them would
  * quietly lose the answer.
  */
-export const UnresolvedReferencesSchema = z
-  .array(MessageReferenceSchema)
-  .nonempty()
-  .optional();
+export const UnresolvedReferencesSchema = z.array(MessageReferenceSchema).nonempty().optional();

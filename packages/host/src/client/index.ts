@@ -194,7 +194,7 @@ function readonlySetSnapshot(values: Iterable<string>): ReadonlySet<string> {
       callbackfn: (value: string, value2: string, set: ReadonlySet<string>) => void,
       thisArg?: unknown,
     ): void {
-      inner.forEach(value => callbackfn.call(thisArg, value, value, facade));
+      inner.forEach((value) => callbackfn.call(thisArg, value, value, facade));
     },
   } satisfies ReadonlySet<string>);
   return facade;
@@ -248,8 +248,7 @@ export class HostClient {
       throw new Error('HostClient requires either socketPath or transportFactory');
     }
     this.transportFactory =
-      opts.transportFactory ??
-      (() => new SocketTransport({ socketPath: opts.socketPath! }));
+      opts.transportFactory ?? (() => new SocketTransport({ socketPath: opts.socketPath! }));
     this.requestTimeoutMs = opts.requestTimeoutMs ?? 5_000;
     this.initialBackoffMs = opts.initialBackoffMs ?? 250;
     this.maxBackoffMs = opts.maxBackoffMs ?? 30_000;
@@ -305,10 +304,7 @@ export class HostClient {
    * a `HostClientError` whose `.code` is either a daemon-side error
    * code, `disconnected`, `timeout`, or `closed`.
    */
-  async call<N extends IntentName>(
-    intent: N,
-    params: IntentParams<N>,
-  ): Promise<IntentResult<N>> {
+  async call<N extends IntentName>(intent: N, params: IntentParams<N>): Promise<IntentResult<N>> {
     if (this.closed) throw new HostClientError('closed', 'client is closed');
     if (!this.transport || !this.transport.isConnected()) {
       throw new HostClientError('disconnected', 'host client is not connected');
@@ -319,13 +315,18 @@ export class HostClient {
     return new Promise<IntentResult<N>>((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
-        reject(new HostClientError('timeout', `intent ${intent} timed out after ${this.requestTimeoutMs}ms`));
+        reject(
+          new HostClientError(
+            'timeout',
+            `intent ${intent} timed out after ${this.requestTimeoutMs}ms`,
+          ),
+        );
       }, this.requestTimeoutMs);
       timer.unref?.();
       this.pending.set(id, {
         intent,
         timer,
-        resolve: value => resolve(value as IntentResult<N>),
+        resolve: (value) => resolve(value as IntentResult<N>),
         reject,
       });
       const ok = this.transport!.write(encoded);
@@ -359,24 +360,18 @@ export class HostClient {
     return this.call('conversation_log_debug', params);
   }
 
-  agentMessageSend(
-    params: AgentMessageSendParams,
-  ): Promise<IntentResult<'agent_message_send'>> {
+  agentMessageSend(params: AgentMessageSendParams): Promise<IntentResult<'agent_message_send'>> {
     return this.call('agent_message_send', params);
   }
 
-  agentStaleResolve(
-    params: AgentStaleResolveParams,
-  ): Promise<IntentResult<'agent_stale_resolve'>> {
+  agentStaleResolve(params: AgentStaleResolveParams): Promise<IntentResult<'agent_stale_resolve'>> {
     return this.call('agent_stale_resolve', params);
   }
 
   /** #task:1614 — deferred-pull second consumer. Callers must size the
    *  client's `requestTimeoutMs` above `params.wait_ms`: the daemon
    *  legitimately holds the response for the whole wait window. */
-  agentStaleReceive(
-    params: AgentStaleReceiveParams,
-  ): Promise<IntentResult<'agent_stale_receive'>> {
+  agentStaleReceive(params: AgentStaleReceiveParams): Promise<IntentResult<'agent_stale_receive'>> {
     return this.call('agent_stale_receive', params);
   }
 
@@ -387,15 +382,11 @@ export class HostClient {
   // helper just locks the intent name so a typo can't reach the
   // wire.
 
-  runtimeStart(
-    params: RuntimeStartParams,
-  ): Promise<IntentResult<'runtime_start'>> {
+  runtimeStart(params: RuntimeStartParams): Promise<IntentResult<'runtime_start'>> {
     return this.call('runtime_start', params);
   }
 
-  runtimeStop(
-    params: RuntimeStopParams,
-  ): Promise<IntentResult<'runtime_stop'>> {
+  runtimeStop(params: RuntimeStopParams): Promise<IntentResult<'runtime_stop'>> {
     return this.call('runtime_stop', params);
   }
 
@@ -409,15 +400,11 @@ export class HostClient {
    * helper; the wrapper exists so the local-socket surface stays symmetric
    * with the protocol's `runtime_deliver` command and typo-safe.
    */
-  runtimeDeliver(
-    params: RuntimeDeliverParams,
-  ): Promise<IntentResult<'runtime_deliver'>> {
+  runtimeDeliver(params: RuntimeDeliverParams): Promise<IntentResult<'runtime_deliver'>> {
     return this.call('runtime_deliver', params);
   }
 
-  runtimeStatus(
-    params: RuntimeStatusParams = {},
-  ): Promise<IntentResult<'runtime_status'>> {
+  runtimeStatus(params: RuntimeStatusParams = {}): Promise<IntentResult<'runtime_status'>> {
     return this.call('runtime_status', params);
   }
 
@@ -556,7 +543,7 @@ export class HostClient {
     const transport = this.transportFactory();
     this.transport = transport;
     transport.on('frame', (frame, bytes) => this.handleFrame(frame, bytes));
-    transport.on('disconnect', reason => this.handleDisconnect(reason));
+    transport.on('disconnect', (reason) => this.handleDisconnect(reason));
     transport.on('overflow', () => {
       this.logger.warn({}, 'daemon sent oversize frame; reconnecting');
       transport.close();
@@ -621,7 +608,10 @@ export class HostClient {
     });
   }
 
-  private handleFrame(frame: DecodedFrame, encodedBytes = Buffer.byteLength(JSON.stringify(frame), 'utf8')): void {
+  private handleFrame(
+    frame: DecodedFrame,
+    encodedBytes = Buffer.byteLength(JSON.stringify(frame), 'utf8'),
+  ): void {
     const intent = 'id' in frame ? this.pending.get(frame.id)?.intent : undefined;
     if (encodedBytes > responseFrameBudget(intent, 'result' in frame && !('error' in frame))) {
       this.transport?.close();
@@ -686,13 +676,11 @@ export class HostClient {
       const errorSchema = intentErrorSchema(pending.intent as IntentName);
       const validatedErr = errorSchema.safeParse(frame.error);
       if (validatedErr.success) {
-        pending.reject(
-          new HostClientError(validatedErr.data.code, validatedErr.data.message),
-        );
+        pending.reject(new HostClientError(validatedErr.data.code, validatedErr.data.message));
         return;
       }
       const issues = validatedErr.error.errors
-        .map(e => `${e.path.join('.')}: ${e.message}`)
+        .map((e) => `${e.path.join('.')}: ${e.message}`)
         .join('; ');
       this.logger.warn(
         {
@@ -722,7 +710,7 @@ export class HostClient {
       const validated = schema.result.safeParse(frame.result);
       if (!validated.success) {
         const issues = validated.error.errors
-          .map(e => `${e.path.join('.')}: ${e.message}`)
+          .map((e) => `${e.path.join('.')}: ${e.message}`)
           .join('; ');
         this.logger.warn(
           { intent: pending.intent, issues },
@@ -752,9 +740,7 @@ export class HostClient {
       return;
     }
     this.logger.warn({ reason }, 'host client transport disconnected');
-    this.rejectAllPending(
-      new HostClientError('disconnected', `transport disconnected: ${reason}`),
-    );
+    this.rejectAllPending(new HostClientError('disconnected', `transport disconnected: ${reason}`));
     this.transport = null;
     this.negotiatedProtocol = null;
     if (this.closed) return;
@@ -771,10 +757,7 @@ export class HostClient {
     // Full-jitter exponential backoff: pick uniform in [0, current).
     // Standard recipe (AWS architecture blog) for avoiding thundering-
     // herd when many clients re-establish simultaneously.
-    const delay = Math.max(
-      this.initialBackoffMs,
-      Math.floor(this.backoffMs * this.rng()),
-    );
+    const delay = Math.max(this.initialBackoffMs, Math.floor(this.backoffMs * this.rng()));
     this.backoffMs = Math.min(this.maxBackoffMs, this.backoffMs * 2);
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
@@ -794,10 +777,7 @@ export class HostClient {
         try {
           h();
         } catch (err) {
-          this.logger.error(
-            { err: (err as Error).message },
-            'onReconnect handler threw',
-          );
+          this.logger.error({ err: (err as Error).message }, 'onReconnect handler threw');
         }
       }
     } catch (err) {

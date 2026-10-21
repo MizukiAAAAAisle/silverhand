@@ -58,7 +58,10 @@ export interface ReclaimDeps {
   pingDaemon: (
     socketPath: string,
     timeoutMs: number,
-  ) => Promise<{ ok: true; daemon_pid: number } | { ok: false; reason: 'unreachable' | 'timeout' | 'invalid_response' }>;
+  ) => Promise<
+    | { ok: true; daemon_pid: number }
+    | { ok: false; reason: 'unreachable' | 'timeout' | 'invalid_response' }
+  >;
   /** `kill(pid, signal | 0)`. Returns 'alive' | 'gone' | 'eperm'. */
   signalPid: (pid: number, signal: NodeJS.Signals | 0) => 'alive' | 'gone' | 'eperm';
   /** Wait until `signalPid(pid, 0)` returns 'gone' OR timeout. */
@@ -91,18 +94,19 @@ export type ReclaimResult =
   | {
       action: 'fail_loudly';
       pid: number;
-      check: 'a_eperm' | 'b_cmdline_mismatch' | 'c_ping_pid_mismatch' | 'd_ping_invalid' | 'survived_sigkill';
+      check:
+        | 'a_eperm'
+        | 'b_cmdline_mismatch'
+        | 'c_ping_pid_mismatch'
+        | 'd_ping_invalid'
+        | 'survived_sigkill';
       detail: string;
     };
 
 export class ReclaimFailLoudlyError extends Error {
   readonly code = 'reclaim_fail_loudly';
-  constructor(
-    readonly result: Extract<ReclaimResult, { action: 'fail_loudly' }>,
-  ) {
-    super(
-      `kill-and-reclaim refused (check=${result.check}, pid=${result.pid}): ${result.detail}`,
-    );
+  constructor(readonly result: Extract<ReclaimResult, { action: 'fail_loudly' }>) {
+    super(`kill-and-reclaim refused (check=${result.check}, pid=${result.pid}): ${result.detail}`);
   }
 }
 
@@ -112,15 +116,9 @@ export class ReclaimFailLoudlyError extends Error {
  */
 export function defaultReclaimDeps(): ReclaimDeps {
   return {
-    runPs: async pid => {
+    runPs: async (pid) => {
       try {
-        const { stdout } = await execFileAsync('ps', [
-          '-ww',
-          '-o',
-          'command=',
-          '-p',
-          String(pid),
-        ]);
+        const { stdout } = await execFileAsync('ps', ['-ww', '-o', 'command=', '-p', String(pid)]);
         return stdout.toString().trim();
       } catch {
         // ps exits non-zero when pid doesn't exist; treat as empty.
@@ -132,7 +130,7 @@ export function defaultReclaimDeps(): ReclaimDeps {
       // wait for response, close. We don't reuse SocketTransport
       // because reclaim is a different connection lifecycle (we
       // throw the connection away regardless of outcome).
-      return new Promise(resolve => {
+      return new Promise((resolve) => {
         const sock = new Socket();
         sock.setEncoding('utf8');
         let buffer = '';
@@ -164,7 +162,7 @@ export function defaultReclaimDeps(): ReclaimDeps {
             settle({ ok: false, reason: 'unreachable' });
           }
         });
-        sock.on('data', chunk => {
+        sock.on('data', (chunk) => {
           const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
           const { frames, leftover, overflow } = splitNdjson(buffer, text);
           buffer = leftover;
@@ -223,16 +221,14 @@ export function defaultReclaimDeps(): ReclaimDeps {
         } catch {
           return 'gone';
         }
-        await new Promise(r => setTimeout(r, 50));
+        await new Promise((r) => setTimeout(r, 50));
       }
       return 'still_alive';
     },
   };
 }
 
-export async function reclaimStaleDaemonIfPresent(
-  opts: ReclaimOptions,
-): Promise<ReclaimResult> {
+export async function reclaimStaleDaemonIfPresent(opts: ReclaimOptions): Promise<ReclaimResult> {
   const deps: ReclaimDeps = { ...defaultReclaimDeps(), ...opts.deps };
   const gracefulMs = opts.gracefulMs ?? 5_000;
   const killGraceMs = opts.killGraceMs ?? 2_000;
@@ -281,10 +277,7 @@ export async function reclaimStaleDaemonIfPresent(
   const cmdline = await deps.runPs(pid);
   const expectedSocketToken = `--socket-path ${opts.socketPath}`;
   const expectedPidFileToken = `--pid-file ${opts.pidFilePath}`;
-  if (
-    !cmdline.includes(expectedSocketToken) ||
-    !cmdline.includes(expectedPidFileToken)
-  ) {
+  if (!cmdline.includes(expectedSocketToken) || !cmdline.includes(expectedPidFileToken)) {
     const fail: ReclaimResult = {
       action: 'fail_loudly',
       pid,
@@ -337,10 +330,7 @@ export async function reclaimStaleDaemonIfPresent(
   // ── Reclaim — SIGTERM gracefulMs → SIGKILL killGraceMs ─────────
   // §3.4: do NOT log the cmdline itself — only `cmdline_match: true`
   // (verified above by checks (b) and (c)/(d)).
-  opts.logger.info(
-    { pid, gracefulMs, killGraceMs },
-    'reclaiming stale daemon: SIGTERM',
-  );
+  opts.logger.info({ pid, gracefulMs, killGraceMs }, 'reclaiming stale daemon: SIGTERM');
   logProcess(opts.logger, { action: 'sigterm', pid, cmdline_match: true });
   deps.signalPid(pid, 'SIGTERM');
   let exitState = await deps.waitForExit(pid, gracefulMs);
@@ -353,10 +343,7 @@ export async function reclaimStaleDaemonIfPresent(
       cmdline,
     };
   }
-  opts.logger.warn(
-    { pid, gracefulMs },
-    'daemon survived SIGTERM grace; escalating to SIGKILL',
-  );
+  opts.logger.warn({ pid, gracefulMs }, 'daemon survived SIGTERM grace; escalating to SIGKILL');
   logProcess(opts.logger, { action: 'sigkill', pid, cmdline_match: true });
   deps.signalPid(pid, 'SIGKILL');
   exitState = await deps.waitForExit(pid, killGraceMs);

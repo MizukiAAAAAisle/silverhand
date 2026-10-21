@@ -16,12 +16,7 @@
  * ~30-line capture server lets us shape the 200 typed envelope and confirm
  * the CLI's exit/stderr/stdout contract against it.
  */
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -38,7 +33,7 @@ let nextResponse: { status: number; body: unknown } | null = null;
 beforeAll(async () => {
   server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
-    req.on('data', chunk => chunks.push(chunk));
+    req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => {
       const reply = nextResponse;
       nextResponse = null;
@@ -47,14 +42,14 @@ beforeAll(async () => {
       res.end(JSON.stringify(reply?.body ?? { tasks: [] }));
     });
   });
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
   const addr = server.address();
   if (!addr || typeof addr === 'string') throw new Error('no addr');
   serverUrl = `http://127.0.0.1:${addr.port}`;
 });
 
 afterAll(async () => {
-  await new Promise<void>(r => server.close(() => r()));
+  await new Promise<void>((r) => server.close(() => r()));
 });
 
 interface RunResult {
@@ -78,10 +73,10 @@ function runCreate(argv: readonly string[]): Promise<RunResult> {
     });
     let stdout = '';
     let stderr = '';
-    child.stdout.on('data', c => (stdout += c.toString('utf8')));
-    child.stderr.on('data', c => (stderr += c.toString('utf8')));
+    child.stdout.on('data', (c) => (stdout += c.toString('utf8')));
+    child.stderr.on('data', (c) => (stderr += c.toString('utf8')));
     child.on('error', reject);
-    child.on('close', code => resolvePromise({ code, stdout, stderr }));
+    child.on('close', (code) => resolvePromise({ code, stdout, stderr }));
     child.stdin.end();
   });
 }
@@ -95,41 +90,45 @@ function parseStderrJson(stderr: string): {
     details?: Record<string, unknown>;
   };
 } {
-  const line = stderr.split(/\r?\n/).find(l => l.trim().startsWith('{'));
+  const line = stderr.split(/\r?\n/).find((l) => l.trim().startsWith('{'));
   if (!line) throw new Error(`no JSON line in stderr:\n${stderr}`);
   return JSON.parse(line);
 }
 
-describe('silverhand task create — business-failure never prints as success (real subprocess)', { timeout: 30_000 }, () => {
-  it('maps a 200 source_conflict envelope to exit≠0 + code=conflict + details.existing_task, no success stdout', async () => {
-    nextResponse = {
-      status: 200,
-      body: {
-        error: 'source_conflict',
+describe(
+  'silverhand task create — business-failure never prints as success (real subprocess)',
+  { timeout: 30_000 },
+  () => {
+    it('maps a 200 source_conflict envelope to exit≠0 + code=conflict + details.existing_task, no success stdout', async () => {
+      nextResponse = {
+        status: 200,
+        body: {
+          error: 'source_conflict',
+          existing_task: { task_number: 7, status: 'closed', title: 'the winner' },
+        },
+      };
+      const r = await runCreate([
+        // The address is required on every single-stream door (#task:2021 P4-4);
+        // this case is about the FAILURE ENVELOPE, so it spells the plainest one.
+        '--target',
+        '#conv:Conversation0001',
+        '--title',
+        'derived',
+        '--source-message-id',
+        'm-src',
+      ]);
+      // Exit code: a business failure, NOT success.
+      expect(r.code).toBe(1);
+      // Nothing on stdout — a `{tasks:...}`-shaped success object here would be
+      // the exact regression finding-1 guards against.
+      expect(r.stdout.trim()).toBe('');
+      const body = parseStderrJson(r.stderr);
+      expect(body.error.code).toBe('conflict');
+      expect(body.error.subkind).toBe('source_conflict');
+      expect(body.error.retriable).toBe(false);
+      expect(body.error.details).toMatchObject({
         existing_task: { task_number: 7, status: 'closed', title: 'the winner' },
-      },
-    };
-    const r = await runCreate([
-      // The address is required on every single-stream door (#task:2021 P4-4);
-      // this case is about the FAILURE ENVELOPE, so it spells the plainest one.
-      '--target',
-      '#conv:Conversation0001',
-      '--title',
-      'derived',
-      '--source-message-id',
-      'm-src',
-    ]);
-    // Exit code: a business failure, NOT success.
-    expect(r.code).toBe(1);
-    // Nothing on stdout — a `{tasks:...}`-shaped success object here would be
-    // the exact regression finding-1 guards against.
-    expect(r.stdout.trim()).toBe('');
-    const body = parseStderrJson(r.stderr);
-    expect(body.error.code).toBe('conflict');
-    expect(body.error.subkind).toBe('source_conflict');
-    expect(body.error.retriable).toBe(false);
-    expect(body.error.details).toMatchObject({
-      existing_task: { task_number: 7, status: 'closed', title: 'the winner' },
+      });
     });
-  });
-});
+  },
+);

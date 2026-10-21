@@ -1,10 +1,7 @@
 /**
  * `silverhand message` — send, history, search.
  */
-import type {
-  AgentSendStaleResolutionReason,
-  Reference,
-} from '@silverhand/shared';
+import type { AgentSendStaleResolutionReason, Reference } from '@silverhand/shared';
 import {
   NAMED_STREAM_ADDRESS_PREFIX,
   conversationAddressOf,
@@ -25,18 +22,10 @@ import {
 import { CliError, mapHttpError } from '../errors.js';
 import type { BackendClient } from '../client.js';
 import type { CliEnv } from '../env.js';
-import {
-  flagBool,
-  flagNumber,
-  flagString,
-  flagStringArray,
-} from '../parse.js';
+import { flagBool, flagNumber, flagString, flagStringArray } from '../parse.js';
 import { decodeStdinUtf8, readAllStdin } from '../stdin.js';
 import { reachHelpParagraphSection } from '../reach-help.js';
-import {
-  requireAddressBeforeSideEffects,
-  requireTargetFlag,
-} from '../target-flag.js';
+import { requireAddressBeforeSideEffects, requireTargetFlag } from '../target-flag.js';
 import type { Command } from './index.js';
 
 const sendCommand: Command = {
@@ -171,9 +160,9 @@ nothing was reported, not that every reference landed.`,
     content: {
       replacement: 'stdin',
       hint:
-        "pipe the body via stdin instead — e.g. " +
+        'pipe the body via stdin instead — e.g. ' +
         "`silverhand message send <<'SILVERHAND_EOF' ... SILVERHAND_EOF` " +
-        "or `printf \"%s\" \"...\" | silverhand message send`",
+        'or `printf "%s" "..." | silverhand message send`',
     },
     // `--text` / `--message` were never accepted, but agents reach for
     // them by default (every other CLI in their training data uses one
@@ -184,18 +173,18 @@ nothing was reported, not that every reference landed.`,
     text: {
       replacement: 'stdin',
       hint:
-        "silverhand message send only accepts the body on stdin. " +
-        "Use a heredoc — e.g. " +
+        'silverhand message send only accepts the body on stdin. ' +
+        'Use a heredoc — e.g. ' +
         "`silverhand message send <<'SILVERHAND_EOF' ... SILVERHAND_EOF` " +
-        "or `printf \"%s\" \"...\" | silverhand message send`",
+        'or `printf "%s" "..." | silverhand message send`',
     },
     message: {
       replacement: 'stdin',
       hint:
-        "silverhand message send only accepts the body on stdin. " +
-        "Use a heredoc — e.g. " +
+        'silverhand message send only accepts the body on stdin. ' +
+        'Use a heredoc — e.g. ' +
         "`silverhand message send <<'SILVERHAND_EOF' ... SILVERHAND_EOF` " +
-        "or `printf \"%s\" \"...\" | silverhand message send`",
+        'or `printf "%s" "..." | silverhand message send`',
     },
   },
   async run({ env, client, args }) {
@@ -215,9 +204,7 @@ nothing was reported, not that every reference landed.`,
         'credential lives, not a default destination.',
     });
     const anyway = flagBool(args, 'anyway') ?? false;
-    const staleResolution = parseSendStaleResolution(
-      flagString(args, 'stale-resolution'),
-    );
+    const staleResolution = parseSendStaleResolution(flagString(args, 'stale-resolution'));
     if (anyway && staleResolution !== undefined) {
       throw new CliError({
         code: 'validation_error',
@@ -238,7 +225,7 @@ nothing was reported, not that every reference landed.`,
         subkind: 'stdin_is_tty',
         message:
           'silverhand message send reads the body from stdin, but stdin is a TTY. ' +
-          "Pipe the body — e.g. `printf \"%s\" \"hello\" | silverhand message send` " +
+          'Pipe the body — e.g. `printf "%s" "hello" | silverhand message send` ' +
           "or `silverhand message send <<'SILVERHAND_EOF' ... SILVERHAND_EOF`.",
         retriable: false,
       });
@@ -285,9 +272,7 @@ nothing was reported, not that every reference landed.`,
       agent_id: env.agentId,
       content,
       target,
-      ...(attachmentIds && attachmentIds.length > 0
-        ? { attachment_ids: attachmentIds }
-        : {}),
+      ...(attachmentIds && attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
       ...(anyway ? { freshness_bypass: true } : {}),
       ...(staleResolution ? { stale_resolution_reason: staleResolution } : {}),
     };
@@ -303,9 +288,7 @@ nothing was reported, not that every reference landed.`,
       content,
       target,
       ...(anyway ? { freshness_bypass: true } : {}),
-      ...(attachmentIds && attachmentIds.length > 0
-        ? { attachment_ids: attachmentIds }
-        : {}),
+      ...(attachmentIds && attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
     });
   },
 };
@@ -418,11 +401,7 @@ Flags:
       });
     }
     const waitSeconds = flagNumber(args, 'wait') ?? 20;
-    if (
-      !Number.isFinite(waitSeconds) ||
-      waitSeconds < 0 ||
-      waitSeconds > 120
-    ) {
+    if (!Number.isFinite(waitSeconds) || waitSeconds < 0 || waitSeconds > 120) {
       throw new CliError({
         code: 'validation_error',
         message: '--wait must be between 0 and 120 seconds',
@@ -553,7 +532,7 @@ stdout: full AgentReadHistoryDto JSON.`,
     const before = flagNumber(args, 'before-seq');
     const after = flagNumber(args, 'after-seq');
     const around = flagString(args, 'around');
-    const anchorCount = [before, after, around].filter(v => v !== undefined).length;
+    const anchorCount = [before, after, around].filter((v) => v !== undefined).length;
     if (anchorCount > 1) {
       throw new CliError({
         code: 'validation_error',
@@ -735,9 +714,9 @@ function emptySelectorError(flag: string, why: string): CliError {
   });
 }
 
-function runtimeIntentScope(env: CliEnv):
-  | { kind: 'agent' }
-  | { kind: 'conversation'; conversation_id: string } {
+function runtimeIntentScope(
+  env: CliEnv,
+): { kind: 'agent' } | { kind: 'conversation'; conversation_id: string } {
   return env.slot === 'agent'
     ? { kind: 'agent' }
     : { kind: 'conversation', conversation_id: env.conversationId };
@@ -798,9 +777,7 @@ async function sendViaDaemon(
     return {
       message_id: result.message_id,
       ...(result.message_seq !== undefined ? { message_seq: result.message_seq } : {}),
-      ...(result.thread_root_id !== undefined
-        ? { thread_root_id: result.thread_root_id }
-        : {}),
+      ...(result.thread_root_id !== undefined ? { thread_root_id: result.thread_root_id } : {}),
       // Reported only when the daemon reported it: the send SUCCEEDED, and on
       // stdout the field's absence means "nothing to say about your
       // references", never "all of them landed" (#task:2021 P4-5-b).
@@ -811,9 +788,10 @@ async function sendViaDaemon(
   } catch (err) {
     if (err instanceof HostClientError) {
       throw new CliError({
-        code: err.code === 'disconnected' || err.code === 'timeout'
-          ? 'upstream_unavailable'
-          : 'internal',
+        code:
+          err.code === 'disconnected' || err.code === 'timeout'
+            ? 'upstream_unavailable'
+            : 'internal',
         message: `silverhand daemon send failed: ${err.message}`,
         retriable: err.code === 'disconnected' || err.code === 'timeout',
       });
@@ -858,9 +836,10 @@ async function resolveStaleViaDaemon(
   } catch (err) {
     if (err instanceof HostClientError) {
       throw new CliError({
-        code: err.code === 'disconnected' || err.code === 'timeout'
-          ? 'upstream_unavailable'
-          : 'internal',
+        code:
+          err.code === 'disconnected' || err.code === 'timeout'
+            ? 'upstream_unavailable'
+            : 'internal',
         message: `silverhand daemon stale-resolve failed: ${err.message}`,
         retriable: err.code === 'disconnected' || err.code === 'timeout',
       });
@@ -914,11 +893,7 @@ async function staleReceiveViaDaemon(
         err.code === 'stale_event_replaced' ||
         err.code === 'runtime_replaced';
       throw new CliError({
-        code: transient
-          ? 'upstream_unavailable'
-          : arbitration
-            ? 'conflict'
-            : 'internal',
+        code: transient ? 'upstream_unavailable' : arbitration ? 'conflict' : 'internal',
         ...(arbitration ? { subkind: err.code } : {}),
         message: `silverhand daemon stale-receive failed: ${err.message}`,
         retriable: transient,

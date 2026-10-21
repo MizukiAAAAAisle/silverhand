@@ -1,7 +1,4 @@
-import {
-  ENTITY_NAME_MAX_LENGTH,
-  PARTICIPANT_HANDLE_PATTERN,
-} from './api/name.js';
+import { ENTITY_NAME_MAX_LENGTH, PARTICIPANT_HANDLE_PATTERN } from './api/name.js';
 
 /**
  * #task:2000 — the canonical way a message body names a participant.

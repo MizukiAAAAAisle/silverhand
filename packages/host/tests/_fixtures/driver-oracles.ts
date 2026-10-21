@@ -178,7 +178,8 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
   {
     id: 'codex-thread-ownership-requires-correlated-response',
     runtime: 'codex',
-    description: 'Codex notifications and unrelated replies cannot establish or replace thread ownership',
+    description:
+      'Codex notifications and unrelated replies cannot establish or replace thread ownership',
     incident: '#2760 child thread events must not take over the main session',
     resumeSessionId: 'thread-owned',
     steps: [
@@ -195,7 +196,10 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
         expected: [],
       },
       {
-        line: j({ method: 'turn/started', params: { threadId: 'thread-owned', turn: { id: 'early' } } }),
+        line: j({
+          method: 'turn/started',
+          params: { threadId: 'thread-owned', turn: { id: 'early' } },
+        }),
         expected: [],
       },
       {
@@ -208,11 +212,17 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
         expected: [],
       },
       {
-        line: j({ method: 'turn/completed', params: { threadId: 'thread-child', turn: { id: 'child-turn' } } }),
+        line: j({
+          method: 'turn/completed',
+          params: { threadId: 'thread-child', turn: { id: 'child-turn' } },
+        }),
         expected: [],
       },
       {
-        line: j({ method: 'turn/completed', params: { threadId: 'thread-owned', turn: { id: 'main-turn' } } }),
+        line: j({
+          method: 'turn/completed',
+          params: { threadId: 'thread-owned', turn: { id: 'main-turn' } },
+        }),
         expected: [{ kind: 'turn_end', sessionId: 'thread-owned' }],
       },
     ],
@@ -318,7 +328,12 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
           params: { item: { type: 'webSearch', id: 'ws-1', query: 'silverhand' } },
         }),
         expected: [
-          { kind: 'tool_call', name: 'web_search', input: { query: 'silverhand' }, toolCallId: 'ws-1' },
+          {
+            kind: 'tool_call',
+            name: 'web_search',
+            input: { query: 'silverhand' },
+            toolCallId: 'ws-1',
+          },
         ],
       },
       {
@@ -424,7 +439,9 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
         line: j({
           jsonrpc: '2.0',
           method: 'item/completed',
-          params: { item: { type: 'commandExecution', id: 'c1', status: 'completed', exitCode: 0 } },
+          params: {
+            item: { type: 'commandExecution', id: 'c1', status: 'completed', exitCode: 0 },
+          },
         }),
         expected: [{ kind: 'tool_output', name: 'shell', toolCallId: 'c1', outcome: 'success' }],
       },
@@ -432,7 +449,9 @@ export const DRIVER_PARSE_ORACLES: DriverParseOracle[] = [
         line: j({
           jsonrpc: '2.0',
           method: 'item/completed',
-          params: { item: { type: 'commandExecution', id: 'c2', status: 'completed', exitCode: 2 } },
+          params: {
+            item: { type: 'commandExecution', id: 'c2', status: 'completed', exitCode: 2 },
+          },
         }),
         expected: [{ kind: 'tool_output', name: 'shell', toolCallId: 'c2', outcome: 'failed' }],
       },

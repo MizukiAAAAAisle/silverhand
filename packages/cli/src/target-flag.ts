@@ -52,17 +52,11 @@ export interface TargetDoor {
  * the refusal carries no `correct_target` rather than inventing a destination.
  * The flag is equally required either way; only the correction is conditional.
  */
-export function requireTargetFlag(
-  raw: string | undefined,
-  env: CliEnv,
-  door: TargetDoor,
-): string {
+export function requireTargetFlag(raw: string | undefined, env: CliEnv, door: TargetDoor): string {
   if (raw !== undefined && raw.length > 0) return raw;
   const flag = door.flag ?? 'target';
   const ownStream =
-    env.slot === 'conversation'
-      ? formatUntrustedConversationAddress(env.conversationId)
-      : null;
+    env.slot === 'conversation' ? formatUntrustedConversationAddress(env.conversationId) : null;
   throw new CliError({
     code: 'validation_error',
     subkind: 'target_required',

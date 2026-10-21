@@ -104,7 +104,7 @@ async function waitFor(cond: () => boolean, timeoutMs = 2_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (cond()) return;
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
   }
   throw new Error(`waitFor timed out after ${timeoutMs}ms`);
 }
@@ -112,57 +112,63 @@ async function waitFor(cond: () => boolean, timeoutMs = 2_000): Promise<void> {
 describe('#task:1614 — response-handoff proof point over a real socket', () => {
   it('peer reads the response frame then closes immediately → handoff settles PROVEN (true)', async () => {
     const handoffs: boolean[] = [];
-    await withServer(ok => handoffs.push(ok), async socketPath => {
-      const socket = createConnection(socketPath);
-      socket.setEncoding('utf8');
-      let buffer = '';
-      let sawResponse = false;
-      socket.on('data', chunk => {
-        buffer += chunk;
-        for (const line of buffer.split('\n')) {
-          if (!line) continue;
-          const parsed = JSON.parse(line) as Record<string, unknown>;
-          // First line is the connection's `ready` event; the response
-          // frame carries our request id.
-          if (parsed['id'] === 'req-1') {
-            sawResponse = true;
-            // The adversarial move: hard-close the moment the frame is
-            // in hand, before the server's write callback has any
-            // scheduling guarantee of having run.
-            socket.destroy();
-            return;
+    await withServer(
+      (ok) => handoffs.push(ok),
+      async (socketPath) => {
+        const socket = createConnection(socketPath);
+        socket.setEncoding('utf8');
+        let buffer = '';
+        let sawResponse = false;
+        socket.on('data', (chunk) => {
+          buffer += chunk;
+          for (const line of buffer.split('\n')) {
+            if (!line) continue;
+            const parsed = JSON.parse(line) as Record<string, unknown>;
+            // First line is the connection's `ready` event; the response
+            // frame carries our request id.
+            if (parsed['id'] === 'req-1') {
+              sawResponse = true;
+              // The adversarial move: hard-close the moment the frame is
+              // in hand, before the server's write callback has any
+              // scheduling guarantee of having run.
+              socket.destroy();
+              return;
+            }
           }
-        }
-        buffer = buffer.endsWith('\n') ? '' : buffer.split('\n').at(-1)!;
-      });
-      await new Promise<void>(resolve => socket.once('connect', resolve));
-      socket.write(REQUEST);
-      await waitFor(() => sawResponse && handoffs.length === 1);
-      expect(handoffs).toEqual([true]);
-    });
+          buffer = buffer.endsWith('\n') ? '' : buffer.split('\n').at(-1)!;
+        });
+        await new Promise<void>((resolve) => socket.once('connect', resolve));
+        socket.write(REQUEST);
+        await waitFor(() => sawResponse && handoffs.length === 1);
+        expect(handoffs).toEqual([true]);
+      },
+    );
   });
 
   it('peer destroys the connection BEFORE the response is written → handoff settles failed (false), never proven', async () => {
     const handoffs: boolean[] = [];
     let sawResponse = false;
-    await withServer(ok => handoffs.push(ok), async socketPath => {
-      const socket = createConnection(socketPath);
-      socket.setEncoding('utf8');
-      socket.on('data', chunk => {
-        if (String(chunk).includes('req-1')) sawResponse = true;
-        // Kill the connection as soon as ANY bytes (the ready event)
-        // arrive — the request below is written first, so the server
-        // dispatches against an already-dying socket.
-      });
-      await new Promise<void>(resolve => socket.once('connect', resolve));
-      // Write the request and destroy without waiting for the response:
-      // the server's response write lands on a destroyed socket and the
-      // write callback reports an error.
-      socket.write(REQUEST);
-      socket.destroy();
-      await waitFor(() => handoffs.length === 1);
-      expect(handoffs).toEqual([false]);
-      expect(sawResponse).toBe(false);
-    });
+    await withServer(
+      (ok) => handoffs.push(ok),
+      async (socketPath) => {
+        const socket = createConnection(socketPath);
+        socket.setEncoding('utf8');
+        socket.on('data', (chunk) => {
+          if (String(chunk).includes('req-1')) sawResponse = true;
+          // Kill the connection as soon as ANY bytes (the ready event)
+          // arrive — the request below is written first, so the server
+          // dispatches against an already-dying socket.
+        });
+        await new Promise<void>((resolve) => socket.once('connect', resolve));
+        // Write the request and destroy without waiting for the response:
+        // the server's response write lands on a destroyed socket and the
+        // write callback reports an error.
+        socket.write(REQUEST);
+        socket.destroy();
+        await waitFor(() => handoffs.length === 1);
+        expect(handoffs).toEqual([false]);
+        expect(sawResponse).toBe(false);
+      },
+    );
   });
 });

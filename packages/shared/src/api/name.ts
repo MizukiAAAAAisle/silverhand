@@ -136,49 +136,41 @@ export function normalizeWorkspaceName(name: string): string {
  * concern over the returned folded key (see the name-availability endpoint).
  * Agent-home workspaces never carry that key and do not enter the namespace.
  */
-export const WorkspaceNameSchema = z
-  .string()
-  .transform((raw, ctx) => {
-    const parsed = parseWorkspaceName(raw);
-    if (parsed.ok) return parsed.value;
-    if (parsed.issue.kind === 'empty') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.too_small,
-        minimum: 1,
-        type: 'string',
-        inclusive: true,
-        message: 'workspace name must not be empty',
-      });
-      return z.NEVER;
-    }
-    if (parsed.issue.kind === 'too_long') {
-      ctx.addIssue({
-        code: z.ZodIssueCode.too_big,
-        maximum: WORKSPACE_NAME_MAX_CODE_POINTS,
-        type: 'string',
-        inclusive: true,
-        message: `workspace name must be at most ${WORKSPACE_NAME_MAX_CODE_POINTS} characters`,
-      });
-      return z.NEVER;
-    }
+export const WorkspaceNameSchema = z.string().transform((raw, ctx) => {
+  const parsed = parseWorkspaceName(raw);
+  if (parsed.ok) return parsed.value;
+  if (parsed.issue.kind === 'empty') {
     ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'workspace name contains a character that is not addressable',
+      code: z.ZodIssueCode.too_small,
+      minimum: 1,
+      type: 'string',
+      inclusive: true,
+      message: 'workspace name must not be empty',
     });
     return z.NEVER;
+  }
+  if (parsed.issue.kind === 'too_long') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.too_big,
+      maximum: WORKSPACE_NAME_MAX_CODE_POINTS,
+      type: 'string',
+      inclusive: true,
+      message: `workspace name must be at most ${WORKSPACE_NAME_MAX_CODE_POINTS} characters`,
+    });
+    return z.NEVER;
+  }
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'workspace name contains a character that is not addressable',
   });
+  return z.NEVER;
+});
 
 /** Why a proposed name is / isn't usable. Invariant: a name is usable iff
  *  `reason === 'available'`. `taken` = uniqueness collision; `invalid` = fails
  *  the queried entity kind's authoritative name schema. */
-export const NameAvailabilityReasonSchema = z.enum([
-  'available',
-  'invalid',
-  'taken',
-]);
-export type NameAvailabilityReason = z.infer<
-  typeof NameAvailabilityReasonSchema
->;
+export const NameAvailabilityReasonSchema = z.enum(['available', 'invalid', 'taken']);
+export type NameAvailabilityReason = z.infer<typeof NameAvailabilityReasonSchema>;
 
 /** Response of `GET /api/{agents,workspaces}/name-availability?name=`.
  *  A create-form onBlur probe: the endpoint shares ONE uniqueness predicate
@@ -196,7 +188,7 @@ export const NameAvailabilityDtoSchema = z
     reason: NameAvailabilityReasonSchema,
   })
   .strict()
-  .refine(dto => dto.available === (dto.reason === 'available'), {
+  .refine((dto) => dto.available === (dto.reason === 'available'), {
     message: "available must be true iff reason === 'available'",
   });
 export type NameAvailabilityDto = z.infer<typeof NameAvailabilityDtoSchema>;

@@ -1,9 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import {
-  type Driver,
-  type DriverSpawnContext,
-  type ParsedEvent,
-} from './index.js';
+import { type Driver, type DriverSpawnContext, type ParsedEvent } from './index.js';
 import {
   classifyStreamJsonInitProgress,
   encodeStreamJsonUserMessage,

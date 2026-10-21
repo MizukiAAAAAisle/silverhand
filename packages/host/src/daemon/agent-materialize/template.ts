@@ -40,8 +40,7 @@ export const AGENT_HOME_TEMPLATE_VERSION = 1;
  *  surface it to humans browsing the dir. */
 export const AGENT_HOME_SENTINEL_FILENAME = '.materialized';
 
-const INITIAL_SYSTEM_PROMPT_MD =
-  '# Global role\n\n_To be shaped via DM._\n';
+const INITIAL_SYSTEM_PROMPT_MD = '# Global role\n\n_To be shaped via DM._\n';
 
 const ONBOARDING_GUIDE_MD = `---
 name: silverhand-onboarding-guide
@@ -236,9 +235,7 @@ const DEFAULT_TEMPLATE: AgentHomeTemplate = {
  * lets the wire schema stay forward-compatible without the
  * daemon silently substituting `'default'` for them.
  */
-export function getAgentHomeTemplate(
-  choice: string,
-): AgentHomeTemplate | null {
+export function getAgentHomeTemplate(choice: string): AgentHomeTemplate | null {
   switch (choice) {
     case 'default':
       return DEFAULT_TEMPLATE;
@@ -270,6 +267,6 @@ export function getAgentL2Template(choice: string): AgentHomeTemplate | null {
   if (l1 == null) return null;
   return {
     ...l1,
-    files: l1.files.filter(f => f.relPath !== 'system_prompt.md'),
+    files: l1.files.filter((f) => f.relPath !== 'system_prompt.md'),
   };
 }

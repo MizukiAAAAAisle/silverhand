@@ -43,9 +43,7 @@ export const MessageReactionDetailDtoSchema = z.object({
   emoji: z.string(),
   reactors: z.array(ReactionReactorDtoSchema),
 });
-export type MessageReactionDetailDto = z.infer<
-  typeof MessageReactionDetailDtoSchema
->;
+export type MessageReactionDetailDto = z.infer<typeof MessageReactionDetailDtoSchema>;
 
 /** Human route body (POST/DELETE /api/messages/:id/reactions). The message
  *  id is in the path. */
@@ -82,9 +80,7 @@ export const AgentReactMessageInputSchema = z.object({
   message_id: z.string().min(1),
   emoji: z.string(),
 });
-export type AgentReactMessageInput = z.infer<
-  typeof AgentReactMessageInputSchema
->;
+export type AgentReactMessageInput = z.infer<typeof AgentReactMessageInputSchema>;
 
 /** WS `message_reaction_changed` payload (scope `conversation:<cid>`).
  *  `count` is the authoritative post-change server aggregate for this
@@ -103,9 +99,7 @@ export const MessageReactionChangedEventSchema = z.object({
   reactor_id: z.string(),
   count: z.number().int().nonnegative(),
 });
-export type MessageReactionChangedEvent = z.infer<
-  typeof MessageReactionChangedEventSchema
->;
+export type MessageReactionChangedEvent = z.infer<typeof MessageReactionChangedEventSchema>;
 
 /** WS event kind constant — the open `EventFrame.kind` string this feature
  *  publishes (ws-frames keeps `kind` an open string; we don't tighten it
@@ -136,9 +130,7 @@ export type ValidateReactionEmojiResult =
 /** Validate + normalize a reaction emoji. Returns the trimmed emoji on
  *  success. Authoritative server-side check; the CLI pre-checks with the
  *  same function for a fast local error. */
-export function validateReactionEmoji(
-  raw: string,
-): ValidateReactionEmojiResult {
+export function validateReactionEmoji(raw: string): ValidateReactionEmojiResult {
   const emoji = raw.trim();
   if (emoji.length === 0) {
     return { ok: false, code: INVALID_REACTION_CODE, reason: 'emoji is empty' };

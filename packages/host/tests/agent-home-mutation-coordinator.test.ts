@@ -38,15 +38,18 @@ describe('AgentHomeMutationCoordinator', () => {
     let release!: () => void;
     const admitted = coordinator.runBounded(
       'a1',
-      () => new Promise<void>(resolve => { release = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
     );
     const rm = vi.fn(async () => success());
 
     const purge = coordinator.runPurge('a1', rm);
     expect(coordinator.isFenced('a1')).toBe(true);
-    await expect(
-      coordinator.runBounded('a1', async () => undefined),
-    ).rejects.toBeInstanceOf(AgentDeletingError);
+    await expect(coordinator.runBounded('a1', async () => undefined)).rejects.toBeInstanceOf(
+      AgentDeletingError,
+    );
     expect(rm).not.toHaveBeenCalled();
 
     release();
@@ -59,12 +62,16 @@ describe('AgentHomeMutationCoordinator', () => {
     const coordinator = new AgentHomeMutationCoordinator();
     let releaseFirst!: () => void;
     const firstFn = vi.fn(
-      () => new Promise<ReturnType<typeof success>>(resolve => {
-        releaseFirst = () => resolve(success(2));
-      }),
+      () =>
+        new Promise<ReturnType<typeof success>>((resolve) => {
+          releaseFirst = () => resolve(success(2));
+        }),
     );
     const first = coordinator.runPurge('a1', firstFn);
-    const joined = coordinator.runPurge('a1', vi.fn(async () => success(99)));
+    const joined = coordinator.runPurge(
+      'a1',
+      vi.fn(async () => success(99)),
+    );
     expect(joined).toBe(first);
     await Promise.resolve();
     releaseFirst();
@@ -74,15 +81,15 @@ describe('AgentHomeMutationCoordinator', () => {
 
     const retryable = new AgentHomeMutationCoordinator();
     await expect(
-      retryable.runPurge('a2', async () => { throw new Error('partial'); }),
+      retryable.runPurge('a2', async () => {
+        throw new Error('partial');
+      }),
     ).rejects.toThrow('partial');
     expect(retryable.isFenced('a2')).toBe(true);
-    await expect(
-      retryable.runBounded('a2', async () => undefined),
-    ).rejects.toBeInstanceOf(AgentDeletingError);
-    await expect(
-      retryable.runPurge('a2', async () => success(1)),
-    ).resolves.toEqual(success(1));
+    await expect(retryable.runBounded('a2', async () => undefined)).rejects.toBeInstanceOf(
+      AgentDeletingError,
+    );
+    await expect(retryable.runPurge('a2', async () => success(1))).resolves.toEqual(success(1));
   });
 });
 

@@ -26,20 +26,12 @@ describe('resolveDeliveryOwner — fail-loud owner chokepoint', () => {
   });
 
   it('throws (never returns a sentinel) when the owner is missing', () => {
-    expect(() => resolveDeliveryOwner(undefined, 'control')).toThrow(
-      /no minted delivery owner/i,
-    );
-    expect(() => resolveDeliveryOwner(undefined, 'local_outbound')).toThrow(
-      /local_outbound/,
-    );
-    expect(() => resolveDeliveryOwner(undefined, 'outbound_ws')).toThrow(
-      /outbound_ws/,
-    );
+    expect(() => resolveDeliveryOwner(undefined, 'control')).toThrow(/no minted delivery owner/i);
+    expect(() => resolveDeliveryOwner(undefined, 'local_outbound')).toThrow(/local_outbound/);
+    expect(() => resolveDeliveryOwner(undefined, 'outbound_ws')).toThrow(/outbound_ws/);
   });
 
   it('treats an empty-string owner as missing (no zero-length sentinel)', () => {
-    expect(() => resolveDeliveryOwner('', 'control')).toThrow(
-      /no minted delivery owner/i,
-    );
+    expect(() => resolveDeliveryOwner('', 'control')).toThrow(/no minted delivery owner/i);
   });
 });

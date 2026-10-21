@@ -38,7 +38,7 @@ function fakeSearchClient(): {
   return {
     capture: () => last,
     client: {
-      searchMessages: async input => {
+      searchMessages: async (input) => {
         last = input;
         return { hits: [] };
       },
@@ -248,34 +248,43 @@ describe('message search selector-only range (#task:1945)', () => {
   it.each([
     ['workspace-id', '--workspace-id'],
     ['conversation-id', '--conversation-id'],
-  ])('refuses a blank %s value rather than searching the current conversation', async (flag, label) => {
-    // `--conversation-id "$CID"` with an unset CID is the real-world shape.
-    // Dropping the empty value would narrow a deliberately-named range down
-    // to the calling conversation and return a plausible wrong answer.
-    let caught: unknown;
-    try {
-      await search.run({
-        env,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        client: {
-          searchMessages: async () => {
-            throw new Error('must not reach the network');
-          },
-        } as any,
-        args: parsedArgs({ q: 'foo', [flag]: '' }),
-      });
-    } catch (e) {
-      caught = e;
-    }
-    const err = caught as CliError;
-    expect(err.code).toBe('validation_error');
-    expect(err.subkind).toBe('empty_selector');
-    expect(err.details).toEqual({ selector: label });
-  });
+  ])(
+    'refuses a blank %s value rather than searching the current conversation',
+    async (flag, label) => {
+      // `--conversation-id "$CID"` with an unset CID is the real-world shape.
+      // Dropping the empty value would narrow a deliberately-named range down
+      // to the calling conversation and return a plausible wrong answer.
+      let caught: unknown;
+      try {
+        await search.run({
+          env,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          client: {
+            searchMessages: async () => {
+              throw new Error('must not reach the network');
+            },
+          } as any,
+          args: parsedArgs({ q: 'foo', [flag]: '' }),
+        });
+      } catch (e) {
+        caught = e;
+      }
+      const err = caught as CliError;
+      expect(err.code).toBe('validation_error');
+      expect(err.subkind).toBe('empty_selector');
+      expect(err.details).toEqual({ selector: label });
+    },
+  );
 
   it.each([
-    [{ 'current-workspace': true, 'workspace-id': 'ws1' }, ['--current-workspace', '--workspace-id']],
-    [{ 'current-workspace': true, 'conversation-id': 'c9' }, ['--current-workspace', '--conversation-id']],
+    [
+      { 'current-workspace': true, 'workspace-id': 'ws1' },
+      ['--current-workspace', '--workspace-id'],
+    ],
+    [
+      { 'current-workspace': true, 'conversation-id': 'c9' },
+      ['--current-workspace', '--conversation-id'],
+    ],
     [{ 'workspace-id': 'ws1', 'conversation-id': 'c9' }, ['--workspace-id', '--conversation-id']],
   ])('rejects two selectors as mutually_exclusive', async (flags, expectedSelectors) => {
     let caught: unknown;

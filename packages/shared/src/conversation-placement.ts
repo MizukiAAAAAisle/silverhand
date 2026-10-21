@@ -24,10 +24,7 @@
 // Deliberately NOT a coercion (`?? someWorkspaceId`) and NOT a filter: a
 // silently-substituted or silently-dropped row is the exact failure mode this
 // feature exists to remove (§1 "INNER JOIN 整行消失").
-import type {
-  ConversationEndpointKind,
-  ConversationPlacementKind,
-} from './db/schema.js';
+import type { ConversationEndpointKind, ConversationPlacementKind } from './db/schema.js';
 
 /** The minimum shape both DB rows and wire DTOs satisfy. Structural on purpose
  *  so the one rule serves both without a conversion step. */
@@ -59,10 +56,7 @@ export function requireWorkspacePlacement(
   },
 ): string {
   if (conversation.workspace_id === null) {
-    throw new ConversationPlacementError(
-      conversation.id,
-      conversation.placement_kind,
-    );
+    throw new ConversationPlacementError(conversation.id, conversation.placement_kind);
   }
   return conversation.workspace_id;
 }
@@ -153,9 +147,7 @@ export interface ConversationEndpointIdentity {
  * it from its ACL read port and the write transaction answers it from the
  * transaction's own scope.
  */
-export type EndpointPrincipalExists = (
-  endpoint: ConversationEndpointIdentity,
-) => boolean;
+export type EndpointPrincipalExists = (endpoint: ConversationEndpointIdentity) => boolean;
 
 /**
  * Is this conversation READ-ONLY because a `direct_pair` endpoint's principal is
@@ -191,9 +183,9 @@ export function directPairIsReadOnlyForSurvivor(
   const endpoints = directPairEndpointsOf(conversation);
   if (endpoints === null) return false;
   return endpoints.some(
-    endpoint =>
-      endpoint.deletedAt !== null
-      || !endpointPrincipalExists({ kind: endpoint.kind, id: endpoint.id }),
+    (endpoint) =>
+      endpoint.deletedAt !== null ||
+      !endpointPrincipalExists({ kind: endpoint.kind, id: endpoint.id }),
   );
 }
 
@@ -376,7 +368,7 @@ export function resolveParticipation(
 ): boolean | null {
   const endpoints = directPairEndpointsOf(conversation);
   if (endpoints !== null) {
-    return endpoints.some(endpoint =>
+    return endpoints.some((endpoint) =>
       endpoint.kind === 'agent'
         ? actor.kind === 'agent' &&
           actor.agentId === endpoint.id &&

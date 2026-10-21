@@ -85,8 +85,7 @@ export function unixSocketFrameWriter(socket: Socket): OutboundFrameWriter {
 export function eventMetadata(event: EventFrame): OutboundEventMetadata {
   return {
     kind: event.event,
-    conversation_id:
-      'conversation_id' in event ? event.conversation_id : undefined,
+    conversation_id: 'conversation_id' in event ? event.conversation_id : undefined,
     agent_id: 'agent_id' in event ? event.agent_id : undefined,
     ts: 'ts' in event && typeof event.ts === 'number' ? event.ts : undefined,
   };
@@ -151,7 +150,7 @@ export class OutboundWriteBuffer {
     this.pendingFrames++;
     this.pendingBytes += encodedBytes;
     try {
-      input.writer.send(encoded, err => {
+      input.writer.send(encoded, (err) => {
         this.pendingFrames = Math.max(0, this.pendingFrames - 1);
         this.pendingBytes = Math.max(0, this.pendingBytes - encodedBytes);
         if (err) {

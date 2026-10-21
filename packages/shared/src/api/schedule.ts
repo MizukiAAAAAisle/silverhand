@@ -37,13 +37,7 @@ export const SCHEDULE_MAX_ACTIVE_PER_AGENT = 50;
 export const SCHEDULE_TITLE_MAX_LEN = 120;
 export const SCHEDULE_MESSAGE_MAX_LEN = 500;
 
-export const ScheduleStatusSchema = z.enum([
-  'pending',
-  'firing',
-  'done',
-  'cancelled',
-  'failed',
-]);
+export const ScheduleStatusSchema = z.enum(['pending', 'firing', 'done', 'cancelled', 'failed']);
 export type ScheduleStatus = z.infer<typeof ScheduleStatusSchema>;
 
 export const ScheduleSpecOnceSchema = z.object({
@@ -141,9 +135,7 @@ export const ScheduleCreateOnceInputSchema = z.object({
   fire_at: PositiveJsSafeIntegerSchema.optional(),
   delay_seconds: PositiveJsSafeIntegerSchema.optional(),
 });
-export type ScheduleCreateOnceInput = z.infer<
-  typeof ScheduleCreateOnceInputSchema
->;
+export type ScheduleCreateOnceInput = z.infer<typeof ScheduleCreateOnceInputSchema>;
 
 /** WHAT to schedule, with no WHERE in it — title, message, time policy, caps.
  *  Everything about a schedule except its destination.
@@ -265,9 +257,7 @@ export const ScheduleListStatusFilterSchema = z.enum([
   'failed',
   'all',
 ]);
-export type ScheduleListStatusFilter = z.infer<
-  typeof ScheduleListStatusFilterSchema
->;
+export type ScheduleListStatusFilter = z.infer<typeof ScheduleListStatusFilterSchema>;
 
 export const ScheduleListInputSchema = z.object({
   status: ScheduleListStatusFilterSchema.optional(),

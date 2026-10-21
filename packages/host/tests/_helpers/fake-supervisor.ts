@@ -173,9 +173,7 @@ export class FakeSupervisor {
     };
   }
 
-  agentStaleResolve(
-    _params: AgentStaleResolveParams,
-  ): AgentStaleResolveResult {
+  agentStaleResolve(_params: AgentStaleResolveParams): AgentStaleResolveResult {
     return {
       ok: false,
       status: 500,
@@ -340,10 +338,7 @@ export class FakeSupervisor {
   status(params: RuntimeStatusParams): RuntimeStatusResult {
     const out: RuntimeStateDto[] = [];
     for (const rt of this.runtimes.values()) {
-      if (
-        params.conversation_id &&
-        params.conversation_id !== rt.conversation_id
-      ) {
+      if (params.conversation_id && params.conversation_id !== rt.conversation_id) {
         continue;
       }
       if (params.agent_id && params.agent_id !== rt.agent_id) continue;
@@ -363,7 +358,9 @@ export class FakeSupervisor {
 
   // ── runtime_clear_session ──────────────────────────────────────
 
-  clearSession(params: RuntimeClearSessionParams | LegacyRuntimeCommand): RuntimeClearSessionResult {
+  clearSession(
+    params: RuntimeClearSessionParams | LegacyRuntimeCommand,
+  ): RuntimeClearSessionResult {
     const k = scopeKey(commandScope(params));
     const rt = this.runtimes.get(k);
     if (!rt || rt.phase === 'exited') return { cleared: false };
@@ -405,9 +402,7 @@ export class FakeSupervisor {
 
   // ── runtime_close_activity_log ─────────────────────────────────
 
-  closeActivityLog(
-    _params: RuntimeCloseActivityLogParams,
-  ): RuntimeCloseActivityLogResult {
+  closeActivityLog(_params: RuntimeCloseActivityLogParams): RuntimeCloseActivityLogResult {
     // Fake supervisor doesn't write any activity log file (per
     // §3.4 + §4.3, the activity-log JSONL writer stays in backend).
     // The intent exists to flush daemon-side outbound buffers, which
@@ -474,10 +469,7 @@ export class FakeSupervisor {
    * and move the runtime to `exited` (the real driver would tear down on
    * init failure).
    */
-  private scheduleDeliverySettle(
-    rt: FakeRuntime,
-    deliveryIds: number[],
-  ): void {
+  private scheduleDeliverySettle(rt: FakeRuntime, deliveryIds: number[]): void {
     this.schedule(() => {
       if (rt.phase !== 'startup_pending') return;
       if (this.failStartupDelivery) {
@@ -547,11 +539,7 @@ export class FakeSupervisor {
     });
   }
 
-  private scheduleExit(
-    rt: FakeRuntime,
-    code: number,
-    intentional: boolean,
-  ): void {
+  private scheduleExit(rt: FakeRuntime, code: number, intentional: boolean): void {
     this.schedule(() => {
       if (rt.phase === 'exited') return;
       rt.phase = 'exited';
@@ -596,9 +584,7 @@ export class FakeSupervisor {
       | 'conversation_closed',
   ): void {
     const status: 'starting' | 'idle' | 'failed' =
-      rt.phase === 'spawning' || rt.phase === 'startup_pending'
-        ? 'starting'
-        : 'idle';
+      rt.phase === 'spawning' || rt.phase === 'startup_pending' ? 'starting' : 'idle';
     const ts = this.now();
     this.emit({
       event: 'runtime_state',

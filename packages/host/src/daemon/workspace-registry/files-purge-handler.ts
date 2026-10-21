@@ -1,8 +1,5 @@
 import { promises as fs } from 'node:fs';
-import type {
-  AgentFilesPurgeErrorCode,
-  AgentFilesPurgeParams,
-} from '../../protocol.js';
+import type { AgentFilesPurgeErrorCode, AgentFilesPurgeParams } from '../../protocol.js';
 import { DaemonTypedError } from '../typed-error.js';
 import { resolveAgentDir } from '../agent-materialize/handler.js';
 

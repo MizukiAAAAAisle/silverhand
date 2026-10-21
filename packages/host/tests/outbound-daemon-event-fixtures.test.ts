@@ -2,11 +2,7 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
-import {
-  AgentRunStateSchema,
-  DAEMON_ADMISSION,
-  ParsedEventSchema,
-} from '@silverhand/shared';
+import { AgentRunStateSchema, DAEMON_ADMISSION, ParsedEventSchema } from '@silverhand/shared';
 
 import {
   OUTBOUND_DAEMON_EVENT_KINDS,
@@ -38,7 +34,7 @@ const fixture = JSON.parse(
 
 describe('outbound daemon event TS-first fixture', () => {
   it('gives every published arm one exact valid frame', () => {
-    const validKinds = fixture.valid.map(frame => frame.kind).sort();
+    const validKinds = fixture.valid.map((frame) => frame.kind).sort();
 
     expect(validKinds).toEqual([...OUTBOUND_DAEMON_EVENT_KINDS].sort());
     expect([...OUTBOUND_DAEMON_EVENT_SCHEMA_KINDS].sort()).toEqual(
@@ -53,7 +49,7 @@ describe('outbound daemon event TS-first fixture', () => {
   });
 
   it('uses one run-state contract for event ingress, hydrate, and live egress', () => {
-    const envelope = fixture.valid.find(frame => frame.kind === 'runtime_state');
+    const envelope = fixture.valid.find((frame) => frame.kind === 'runtime_state');
     expect(envelope).toBeDefined();
     for (const testCase of fixture.runState.valid) {
       const agentId = String(testCase.state.agentId);
@@ -97,10 +93,9 @@ describe('outbound daemon event TS-first fixture', () => {
     for (const testCase of fixture.runState.invalid) {
       const agentId = String(testCase.state.agentId);
       const conversationId = String(testCase.state.conversationId);
-      expect(
-        AgentRunStateSchema.safeParse(testCase.state).success,
-        `${testCase.name}: live`,
-      ).toBe(false);
+      expect(AgentRunStateSchema.safeParse(testCase.state).success, `${testCase.name}: live`).toBe(
+        false,
+      );
       expect(
         OutboundDaemonToServerEventFrameSchema.safeParse({
           ...envelope,
@@ -136,13 +131,13 @@ describe('outbound daemon event TS-first fixture', () => {
   });
 
   it('pins exact keys, nested enums, nullability, and numeric boundaries', () => {
-    expect(new Set(fixture.parsedValid.map(event => event.kind))).toEqual(
+    expect(new Set(fixture.parsedValid.map((event) => event.kind))).toEqual(
       new Set(DAEMON_ADMISSION.parsedEventKinds),
     );
-    expect(
-      new Set(ParsedEventSchema.options.map(option => option.shape.kind.value)),
-    ).toEqual(new Set(DAEMON_ADMISSION.parsedEventKinds));
-    const envelope = fixture.valid.find(frame => frame.kind === 'runtime_parsed_event');
+    expect(new Set(ParsedEventSchema.options.map((option) => option.shape.kind.value))).toEqual(
+      new Set(DAEMON_ADMISSION.parsedEventKinds),
+    );
+    const envelope = fixture.valid.find((frame) => frame.kind === 'runtime_parsed_event');
     expect(envelope).toBeDefined();
     for (const parsed of fixture.parsedValid) {
       expect(

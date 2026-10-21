@@ -1,10 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
-import {
-  MCP_CONFIG_FILENAME,
-  parseMcpConfig,
-} from '@silverhand/shared';
+import { MCP_CONFIG_FILENAME, parseMcpConfig } from '@silverhand/shared';
 import {
   type AgentProfileMcpReadParams,
   type AgentProfileMcpReadResult,
@@ -76,10 +73,7 @@ export async function writeAgentProfileMcp(
   // Persist the raw text verbatim (the user's own formatting), not a
   // re-serialized copy — the file is the truth the pane shows back.
   const bytes = Buffer.byteLength(params.raw, 'utf-8');
-  const tmpPath = join(
-    agentDir,
-    `.${MCP_CONFIG_FILENAME}.${process.pid}.${randomUUID()}.tmp`,
-  );
+  const tmpPath = join(agentDir, `.${MCP_CONFIG_FILENAME}.${process.pid}.${randomUUID()}.tmp`);
   try {
     await fs.mkdir(dirname(filePath), { recursive: true });
     await fs.writeFile(tmpPath, params.raw, { mode: 0o600 });

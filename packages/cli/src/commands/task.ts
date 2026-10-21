@@ -135,7 +135,13 @@ async function resolveBodySwitch(
   return parsed.data;
 }
 
-const VALID_STATUSES: readonly TaskStatus[] = ['todo', 'in_progress', 'in_review', 'done', 'closed'];
+const VALID_STATUSES: readonly TaskStatus[] = [
+  'todo',
+  'in_progress',
+  'in_review',
+  'done',
+  'closed',
+];
 const VALID_UPDATE_STATUSES: readonly TaskStatus[] = [
   'todo',
   'in_progress',
@@ -170,10 +176,7 @@ const STATUS_FILTER_MACROS: Readonly<Record<string, readonly TaskStatus[]>> = {
 const NO_FILTER_MACRO = 'all';
 /** Every token `task status --status` must reject as a list-only macro
  *  (the `STATUS_FILTER_MACROS` keys plus the no-filter sentinel). */
-const LIST_ONLY_STATUS_MACROS = new Set([
-  ...Object.keys(STATUS_FILTER_MACROS),
-  NO_FILTER_MACRO,
-]);
+const LIST_ONLY_STATUS_MACROS = new Set([...Object.keys(STATUS_FILTER_MACROS), NO_FILTER_MACRO]);
 
 /** Expand `--status` values into a list of canonical statuses to filter
  *  by, OR `null` if the agent asked for `all` (no filter). Throws
@@ -192,7 +195,10 @@ const LIST_ONLY_STATUS_MACROS = new Set([
 function expandFilterStatuses(raw: readonly string[]): TaskStatus[] | null {
   const out = new Set<TaskStatus>();
   for (const value of raw) {
-    for (const part of value.split(',').map(s => s.trim()).filter(s => s.length > 0)) {
+    for (const part of value
+      .split(',')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0)) {
       if (part === NO_FILTER_MACRO) return null;
       const macro = STATUS_FILTER_MACROS[part];
       if (macro) {
@@ -283,13 +289,13 @@ function parseTaskNumberOperands(
       message:
         `silverhand task ${verb} operates on ONE task: \`${usage}\`. ` +
         `Got ${tokens.length} positional tokens ` +
-        `(${tokens.map(t => JSON.stringify(t)).join(', ')}). ` +
+        `(${tokens.map((t) => JSON.stringify(t)).join(', ')}). ` +
         'Call it once per task.',
       retriable: false,
       details: { command: `task ${verb}`, positional: tokens.slice() },
     });
   }
-  return tokens.map(token => {
+  return tokens.map((token) => {
     // Number() would accept '', ' 12 ', '0x2a', '1e3' — none of which an
     // agent can have read off a task row. Match the digits exactly, then
     // require the parse to survive as an exact integer: a 20-digit string
@@ -453,21 +459,12 @@ Flags:
                        filters to peek the board.
 
 stdout: { "tasks": [TaskSummaryDto, ...] }`,
-  flags: [
-    'task-number',
-    'status',
-    'assignee',
-    'workspace-id',
-    'conversation-id',
-    'limit',
-  ] as const,
+  flags: ['task-number', 'status', 'assignee', 'workspace-id', 'conversation-id', 'limit'] as const,
   booleanFlags: ['mine'] as const,
   async run({ client, env, args }) {
     const taskNumbers = flagNumberArray(args, 'task-number');
     const statusValues = flagStringArray(args, 'status');
-    const expandedStatuses = statusValues
-      ? expandFilterStatuses(statusValues)
-      : undefined;
+    const expandedStatuses = statusValues ? expandFilterStatuses(statusValues) : undefined;
     const explicitAssignee = flagString(args, 'assignee');
     const mine = flagBool(args, 'mine');
     if (mine && explicitAssignee) {
@@ -488,9 +485,7 @@ stdout: { "tasks": [TaskSummaryDto, ...] }`,
     }
     return client.listTasks({
       ...(taskNumbers ? { task_number: taskNumbers } : {}),
-      ...(expandedStatuses && expandedStatuses.length > 0
-        ? { status: expandedStatuses }
-        : {}),
+      ...(expandedStatuses && expandedStatuses.length > 0 ? { status: expandedStatuses } : {}),
       ...(assigneeId ? { assignee_id: assigneeId } : {}),
       ...(flagString(args, 'workspace-id')
         ? { workspace_id: flagString(args, 'workspace-id') }
@@ -606,7 +601,7 @@ stdout (success only): CreateTasksResult JSON.`,
       replacement: 'title+body',
       hint:
         'silverhand task create takes --title (required); the body is read from ' +
-        "stdin via the value-less --body switch: `silverhand task create --title \"...\" --body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`.",
+        'stdin via the value-less --body switch: `silverhand task create --title "..." --body <<\'SILVERHAND_EOF\' ... SILVERHAND_EOF`.',
     },
     // Both retired flags named half a coordinate each: `--conversation-id` the
     // conversation with no way to say the thread, `--reply-to` a message with no
@@ -649,7 +644,7 @@ stdout (success only): CreateTasksResult JSON.`,
         subkind: 'missing_required_flag',
         message:
           'silverhand task create requires --title. ' +
-          'Minimal call: `silverhand task create --target \'#conv:<conversation_id>\' ' +
+          "Minimal call: `silverhand task create --target '#conv:<conversation_id>' " +
           '--title "..."`. ' +
           'Add a Markdown body by piping stdin through the value-less --body ' +
           "switch: `--body <<'SILVERHAND_EOF' ... SILVERHAND_EOF`. " +
@@ -768,9 +763,10 @@ function createFailureToCliError(result: { error: string; existing_task?: unknow
  *  both is rejected pre-flight with a clear message so the agent does
  *  not have to round-trip to the backend to learn the same. Omitting
  *  both means "use the current workspace" (the legacy default). */
-function resolveWorkspaceSelector(
-  args: ParsedArgs,
-): { workspace_id?: string; workspace_name?: string } {
+function resolveWorkspaceSelector(args: ParsedArgs): {
+  workspace_id?: string;
+  workspace_name?: string;
+} {
   const workspaceId = flagString(args, 'workspace-id');
   const workspaceName = flagString(args, 'workspace');
   if (workspaceId && workspaceName) {
@@ -836,12 +832,12 @@ stdout: ClaimTasksResult JSON.`,
       // A value-less `--id` in a repeat run parses to boolean `true` inside
       // the array (a lone one throws in flagStringArray); empty strings are
       // equally impossible as real ids. Both are the missing-value mistake.
-      if (ids.some(id => typeof id !== 'string' || id === '')) {
+      if (ids.some((id) => typeof id !== 'string' || id === '')) {
         throw new CliError({
           code: 'validation_error',
           subkind: 'missing_flag_value',
           message:
-            '--id requires the task\'s global id value — e.g. ' +
+            "--id requires the task's global id value — e.g. " +
             '`silverhand task claim --id vls9VUa02jTqVVXV`. Task ids come from ' +
             'the `id` field on `task list` rows.',
           retriable: false,
@@ -988,8 +984,7 @@ stdout: TaskMutationResult JSON.`,
       throw new CliError({
         code: 'validation_error',
         subkind: 'enum_invalid',
-        message:
-          `--status must be one of ${VALID_UPDATE_STATUSES.join('|')}; got "${status}"`,
+        message: `--status must be one of ${VALID_UPDATE_STATUSES.join('|')}; got "${status}"`,
         retriable: false,
         details: {
           flag: 'status',
@@ -1041,13 +1036,7 @@ status or assignee. The result carries the full updated task detail.
 Workspace selector — see \`silverhand task claim --help\`.
 
 stdout: TaskEditResult JSON.`,
-  flags: [
-    'title',
-    'body',
-    'workspace-id',
-    'workspace',
-    'id',
-  ] as const,
+  flags: ['title', 'body', 'workspace-id', 'workspace', 'id'] as const,
   booleanFlags: ['clear-body'] as const,
   removedFlags: { 'task-number': TASK_NUMBER_FLAG_REMOVED },
   allowPositional: true,

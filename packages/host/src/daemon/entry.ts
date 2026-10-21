@@ -165,10 +165,7 @@ function parseArgv(argv: readonly string[]): ParsedArgv | { error: string } {
   if (proxyConfigPath !== null && !proxyConfigPath.startsWith('/')) {
     return { error: '--proxy-config-path must be absolute' };
   }
-  if (
-    controlPlaneServerUrlPath !== null &&
-    !controlPlaneServerUrlPath.startsWith('/')
-  ) {
+  if (controlPlaneServerUrlPath !== null && !controlPlaneServerUrlPath.startsWith('/')) {
     return { error: '--control-plane-server-url-path must be absolute' };
   }
   return {
@@ -215,8 +212,7 @@ async function main(): Promise<void> {
       silverhandStateRootDir: parsed.silverhandStateRootDir ?? undefined,
       daemonIdentityPath: parsed.daemonIdentityPath ?? undefined,
       proxyConfigPath: parsed.proxyConfigPath ?? undefined,
-      controlPlaneServerUrlPath:
-        parsed.controlPlaneServerUrlPath ?? undefined,
+      controlPlaneServerUrlPath: parsed.controlPlaneServerUrlPath ?? undefined,
       installSignals: true,
       writeStdoutHandshake: true,
       alsoStderr: parsed.alsoStderr,
@@ -228,7 +224,7 @@ async function main(): Promise<void> {
       // exact daemon-mode boot bug Cindy diagnosed in `MlwnvOfs-L5Nv_x2`.
       // The test helper supervisor validates protocol wiring without a
       // real CLI child; production wires Supervisor.
-      supervisorFactory: deps => new Supervisor(deps),
+      supervisorFactory: (deps) => new Supervisor(deps),
     });
   } catch (err) {
     const e = err as NodeJS.ErrnoException;

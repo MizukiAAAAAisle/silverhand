@@ -46,10 +46,7 @@ function capturing(method: string): {
   };
 }
 
-async function expectCliError(
-  run: Promise<unknown>,
-  subkind: string,
-): Promise<void> {
+async function expectCliError(run: Promise<unknown>, subkind: string): Promise<void> {
   try {
     await run;
   } catch (err) {

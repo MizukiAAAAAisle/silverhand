@@ -26,11 +26,7 @@
 // reverse direction would turn every Node/Electron bump into a red test about
 // data that did not change.
 import { describe, expect, it } from 'vitest';
-import {
-  UNICODE_CASE_FOLD_VERSION,
-  foldCase,
-  foldCodePoint,
-} from '../src/index.js';
+import { UNICODE_CASE_FOLD_VERSION, foldCase, foldCodePoint } from '../src/index.js';
 import fixture from './fixtures/unicode-case-fold.json' with { type: 'json' };
 
 const MAX_CODE_POINT = 0x110000;
@@ -45,7 +41,7 @@ const EXPECTED = new Map<number, string>(
     Number.parseInt(source, 16),
     target
       .split(' ')
-      .map(hex => String.fromCodePoint(Number.parseInt(hex, 16)))
+      .map((hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
       .join(''),
   ]),
 );
@@ -58,7 +54,7 @@ function hex(codePoint: number): string {
  *  names, so a case involving a combining mark is readable in terminal output. */
 function describeString(value: string): string {
   return Array.from(value)
-    .map(character => hex(character.codePointAt(0)!))
+    .map((character) => hex(character.codePointAt(0)!))
     .join(' ');
 }
 
@@ -90,9 +86,7 @@ describe('pinned Unicode case-fold table (#task:2016)', () => {
     // contains the class that motivates full folding at all. `toLowerCase` leaves
     // every one of these unchanged, so a `toLowerCase`-derived table would pass
     // the test above with these rows simply absent.
-    const expansions = [...EXPECTED].filter(
-      ([, target]) => Array.from(target).length > 1,
-    );
+    const expansions = [...EXPECTED].filter(([, target]) => Array.from(target).length > 1);
     expect(expansions.length).toBeGreaterThan(100);
     expect(EXPECTED.get(0x00df)).toBe('ss'); // LATIN SMALL LETTER SHARP S
     expect(EXPECTED.get(0x1e9e)).toBe('ss'); // LATIN CAPITAL LETTER SHARP S
@@ -105,10 +99,7 @@ describe('pinned Unicode case-fold table (#task:2016)', () => {
       // Regex `iu` canonicalization IS `scf`; our 1:1 half is CaseFolding status
       // `C` (common to simple and full), so the engine must agree. `\u{...}` in
       // the pattern keeps this free of metacharacter escaping.
-      const oracle = new RegExp(
-        `^\\u{${target.codePointAt(0)!.toString(16)}}$`,
-        'iu',
-      );
+      const oracle = new RegExp(`^\\u{${target.codePointAt(0)!.toString(16)}}$`, 'iu');
       if (!oracle.test(String.fromCodePoint(source))) {
         disagreements.push(`${hex(source)} -> ${describeString(target)}`);
         if (disagreements.length > SAMPLE_LIMIT) break;
@@ -155,11 +146,7 @@ describe('foldCase (#task:2016)', () => {
    */
   const CASES: readonly (readonly [string, string, string])[] = [
     ['\u00DF', 'ss', 'SHARP S expands — no lowercase mapping does that'],
-    [
-      '\u1E9E',
-      'ss',
-      'CAPITAL SHARP S reaches the same key as its small form',
-    ],
+    ['\u1E9E', 'ss', 'CAPITAL SHARP S reaches the same key as its small form'],
     [
       '\u1E9B',
       '\u1E61',
@@ -172,18 +159,10 @@ describe('foldCase (#task:2016)', () => {
       'i\u0307',
       'LATIN CAPITAL LETTER I WITH DOT ABOVE keeps its dot as a COMBINING mark',
     ],
-    [
-      '\u0131',
-      '\u0131',
-      'LATIN SMALL LETTER DOTLESS I is NOT folded to i — that is a Turkic rule',
-    ],
+    ['\u0131', '\u0131', 'LATIN SMALL LETTER DOTLESS I is NOT folded to i — that is a Turkic rule'],
     ['\u212A', 'k', 'KELVIN SIGN folds to plain k'],
     ['\u017F', 's', 'LATIN SMALL LETTER LONG S folds to plain s'],
-    [
-      '\u{10400}',
-      '\u{10428}',
-      'astral plane: DESERET CAPITAL LETTER LONG I',
-    ],
+    ['\u{10400}', '\u{10428}', 'astral plane: DESERET CAPITAL LETTER LONG I'],
     ['Design Review', 'design review', 'the ordinary case'],
     ['UI/UX 优化', 'ui/ux 优化', 'CJK is caseless and passes through'],
   ];

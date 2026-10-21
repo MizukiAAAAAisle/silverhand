@@ -1,8 +1,5 @@
 import { ENTITY_NAME_MAX_LENGTH, PARTICIPANT_HANDLE_PATTERN } from './api/name.js';
-import {
-  ADDRESS_TOKEN_MAX_BYTES,
-  addressTokenByteLength,
-} from './address-segment.js';
+import { ADDRESS_TOKEN_MAX_BYTES, addressTokenByteLength } from './address-segment.js';
 import {
   formatConversationAddressSegment,
   parseConversationAddressSegment,
@@ -340,9 +337,7 @@ export function parseDeliveryTarget(raw: string): DeliveryTarget | null {
  * the id arm is anchored on exactly 16 addressable characters. Neither string can
  * be read as the other arm; see {@link parseDeliveryTargetInput}.
  */
-function parseNamedArm(
-  raw: string,
-): Omit<NamedStreamTarget, 'kind'> | null {
+function parseNamedArm(raw: string): Omit<NamedStreamTarget, 'kind'> | null {
   const match = NAMED_STREAM_RE.exec(raw);
   if (!match) return null;
   const workspace = parseWorkspaceAddressSegment(match[1]!);
@@ -375,9 +370,7 @@ function parseNamedArm(
  * exactly what the permanent id fallback exists to avoid. A name domain that is
  * too long is refused by the name domains themselves, which is a different fact.
  */
-export function parseDeliveryTargetInput(
-  raw: string,
-): DeliveryTargetInput | null {
+export function parseDeliveryTargetInput(raw: string): DeliveryTargetInput | null {
   const stream = parseDeliveryTarget(raw);
   if (stream) return { kind: 'stream', stream };
 
@@ -437,13 +430,9 @@ export function conversationAddressOf(raw: string): string | null {
   // is (a title of `thread:a` plus a cluster) and is cut there, not twice.
   const parsed = parseDeliveryTargetInput(raw);
   if (parsed === null) return null;
-  const threadRootId =
-    parsed.kind === 'stream' ? parsed.stream.threadRootId : parsed.threadRootId;
+  const threadRootId = parsed.kind === 'stream' ? parsed.stream.threadRootId : parsed.threadRootId;
   if (threadRootId === null) return raw;
-  return raw.slice(
-    0,
-    raw.length - (THREAD_ADDRESS_SEPARATOR.length + threadRootId.length),
-  );
+  return raw.slice(0, raw.length - (THREAD_ADDRESS_SEPARATOR.length + threadRootId.length));
 }
 
 /**
@@ -517,8 +506,7 @@ export const DELIVERY_TARGET_REFUSAL_CODES = [
   'self_pair_not_addressable',
 ] as const;
 
-export type DeliveryTargetRefusalCode =
-  (typeof DELIVERY_TARGET_REFUSAL_CODES)[number];
+export type DeliveryTargetRefusalCode = (typeof DELIVERY_TARGET_REFUSAL_CODES)[number];
 
 /**
  * The one refusal a CONVERSATION-granular door adds: it was handed a reply
@@ -530,8 +518,7 @@ export type DeliveryTargetRefusalCode =
  * since the CLI has to turn it into something an agent can act on (drop the
  * suffix), which is why it is published here next to the codes it accompanies.
  */
-export const CONVERSATION_TARGET_SUFFIX_REFUSAL_CODE =
-  'thread_suffix_not_supported';
+export const CONVERSATION_TARGET_SUFFIX_REFUSAL_CODE = 'thread_suffix_not_supported';
 
 /**
  * The one refusal that is about the CREDENTIAL rather than the address: this
@@ -578,10 +565,7 @@ export const SLOT_REACH_REFUSAL_CODE = 'slot_out_of_scope';
  * counting that as a fallback would bury the three above under traffic that no
  * amount of naming machinery could ever remove.
  */
-export type AddressFallbackReason =
-  | 'agent_home'
-  | 'token_budget'
-  | 'unrenderable';
+export type AddressFallbackReason = 'agent_home' | 'token_budget' | 'unrenderable';
 
 /**
  * What is known about a stream's NAMES at render time — the caller's whole
@@ -629,14 +613,12 @@ export function formatStreamAddressToken(
   naming: StreamNaming,
 ): { token: string; fallback: AddressFallbackReason | null } {
   const suffix =
-    stream.threadRootId === null
-      ? ''
-      : `${THREAD_ADDRESS_SEPARATOR}${stream.threadRootId}`;
+    stream.threadRootId === null ? '' : `${THREAD_ADDRESS_SEPARATOR}${stream.threadRootId}`;
   switch (naming.kind) {
     case 'named': {
       const token =
-        `${NAMED_STREAM_ADDRESS_PREFIX}${formatWorkspaceAddressSegment(naming.workspace)}`
-        + `/${formatConversationAddressSegment(naming.title)}${suffix}`;
+        `${NAMED_STREAM_ADDRESS_PREFIX}${formatWorkspaceAddressSegment(naming.workspace)}` +
+        `/${formatConversationAddressSegment(naming.title)}${suffix}`;
       return addressTokenByteLength(token) <= ADDRESS_TOKEN_MAX_BYTES
         ? { token, fallback: null }
         : { token: formatDeliveryTarget(stream), fallback: 'token_budget' };
@@ -678,8 +660,6 @@ export function decodeTargetForDisplay(raw: string): string {
   const named = parseNamedArm(raw);
   if (named === null) return raw;
   const suffix =
-    named.threadRootId === null
-      ? ''
-      : `${THREAD_ADDRESS_SEPARATOR}${named.threadRootId}`;
+    named.threadRootId === null ? '' : `${THREAD_ADDRESS_SEPARATOR}${named.threadRootId}`;
   return `${NAMED_STREAM_ADDRESS_PREFIX}${named.workspace.name}/${named.title.title}${suffix}`;
 }

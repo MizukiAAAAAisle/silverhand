@@ -157,9 +157,6 @@ export interface BackpressureLog {
   bytes_dropped?: number;
 }
 
-export function logBackpressure(
-  logger: DaemonLogger,
-  entry: BackpressureLog,
-): void {
+export function logBackpressure(logger: DaemonLogger, entry: BackpressureLog): void {
   logger.warn({ kind: 'backpressure', ...entry }, `backpressure ${entry.action}`);
 }

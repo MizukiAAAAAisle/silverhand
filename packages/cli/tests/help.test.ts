@@ -1,11 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  facetHelp,
-  facetVerbHelp,
-  nounHelp,
-  topLevelHelp,
-  verbHelp,
-} from '../src/help.js';
+import { facetHelp, facetVerbHelp, nounHelp, topLevelHelp, verbHelp } from '../src/help.js';
 import { COMMAND_GROUPS } from '../src/commands/index.js';
 import { silverhandCommandNouns } from '@silverhand/shared/cli-command-manifest';
 
@@ -39,20 +33,20 @@ describe('top-level help text', () => {
   });
 
   it('binds every shared manifest noun and verb into the CLI tree', () => {
-    const expected = silverhandCommandNouns().map(noun => ({
+    const expected = silverhandCommandNouns().map((noun) => ({
       noun: noun.noun,
       verbs: [...noun.verbs],
-      facets: (noun.facets ?? []).map(facet => ({
+      facets: (noun.facets ?? []).map((facet) => ({
         facet: facet.facet,
         verbs: [...facet.verbs],
       })),
     }));
-    const actual = COMMAND_GROUPS.map(group => ({
+    const actual = COMMAND_GROUPS.map((group) => ({
       noun: group.noun,
-      verbs: group.commands.map(command => command.verb),
-      facets: (group.facets ?? []).map(facet => ({
+      verbs: group.commands.map((command) => command.verb),
+      facets: (group.facets ?? []).map((facet) => ({
         facet: facet.facet,
-        verbs: facet.commands.map(command => command.verb),
+        verbs: facet.commands.map((command) => command.verb),
       })),
     }));
     expect(actual).toEqual(expected);
@@ -76,9 +70,7 @@ describe('per-noun and per-verb help', () => {
       // Faceted nouns (3-level): each facet lists in the noun help, and
       // every facet verb has a help block reachable via facetVerbHelp.
       for (const f of g.facets ?? []) {
-        expect(noun, `nounHelp(${g.noun}) lists facet ${f.facet}`).toContain(
-          f.facet,
-        );
+        expect(noun, `nounHelp(${g.noun}) lists facet ${f.facet}`).toContain(f.facet);
         const fh = facetHelp(g.noun, f.facet);
         expect(fh, `facetHelp(${g.noun} ${f.facet})`).toContain('silverhand ');
         for (const c of f.commands) {

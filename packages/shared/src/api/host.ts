@@ -2,18 +2,9 @@
 // Bounded context: host. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import { DAEMON_ADMISSION } from '../daemon-admission.generated.js';
-import {
-  HostKindSchema,
-  HostProvisioningSourceSchema,
-  RuntimeKindSchema,
-} from '../db/schema.js';
+import { HostKindSchema, HostProvisioningSourceSchema, RuntimeKindSchema } from '../db/schema.js';
 
-export const HostLifecycleStatusSchema = z.enum([
-  'pending',
-  'attached',
-  'active',
-  'revoked',
-]);
+export const HostLifecycleStatusSchema = z.enum(['pending', 'attached', 'active', 'revoked']);
 export type HostLifecycleStatus = z.infer<typeof HostLifecycleStatusSchema>;
 
 /**
@@ -115,11 +106,7 @@ export const UpdateHostInputSchema = z
      *  layer now shares this bound and over-long input is refused.
      *  `.trim()` stays — trimming plus empty-string → `null` is the
      *  documented clear-on-blank path, not a rewrite of a valid value. */
-    display_label: z
-      .string()
-      .trim()
-      .max(HOST_DISPLAY_LABEL_MAX_LENGTH)
-      .nullable(),
+    display_label: z.string().trim().max(HOST_DISPLAY_LABEL_MAX_LENGTH).nullable(),
   })
   .strict();
 export type UpdateHostInput = z.infer<typeof UpdateHostInputSchema>;
@@ -185,9 +172,7 @@ export const HostConnectionChangedEventSchema = z
     host_id: z.string(),
   })
   .strict();
-export type HostConnectionChangedEvent = z.infer<
-  typeof HostConnectionChangedEventSchema
->;
+export type HostConnectionChangedEvent = z.infer<typeof HostConnectionChangedEventSchema>;
 
 /** #task:1588 slice 2 — WS event kind published on `viewer:{ownerUserId}`
  *  when a host's active-agent set actually changes (an agent's first
@@ -202,9 +187,7 @@ export const HostAgentLivenessChangedEventSchema = z
     host_id: z.string(),
   })
   .strict();
-export type HostAgentLivenessChangedEvent = z.infer<
-  typeof HostAgentLivenessChangedEventSchema
->;
+export type HostAgentLivenessChangedEvent = z.infer<typeof HostAgentLivenessChangedEventSchema>;
 
 export const HostUnreachableReasonSchema = z.enum([
   'daemon_unreachable',
@@ -392,11 +375,10 @@ export const HostStatusResponseSchema = z.discriminatedUnion('availability', [
 ]);
 export type HostStatusResponse = z.infer<typeof HostStatusResponseSchema>;
 
-export const HostProxyConfigSchema = z
-  .object({
-    proxy_url: z.string().nullable(),
-    proxy_runtimes: z.array(RuntimeKindSchema),
-  });
+export const HostProxyConfigSchema = z.object({
+  proxy_url: z.string().nullable(),
+  proxy_runtimes: z.array(RuntimeKindSchema),
+});
 export type HostProxyConfig = z.infer<typeof HostProxyConfigSchema>;
 
 export const HostProxyConfigResponseSchema = z
@@ -404,9 +386,7 @@ export const HostProxyConfigResponseSchema = z
     config: HostProxyConfigSchema,
   })
   .strict();
-export type HostProxyConfigResponse = z.infer<
-  typeof HostProxyConfigResponseSchema
->;
+export type HostProxyConfigResponse = z.infer<typeof HostProxyConfigResponseSchema>;
 
 export const HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE = 'computer_offline';
 
@@ -416,25 +396,20 @@ export const HostProxyConfigOfflineResponseSchema = z
     error_code: z.literal(HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE),
   })
   .strict();
-export type HostProxyConfigOfflineResponse = z.infer<
-  typeof HostProxyConfigOfflineResponseSchema
->;
+export type HostProxyConfigOfflineResponse = z.infer<typeof HostProxyConfigOfflineResponseSchema>;
 
-export const HostClaimOrCreateInputSchema = z.object({
-  installation_id: z.string().uuid(),
-  /** Claim-time display label — the same column as
-   *  `UpdateHostInputSchema.display_label`, so it shares the same bound.
-   *  Callers that derive this from a system value (the desktop main
-   *  process defaults it to the OS hostname) must fit it themselves;
-   *  claiming a computer must not fail because the machine name is long. */
-  label: z
-    .string()
-    .trim()
-    .min(1)
-    .max(HOST_DISPLAY_LABEL_MAX_LENGTH)
-    .optional(),
-  current_host_id: z.string().min(1).optional(),
-}).strict();
+export const HostClaimOrCreateInputSchema = z
+  .object({
+    installation_id: z.string().uuid(),
+    /** Claim-time display label — the same column as
+     *  `UpdateHostInputSchema.display_label`, so it shares the same bound.
+     *  Callers that derive this from a system value (the desktop main
+     *  process defaults it to the OS hostname) must fit it themselves;
+     *  claiming a computer must not fail because the machine name is long. */
+    label: z.string().trim().min(1).max(HOST_DISPLAY_LABEL_MAX_LENGTH).optional(),
+    current_host_id: z.string().min(1).optional(),
+  })
+  .strict();
 export type HostClaimOrCreateInput = z.infer<typeof HostClaimOrCreateInputSchema>;
 
 export const HostClaimOrCreateResponseSchema = z.object({
@@ -442,9 +417,7 @@ export const HostClaimOrCreateResponseSchema = z.object({
   host: HostDtoSchema,
   host_token: z.string().min(1).optional(),
 });
-export type HostClaimOrCreateResponse = z.infer<
-  typeof HostClaimOrCreateResponseSchema
->;
+export type HostClaimOrCreateResponse = z.infer<typeof HostClaimOrCreateResponseSchema>;
 
 /** Owner-scoped list response from `GET /api/hosts`. The route filters
  *  to the current viewer's owned hosts only. */
@@ -480,9 +453,7 @@ export type HostCreateResponse = z.infer<typeof HostCreateResponseSchema>;
 export const HostConnectTokenResolveResponseSchema = z.object({
   host_id: z.string().min(1),
 });
-export type HostConnectTokenResolveResponse = z.infer<
-  typeof HostConnectTokenResolveResponseSchema
->;
+export type HostConnectTokenResolveResponse = z.infer<typeof HostConnectTokenResolveResponseSchema>;
 
 /** `GET /api/hosts/{id}` owner-scoped host read. Unlike the bulk list, this
  *  may return a modal-scoped setup draft so the Add computer flow can observe
@@ -502,9 +473,7 @@ export const HostCancelPendingResponseSchema = z.object({
   host_id: z.string(),
   deleted: z.literal(true),
 });
-export type HostCancelPendingResponse = z.infer<
-  typeof HostCancelPendingResponseSchema
->;
+export type HostCancelPendingResponse = z.infer<typeof HostCancelPendingResponseSchema>;
 export const HostDeleteResponseSchema = HostCancelPendingResponseSchema;
 export type HostDeleteResponse = HostCancelPendingResponse;
 
@@ -589,18 +558,14 @@ export const HostDeleteBlockedResponseSchema = z.object({
   dependents: HostDeleteDependentsSchema,
   agents: z.array(HostAgentResourceSchema).optional().default([]),
 });
-export type HostDeleteBlockedResponse = z.infer<
-  typeof HostDeleteBlockedResponseSchema
->;
+export type HostDeleteBlockedResponse = z.infer<typeof HostDeleteBlockedResponseSchema>;
 
 export const HostDeletePendingAgentsResponseSchema = z.object({
   error: z.string(),
   error_code: z.literal('has_pending_agents'),
   pending_agents: z.number().int().positive(),
 });
-export type HostDeletePendingAgentsResponse = z.infer<
-  typeof HostDeletePendingAgentsResponseSchema
->;
+export type HostDeletePendingAgentsResponse = z.infer<typeof HostDeletePendingAgentsResponseSchema>;
 
 /** `POST /api/hosts/{id}/revoke` response. Returns the updated DTO so
  *  the caller can refresh local UI without a follow-up GET. */
@@ -659,6 +624,4 @@ export const HostRotateTokenResponseSchema = z.union([
   HostRotateTokenStandaloneResponseSchema,
   HostRotateTokenUserManagedResponseSchema,
 ]);
-export type HostRotateTokenResponse = z.infer<
-  typeof HostRotateTokenResponseSchema
->;
+export type HostRotateTokenResponse = z.infer<typeof HostRotateTokenResponseSchema>;

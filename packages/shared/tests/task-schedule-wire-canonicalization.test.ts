@@ -13,8 +13,9 @@ import corpus from './fixtures/task-schedule-wire-canonicalization.json' with { 
 describe('task/schedule positive JS-safe wire numbers', () => {
   it('uses the shared numeric authority for all four task mutation fields', () => {
     for (const entry of corpus.positive_js_safe) {
-      expect(PositiveJsSafeIntegerSchema.safeParse(entry.value).success, entry.name)
-        .toBe(entry.accepted);
+      expect(PositiveJsSafeIntegerSchema.safeParse(entry.value).success, entry.name).toBe(
+        entry.accepted,
+      );
       expect(
         ClaimTasksInputSchema.safeParse({ task_numbers: [entry.value] }).success,
         `claim: ${entry.name}`,
@@ -24,11 +25,12 @@ describe('task/schedule positive JS-safe wire numbers', () => {
         UpdateTaskStatusInputSchema,
         EditTaskInputSchema,
       ]) {
-        const extra = schema === UpdateTaskStatusInputSchema
-          ? { status: 'done' }
-          : schema === EditTaskInputSchema
-            ? { title: 'edited' }
-            : {};
+        const extra =
+          schema === UpdateTaskStatusInputSchema
+            ? { status: 'done' }
+            : schema === EditTaskInputSchema
+              ? { title: 'edited' }
+              : {};
         expect(
           schema.safeParse({ task_number: entry.value, ...extra }).success,
           `${entry.name}`,
@@ -40,42 +42,59 @@ describe('task/schedule positive JS-safe wire numbers', () => {
   it('applies the safe bound to all six schedule-create numeric fields', () => {
     for (const entry of corpus.positive_js_safe) {
       const onceFire = {
-        title: 'x', message: 'x', target_conversation: '#x',
+        title: 'x',
+        message: 'x',
+        target_conversation: '#x',
         spec: { kind: 'once', fire_at: entry.value },
       };
       const onceDelay = {
-        title: 'x', message: 'x', target_conversation: '#x',
+        title: 'x',
+        message: 'x',
+        target_conversation: '#x',
         spec: { kind: 'once', delay_seconds: entry.value },
       };
       for (const body of [onceFire, onceDelay]) {
-        expect(ScheduleCreateInputSchema.safeParse(body).success, entry.name)
-          .toBe(entry.accepted);
+        expect(ScheduleCreateInputSchema.safeParse(body).success, entry.name).toBe(entry.accepted);
       }
 
       const intervalBase = {
-        title: 'x', message: 'x', target_conversation: '#x',
+        title: 'x',
+        message: 'x',
+        target_conversation: '#x',
         spec: { kind: 'interval', every_seconds: 60, start_at: entry.value },
         max_occurrences: 1,
       };
-      expect(ScheduleCreateInputSchema.safeParse(intervalBase).success, entry.name)
-        .toBe(entry.accepted);
+      expect(ScheduleCreateInputSchema.safeParse(intervalBase).success, entry.name).toBe(
+        entry.accepted,
+      );
       for (const field of ['until_at', 'max_occurrences'] as const) {
         const body = {
-          title: 'x', message: 'x', target_conversation: '#x',
+          title: 'x',
+          message: 'x',
+          target_conversation: '#x',
           spec: { kind: 'interval', every_seconds: 60 },
           [field]: entry.value,
         };
-        expect(ScheduleCreateInputSchema.safeParse(body).success, `${field}: ${entry.name}`)
-          .toBe(entry.accepted);
+        expect(ScheduleCreateInputSchema.safeParse(body).success, `${field}: ${entry.name}`).toBe(
+          entry.accepted,
+        );
       }
     }
 
-    for (const [value, accepted] of [[60, true], [59, false], [9007199254740992, false]] as const) {
-      expect(ScheduleCreateInputSchema.safeParse({
-        title: 'x', message: 'x', target_conversation: '#x',
-        spec: { kind: 'interval', every_seconds: value },
-        max_occurrences: 1,
-      }).success).toBe(accepted);
+    for (const [value, accepted] of [
+      [60, true],
+      [59, false],
+      [9007199254740992, false],
+    ] as const) {
+      expect(
+        ScheduleCreateInputSchema.safeParse({
+          title: 'x',
+          message: 'x',
+          target_conversation: '#x',
+          spec: { kind: 'interval', every_seconds: value },
+          max_occurrences: 1,
+        }).success,
+      ).toBe(accepted);
     }
   });
 

@@ -1,7 +1,4 @@
-import {
-  defaultAppRoot,
-  resolveComputerSlotPaths,
-} from '@silverhand/shared/app-data-layout';
+import { defaultAppRoot, resolveComputerSlotPaths } from '@silverhand/shared/app-data-layout';
 
 export interface ComputerProfileBinding {
   host_id: string;

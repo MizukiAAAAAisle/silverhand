@@ -129,8 +129,7 @@ export function createIOSPlatform(
             status: state.me.status,
             body: parse(state.me.bodyText),
           });
-          if (result.kind === "valid")
-            return { status: "authenticated", user: result.user };
+          if (result.kind === "valid") return { status: "authenticated", user: result.user };
           if (result.kind === "rejected") return unauthenticated;
           return { status: "backend_unreachable", server_url: serverUrl, message: result.message };
         } catch (error) {

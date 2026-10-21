@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  RUNTIME_CATALOG,
-  RuntimeKindSchema,
-  runtimeCatalogEntry,
-} from '../src/index.js';
+import { RUNTIME_CATALOG, RuntimeKindSchema, runtimeCatalogEntry } from '../src/index.js';
 import fixture from './fixtures/offered-runtimes.json' with { type: 'json' };
 
 /**
@@ -16,15 +12,13 @@ import fixture from './fixtures/offered-runtimes.json' with { type: 'json' };
  */
 describe('offered runtimes cross-language authority', () => {
   it('signs the picker list in the picker order', () => {
-    const offered = RUNTIME_CATALOG.filter(entry => entry.selectable).map(
-      entry => entry.kind,
-    );
+    const offered = RUNTIME_CATALOG.filter((entry) => entry.selectable).map((entry) => entry.kind);
     expect(offered).toEqual(fixture.offered);
   });
 
   it('signs the kinds a row may hold that no picker offers', () => {
     const vocabularyOnly = RuntimeKindSchema.options
-      .filter(kind => !runtimeCatalogEntry(kind).selectable)
+      .filter((kind) => !runtimeCatalogEntry(kind).selectable)
       .sort();
     expect(vocabularyOnly).toEqual([...fixture.vocabularyOnly].sort());
   });

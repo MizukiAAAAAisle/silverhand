@@ -16,10 +16,9 @@ describe('NameAvailabilityDtoSchema — available ⇔ reason invariant', () => {
   });
 
   it('accepts consistent unavailable pairs (taken / invalid)', () => {
-    expect(
-      NameAvailabilityDtoSchema.safeParse({ available: false, reason: 'taken' })
-        .success,
-    ).toBe(true);
+    expect(NameAvailabilityDtoSchema.safeParse({ available: false, reason: 'taken' }).success).toBe(
+      true,
+    );
     expect(
       NameAvailabilityDtoSchema.safeParse({
         available: false,
@@ -29,10 +28,9 @@ describe('NameAvailabilityDtoSchema — available ⇔ reason invariant', () => {
   });
 
   it('rejects available:true with a non-available reason', () => {
-    expect(
-      NameAvailabilityDtoSchema.safeParse({ available: true, reason: 'taken' })
-        .success,
-    ).toBe(false);
+    expect(NameAvailabilityDtoSchema.safeParse({ available: true, reason: 'taken' }).success).toBe(
+      false,
+    );
   });
 
   it('rejects available:false paired with reason:available', () => {

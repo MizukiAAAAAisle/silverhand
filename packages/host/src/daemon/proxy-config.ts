@@ -1,17 +1,13 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
-import {
-  RuntimeKindSchema,
-  type RuntimeKind,
-} from '@silverhand/shared';
+import { RuntimeKindSchema, type RuntimeKind } from '@silverhand/shared';
 import type { DaemonLogger } from './logger.js';
 
-export const DaemonProxyConfigSchema = z
-  .object({
-    proxy_url: z.string().nullable().default(null),
-    proxy_runtimes: z.array(RuntimeKindSchema).default([]),
-  });
+export const DaemonProxyConfigSchema = z.object({
+  proxy_url: z.string().nullable().default(null),
+  proxy_runtimes: z.array(RuntimeKindSchema).default([]),
+});
 
 export type DaemonProxyConfig = z.infer<typeof DaemonProxyConfigSchema>;
 
@@ -45,10 +41,7 @@ export function readDaemonProxyConfig(
   }
 }
 
-export function writeDaemonProxyConfig(
-  path: string,
-  input: DaemonProxyConfig,
-): DaemonProxyConfig {
+export function writeDaemonProxyConfig(path: string, input: DaemonProxyConfig): DaemonProxyConfig {
   const config = normalizeDaemonProxyConfig(input);
   mkdirSync(dirname(path), { recursive: true });
   const tmp = `${path}.tmp-${process.pid}-${Date.now()}`;

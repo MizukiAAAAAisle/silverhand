@@ -62,15 +62,11 @@ const AGENT_HOME_COMMAND_EFFECTS = {
   mcp_probe: 'bounded_mutator',
 } as const satisfies Record<AgentHomeCommandKind, AgentHomeCommandEffect>;
 
-export function agentHomeCommandEffect(
-  kind: AgentHomeCommandKind,
-): AgentHomeCommandEffect {
+export function agentHomeCommandEffect(kind: AgentHomeCommandKind): AgentHomeCommandEffect {
   return AGENT_HOME_COMMAND_EFFECTS[kind];
 }
 
-export function isAgentHomeMutatorEffect(
-  effect: AgentHomeCommandEffect,
-): boolean {
+export function isAgentHomeMutatorEffect(effect: AgentHomeCommandEffect): boolean {
   return effect === 'runtime_mutator' || effect === 'bounded_mutator';
 }
 

@@ -35,13 +35,7 @@ import {
   TaskNavRefSchema,
   parseDeliveryTargetInput,
 } from '@silverhand/shared';
-import {
-  facetHelp,
-  facetVerbHelp,
-  nounHelp,
-  topLevelHelp,
-  verbHelp,
-} from '../src/help.js';
+import { facetHelp, facetVerbHelp, nounHelp, topLevelHelp, verbHelp } from '../src/help.js';
 import { COMMAND_GROUPS } from '../src/commands/index.js';
 
 /** Every agent-readable help block, labelled by the command that renders it. */
@@ -85,11 +79,7 @@ const escapeRe = (raw: string) => raw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
  * this gate with it instead of blinding it.
  */
 const ADDRESS_RE = new RegExp(
-  `(?:${[
-    NAMED_STREAM_ADDRESS_PREFIX,
-    CONVERSATION_ADDRESS_PREFIX,
-    DIRECT_PAIR_SHORTHAND_PREFIX,
-  ]
+  `(?:${[NAMED_STREAM_ADDRESS_PREFIX, CONVERSATION_ADDRESS_PREFIX, DIRECT_PAIR_SHORTHAND_PREFIX]
     .map(escapeRe)
     .join('|')})[^\\s'"\`,;)\\]]*`,
   'g',
@@ -126,7 +116,7 @@ const NAV_REF_ADDRESSABLE = ['conversation_id', 'thread_root_id'] as const;
 const NAV_REF_NOT_ADDRESSABLE = ['message_id'] as const;
 
 const NAV_REF_PLACEHOLDERS: Readonly<Record<string, string>> = Object.fromEntries(
-  NAV_REF_ADDRESSABLE.map(field => [`<nav.ref.${field}>`, 'NbBXIEpDUnSWW48x']),
+  NAV_REF_ADDRESSABLE.map((field) => [`<nav.ref.${field}>`, 'NbBXIEpDUnSWW48x']),
 );
 
 /** Placeholder → a value the codec must accept. Unknown spellings fail loudly
@@ -178,7 +168,7 @@ const PLACEHOLDER_RE = /<[A-Za-z_][A-Za-z_.]*>/g;
 
 function instantiate(token: string): { value: string; unknown: string[] } {
   const unknown: string[] = [];
-  const value = token.replace(PLACEHOLDER_RE, match => {
+  const value = token.replace(PLACEHOLDER_RE, (match) => {
     const known = PLACEHOLDERS[match];
     if (known === undefined) {
       unknown.push(match);
@@ -199,11 +189,13 @@ function addressTokens(text: string): readonly string[] {
     CONVERSATION_ADDRESS_PREFIX,
     DIRECT_PAIR_SHORTHAND_PREFIX,
   ];
-  return (text.match(ADDRESS_RE) ?? [])
-    .filter(token => !prefixes.includes(token))
-    // A sentence-final period is prose, not part of the address.
-    .map(token => token.replace(/\.$/, ''))
-    .filter(token => addressGrammarOf(token) === 'delivery');
+  return (
+    (text.match(ADDRESS_RE) ?? [])
+      .filter((token) => !prefixes.includes(token))
+      // A sentence-final period is prose, not part of the address.
+      .map((token) => token.replace(/\.$/, ''))
+      .filter((token) => addressGrammarOf(token) === 'delivery')
+  );
 }
 
 /**
@@ -226,7 +218,7 @@ const RETIRED = [
 ] as const;
 
 function retiredHits(text: string): readonly string[] {
-  return RETIRED.filter(r => r.pattern.test(text)).map(r => r.why);
+  return RETIRED.filter((r) => r.pattern.test(text)).map((r) => r.why);
 }
 
 describe('CLI help teaches only the shipped delivery-address grammar', () => {
@@ -244,9 +236,7 @@ describe('CLI help teaches only the shipped delivery-address grammar', () => {
     for (const block of blocks) {
       for (const token of addressTokens(block.text)) {
         const { value, unknown } = instantiate(token);
-        expect(unknown, `${block.label}: unknown placeholder in ${token}`).toEqual(
-          [],
-        );
+        expect(unknown, `${block.label}: unknown placeholder in ${token}`).toEqual([]);
         expect(
           parseDeliveryTargetInput(value),
           `${block.label}: ${token} → ${value}`,
@@ -272,12 +262,8 @@ describe('CLI help teaches only the shipped delivery-address grammar', () => {
     // cell is also the edge that catches a SCHEMA-ONLY rename: the partition
     // still lists the old name, so it stops equalling the live keys.
     const classified = [...NAV_REF_ADDRESSABLE, ...NAV_REF_NOT_ADDRESSABLE];
-    expect([...classified].sort()).toEqual(
-      Object.keys(TaskNavRefSchema.shape).sort(),
-    );
-    expect(new Set(classified).size, 'a field classified twice').toBe(
-      classified.length,
-    );
+    expect([...classified].sort()).toEqual(Object.keys(TaskNavRefSchema.shape).sort());
+    expect(new Set(classified).size, 'a field classified twice').toBe(classified.length);
   });
 
   it('no help block teaches a non-addressable nav field as an address', () => {
@@ -289,9 +275,7 @@ describe('CLI help teaches only the shipped delivery-address grammar', () => {
       const forbidden = `<nav.ref.${field}>`;
       expect(PLACEHOLDERS[forbidden], forbidden).toBeUndefined();
       for (const block of blocks) {
-        expect(block.text.includes(forbidden), `${block.label}: ${forbidden}`).toBe(
-          false,
-        );
+        expect(block.text.includes(forbidden), `${block.label}: ${forbidden}`).toBe(false);
       }
     }
   });
@@ -313,7 +297,7 @@ describe('the gate itself fails on bad help', () => {
   // produce, and the checker above must reject it. Without these, a broken
   // regex would report a clean sweep of everything.
   it('flags an unparseable example address', () => {
-    const bad = "  --target <address>   e.g. `#conv:not-an-id`";
+    const bad = '  --target <address>   e.g. `#conv:not-an-id`';
     const [token] = addressTokens(bad);
     expect(token).toBe('#conv:not-an-id');
     expect(parseDeliveryTargetInput(instantiate(token!).value)).toBeNull();
@@ -366,9 +350,7 @@ describe('the gate itself fails on bad help', () => {
   });
 
   it('does not treat a bare prefix mention as an example', () => {
-    expect(
-      addressTokens('An OBJECT id, not an address: no `#conv:` prefix'),
-    ).toEqual([]);
+    expect(addressTokens('An OBJECT id, not an address: no `#conv:` prefix')).toEqual([]);
   });
 
   it('separates the delivery grammar from the chat vocabulary under one sigil', () => {
@@ -388,11 +370,7 @@ describe('the gate itself fails on bad help', () => {
     }
     // And the classification is what the extractor applies: the manifest's prose
     // line yields no candidates, while the same line's address example does.
-    expect(addressTokens('#<channel> or #conv:<id> names a place')).toEqual([
-      '#conv:<id>',
-    ]);
-    expect(addressTokens("--target '#<workspace>/<title>'")).toEqual([
-      '#<workspace>/<title>',
-    ]);
+    expect(addressTokens('#<channel> or #conv:<id> names a place')).toEqual(['#conv:<id>']);
+    expect(addressTokens("--target '#<workspace>/<title>'")).toEqual(['#<workspace>/<title>']);
   });
 });

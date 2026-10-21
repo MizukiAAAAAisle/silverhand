@@ -8,14 +8,8 @@
  * (the `import-boundary.test.ts` tripwire enforces it).
  */
 export { AgentWorkspaceFsError } from './error.js';
-export {
-  listAgentWorkspaceTree,
-  type ListAgentWorkspaceTreeDeps,
-} from './tree.js';
-export {
-  readAgentWorkspaceFile,
-  type ReadAgentWorkspaceFileDeps,
-} from './read-file.js';
+export { listAgentWorkspaceTree, type ListAgentWorkspaceTreeDeps } from './tree.js';
+export { readAgentWorkspaceFile, type ReadAgentWorkspaceFileDeps } from './read-file.js';
 export {
   parseAndResolveVirtualPath,
   resolveAgentHomeBase,

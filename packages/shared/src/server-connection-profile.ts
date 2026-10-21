@@ -91,9 +91,7 @@ export const ServerConnectionProfileSchema = z.object({
   created_at: z.number().int().nonnegative(),
   updated_at: z.number().int().nonnegative(),
 });
-export type ServerConnectionProfile = z.infer<
-  typeof ServerConnectionProfileSchema
->;
+export type ServerConnectionProfile = z.infer<typeof ServerConnectionProfileSchema>;
 
 /**
  * Redacted view that crosses the IPC boundary to the renderer.
@@ -113,9 +111,7 @@ export const ServerConnectionProfileViewSchema = z.object({
   server_url: z.string().min(1),
   updated_at: z.number().int().nonnegative(),
 });
-export type ServerConnectionProfileView = z.infer<
-  typeof ServerConnectionProfileViewSchema
->;
+export type ServerConnectionProfileView = z.infer<typeof ServerConnectionProfileViewSchema>;
 
 /**
  * Convert a full profile into the renderer-facing redacted view.
@@ -147,7 +143,7 @@ export function safeParseServerConnectionProfile(
   return {
     ok: false,
     reason: result.error.issues
-      .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
+      .map((issue) => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
       .join('; '),
   };
 }

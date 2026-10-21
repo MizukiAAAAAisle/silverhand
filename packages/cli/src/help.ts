@@ -96,9 +96,7 @@ export function facetHelp(noun: string, facet: string): string | null {
     lines.push(`  ${c.verb.padEnd(10)} ${c.summary}`);
   }
   lines.push('');
-  lines.push(
-    `Run \`silverhand ${noun} ${facet} <verb> --help\` for flag-level usage.`,
-  );
+  lines.push(`Run \`silverhand ${noun} ${facet} <verb> --help\` for flag-level usage.`);
   return lines.join('\n');
 }
 
@@ -108,11 +106,7 @@ export function verbHelp(noun: string, verb: string): string | null {
   return cmd.help;
 }
 
-export function facetVerbHelp(
-  noun: string,
-  facet: string,
-  verb: string,
-): string | null {
+export function facetVerbHelp(noun: string, facet: string, verb: string): string | null {
   const cmd = findFacetCommand(noun, facet, verb);
   if (!cmd) return null;
   return cmd.help;

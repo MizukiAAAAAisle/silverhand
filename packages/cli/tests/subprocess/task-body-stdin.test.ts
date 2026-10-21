@@ -22,12 +22,7 @@
  * — the same rationale as `message-send-stdin.test.ts`, whose harness this
  * mirrors.
  */
-import {
-  createServer,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse,
-} from 'node:http';
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
@@ -51,7 +46,7 @@ let nextResponse: { status: number; body: unknown } | null = null;
 beforeAll(async () => {
   server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
-    req.on('data', chunk => chunks.push(chunk));
+    req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => {
       captured.push({
         method: req.method ?? '',
@@ -64,19 +59,17 @@ beforeAll(async () => {
       res.setHeader('content-type', 'application/json');
       // Default success shapes: create wants a tasks[] envelope with no
       // `error`; edit is happy with any non-error body.
-      res.end(
-        JSON.stringify(reply?.body ?? { tasks: [{ task_number: 1 }], task: {} }),
-      );
+      res.end(JSON.stringify(reply?.body ?? { tasks: [{ task_number: 1 }], task: {} }));
     });
   });
-  await new Promise<void>(r => server.listen(0, '127.0.0.1', () => r()));
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
   const addr = server.address();
   if (!addr || typeof addr === 'string') throw new Error('no addr');
   serverUrl = `http://127.0.0.1:${addr.port}`;
 });
 
 afterAll(async () => {
-  await new Promise<void>(r => server.close(() => r()));
+  await new Promise<void>((r) => server.close(() => r()));
 });
 
 /** `task create` files against ONE addressed stream, and the flag is required
@@ -134,10 +127,10 @@ function runTask(opts: {
     let stderr = '';
     let killedByWatchdog = false;
     let watchdog: ReturnType<typeof setTimeout> | undefined;
-    child.stdout!.on('data', chunk => (stdout += chunk.toString('utf8')));
-    child.stderr!.on('data', chunk => (stderr += chunk.toString('utf8')));
+    child.stdout!.on('data', (chunk) => (stdout += chunk.toString('utf8')));
+    child.stderr!.on('data', (chunk) => (stderr += chunk.toString('utf8')));
     child.on('error', reject);
-    child.on('close', code => {
+    child.on('close', (code) => {
       if (watchdog) clearTimeout(watchdog);
       resolvePromise({ code, stdout, stderr, killedByWatchdog });
     });
@@ -152,9 +145,7 @@ function runTask(opts: {
           child.kill('SIGKILL');
         }, 8000);
       } else if (opts.stdin !== null && opts.stdin !== undefined) {
-        const buf = Buffer.isBuffer(opts.stdin)
-          ? opts.stdin
-          : Buffer.from(opts.stdin, 'utf8');
+        const buf = Buffer.isBuffer(opts.stdin) ? opts.stdin : Buffer.from(opts.stdin, 'utf8');
         child.stdin!.end(buf);
       } else {
         child.stdin!.end();
@@ -186,7 +177,7 @@ function lastRequestJson<T>(): T {
  *  CLI fires on any error BEFORE a business request (which carries no body
  *  content). A rejected --body must produce zero of these. */
 function businessRequests(): CapturedRequest[] {
-  return captured.filter(r => !r.path.includes('/cli-trace'));
+  return captured.filter((r) => !r.path.includes('/cli-trace'));
 }
 
 describe('silverhand task --body (stdin-only, real subprocess)', { timeout: 30_000 }, () => {

@@ -78,8 +78,7 @@ export function toOutboundCommandResponse(
           kind: command.kind,
           result: response.result,
         };
-  const parsed =
-    OutboundDaemonToServerCommandResponseFrameSchema.safeParse(candidate);
+  const parsed = OutboundDaemonToServerCommandResponseFrameSchema.safeParse(candidate);
   if (parsed.success) return { frame: parsed.data };
   return {
     frame: {
@@ -94,7 +93,7 @@ export function toOutboundCommandResponse(
     } as OutboundDaemonToServerCommandResponseFrame,
     drift: {
       summary: summarizeResponseFrame(response),
-      issues: parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`),
+      issues: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`),
     },
   };
 }
@@ -127,9 +126,7 @@ export function summarizeResponseFrame(
  * `protocol_version`) and stamps the outbound `direction`/`type`/`kind`
  * plus the negotiated `OUTBOUND_PROTOCOL_VERSION` on `ready`.
  */
-export function toOutboundEventFrame(
-  event: EventFrame,
-): OutboundDaemonToServerEventFrame {
+export function toOutboundEventFrame(event: EventFrame): OutboundDaemonToServerEventFrame {
   switch (event.event) {
     case 'ready': {
       const {

@@ -54,9 +54,7 @@ export interface OpencodeConfigContentInput {
  * run on the pure user config. Only non-empty sections are emitted, so the
  * deep-merge never clobbers a user key we don't actually set.
  */
-export function buildOpencodeConfigContent(
-  input: OpencodeConfigContentInput,
-): string | null {
+export function buildOpencodeConfigContent(input: OpencodeConfigContentInput): string | null {
   const config: {
     agent?: Record<string, { prompt: string }>;
     mcp?: Record<string, OpencodeMcpServer>;

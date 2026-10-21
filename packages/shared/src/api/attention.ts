@@ -63,9 +63,7 @@ export const WorkspaceAttentionPreferenceDtoSchema = z.object({
   workspace_id: z.string(),
   muted: z.boolean(),
 });
-export type WorkspaceAttentionPreferenceDto = z.infer<
-  typeof WorkspaceAttentionPreferenceDtoSchema
->;
+export type WorkspaceAttentionPreferenceDto = z.infer<typeof WorkspaceAttentionPreferenceDtoSchema>;
 
 /** PUT body for the viewer's workspace-level mute suppressor. */
 export const SetWorkspaceAttentionPreferenceInputSchema = z.object({
@@ -87,9 +85,7 @@ export const ChannelAttentionPreferenceDtoSchema = z.object({
   conversation_id: z.string(),
   mode: z.enum(CHANNEL_ATTENTION_MODES),
 });
-export type ChannelAttentionPreferenceDto = z.infer<
-  typeof ChannelAttentionPreferenceDtoSchema
->;
+export type ChannelAttentionPreferenceDto = z.infer<typeof ChannelAttentionPreferenceDtoSchema>;
 
 /** PUT body for setting the viewer's attention mode for a channel. Together with
  *  the workspace suppressor PUT these are the only surfaces that write attention
@@ -142,9 +138,7 @@ export const AttentionBadgeRollupDtoSchema = z.object({
    *  `attention_pref_changed` must also invalidate this read. */
   muted_workspace_ids: z.array(z.string()),
 });
-export type AttentionBadgeRollupDto = z.infer<
-  typeof AttentionBadgeRollupDtoSchema
->;
+export type AttentionBadgeRollupDto = z.infer<typeof AttentionBadgeRollupDtoSchema>;
 
 /** One channel's resolved tier inside `GET /api/attention/modes`. `mode` is the
  *  channel's OWN stored (or defaulted) choice; `effective_mode` folds in the
@@ -165,9 +159,7 @@ export const ChannelAttentionModeRowDtoSchema = z.object({
   effective_mode: z.enum(CHANNEL_ATTENTION_MODES),
   directed_unread_count: z.number().int().nonnegative(),
 });
-export type ChannelAttentionModeRowDto = z.infer<
-  typeof ChannelAttentionModeRowDtoSchema
->;
+export type ChannelAttentionModeRowDto = z.infer<typeof ChannelAttentionModeRowDtoSchema>;
 
 /** `GET /api/attention/modes?workspace_id=…` — one batch read of every channel
  *  tier in ONE workspace, so the sidebar renders N rows without N requests.
@@ -179,9 +171,7 @@ export const WorkspaceAttentionModesDtoSchema = z.object({
   muted: z.boolean(),
   channels: z.array(ChannelAttentionModeRowDtoSchema),
 });
-export type WorkspaceAttentionModesDto = z.infer<
-  typeof WorkspaceAttentionModesDtoSchema
->;
+export type WorkspaceAttentionModesDto = z.infer<typeof WorkspaceAttentionModesDtoSchema>;
 
 /** Viewer-scoped `attention_badge_updated` payload — an ABSOLUTE per-workspace
  *  badge value, patched into the roll-up cache exactly like
@@ -203,9 +193,7 @@ export const AttentionBadgeUpdatedPayloadSchema = z.object({
   workspace_id: z.string(),
   badge_count: z.number().int().nonnegative(),
 });
-export type AttentionBadgeUpdatedPayload = z.infer<
-  typeof AttentionBadgeUpdatedPayloadSchema
->;
+export type AttentionBadgeUpdatedPayload = z.infer<typeof AttentionBadgeUpdatedPayloadSchema>;
 
 /** Viewer-scoped `attention_pref_changed` payload — IDENTITY only, deliberately
  *  no resolved value: the tier read face is the single authority, and a value
@@ -217,9 +205,7 @@ export const AttentionPrefChangedPayloadSchema = z.object({
   workspace_id: z.string(),
   conversation_id: z.string().nullable(),
 });
-export type AttentionPrefChangedPayload = z.infer<
-  typeof AttentionPrefChangedPayloadSchema
->;
+export type AttentionPrefChangedPayload = z.infer<typeof AttentionPrefChangedPayloadSchema>;
 
 // ───────────────────────────── Activity list (②c) ─────────────────────────────
 //
@@ -253,11 +239,7 @@ export type ActivitySalience = (typeof ACTIVITY_SALIENCES)[number];
  * (`task_needs_review`), read-cleared like a mention — see
  * docs/activity-lifecycle-v1.md §5.1 (v2).
  */
-export const ACTIVITY_ITEM_KINDS = [
-  'mention',
-  'agent_failed',
-  'unread',
-] as const;
+export const ACTIVITY_ITEM_KINDS = ['mention', 'agent_failed', 'unread'] as const;
 export type ActivityItemKind = (typeof ACTIVITY_ITEM_KINDS)[number];
 
 /**

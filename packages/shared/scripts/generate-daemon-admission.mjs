@@ -1,12 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const source = fileURLToPath(
-  new URL('../src/daemon-admission.json', import.meta.url),
-);
-const output = fileURLToPath(
-  new URL('../src/daemon-admission.generated.ts', import.meta.url),
-);
+const source = fileURLToPath(new URL('../src/daemon-admission.json', import.meta.url));
+const output = fileURLToPath(new URL('../src/daemon-admission.generated.ts', import.meta.url));
 
 function fail(message) {
   throw new Error(`invalid daemon admission contract: ${message}`);
@@ -49,7 +45,7 @@ function parsedEventKinds(record) {
   if (!Array.isArray(value) || value.length !== 13) {
     fail('parsedEventKinds must contain 13 arms');
   }
-  if (value.some(kind => typeof kind !== 'string' || kind.length === 0)) {
+  if (value.some((kind) => typeof kind !== 'string' || kind.length === 0)) {
     fail('parsedEventKinds must contain non-empty strings');
   }
   if (new Set(value).size !== value.length) fail('parsedEventKinds must be unique');
@@ -58,15 +54,9 @@ function parsedEventKinds(record) {
 
 function render(record) {
   const hostProtocolVersion = positiveInteger(record, 'hostProtocolVersion');
-  const outboundProtocolVersion = positiveInteger(
-    record,
-    'outboundProtocolVersion',
-  );
+  const outboundProtocolVersion = positiveInteger(record, 'outboundProtocolVersion');
   const hostWebSocketPath = nonEmptyString(record, 'hostWebSocketPath');
-  const updateRequiredCloseReason = nonEmptyString(
-    record,
-    'updateRequiredCloseReason',
-  );
+  const updateRequiredCloseReason = nonEmptyString(record, 'updateRequiredCloseReason');
   const daemonEventKinds = eventKinds(record);
   const parsedKinds = parsedEventKinds(record);
   if (!hostWebSocketPath.startsWith('/')) {

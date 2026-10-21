@@ -57,7 +57,7 @@ describe('RunDaemonOptions.supervisorFactory — required-but-nullable contract'
     // don't actually call it — the assertion is just that the
     // assignment typechecks.
     const factory: NonNullable<RunDaemonOptions['supervisorFactory']> = () =>
-      ({} as SupervisorContract);
+      ({}) as SupervisorContract;
     const productionShape: RunDaemonOptions = {
       socketPath: '/tmp/x.sock',
       pidFilePath: '/tmp/x.pid',

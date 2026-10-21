@@ -21,7 +21,7 @@ import {
  * integration concern.
  */
 
-const roster: ShorthandResolver = handle => {
+const roster: ShorthandResolver = (handle) => {
   if (handle === 'Alice' || handle === 'Cindy') return 'agent';
   if (handle === 'shiki' || handle === 'alice') return 'human';
   return null;
@@ -84,9 +84,7 @@ describe('rewriteShorthandReferences — positions', () => {
   });
 
   it('rewrites in headings, emphasis, and list items', () => {
-    expect(
-      rewriteShorthandReferences('# hi @Alice\n\n- *@shiki* please', roster),
-    ).toBe(
+    expect(rewriteShorthandReferences('# hi @Alice\n\n- *@shiki* please', roster)).toBe(
       '# hi <silverhand://agent/Alice>\n\n- *<silverhand://human/shiki>* please',
     );
   });
@@ -114,21 +112,17 @@ describe('rewriteShorthandReferences — positions', () => {
     // Written with explicit counts rather than a loop so a failure names the case.
     // Each `\\` below is ONE source backslash.
     expect(rewriteShorthandReferences('\\@Alice', roster)).toBe('\\@Alice');
-    expect(rewriteShorthandReferences('\\\\@Alice', roster)).toBe(
-      '\\\\<silverhand://agent/Alice>',
-    );
-    expect(rewriteShorthandReferences('\\\\\\@Alice', roster)).toBe(
-      '\\\\\\@Alice',
-    );
+    expect(rewriteShorthandReferences('\\\\@Alice', roster)).toBe('\\\\<silverhand://agent/Alice>');
+    expect(rewriteShorthandReferences('\\\\\\@Alice', roster)).toBe('\\\\\\@Alice');
     expect(rewriteShorthandReferences('\\\\\\\\@Alice', roster)).toBe(
       '\\\\\\\\<silverhand://agent/Alice>',
     );
   });
 
   it('counts the run without disturbing the bytes around it', () => {
-    expect(
-      rewriteShorthandReferences('a\\\\@Alice and b\\@Cindy end', roster),
-    ).toBe('a\\\\<silverhand://agent/Alice> and b\\@Cindy end');
+    expect(rewriteShorthandReferences('a\\\\@Alice and b\\@Cindy end', roster)).toBe(
+      'a\\\\<silverhand://agent/Alice> and b\\@Cindy end',
+    );
   });
 
   it('does not let a preceding node lend its backslashes to the count', () => {
@@ -144,14 +138,10 @@ describe('rewriteShorthandReferences — positions', () => {
   it('delivers what an even backslash run rewrote, and nothing for an odd one', () => {
     // The round-trip is the point: `\\<silverhand://…>` is a literal backslash
     // followed by a real autolink, so the extractor reads it.
-    expect(
-      extractMessageReferences(
-        rewriteShorthandReferences('\\\\@Alice', roster),
-      ),
-    ).toEqual([{ kind: 'agent', handle: 'Alice' }]);
-    expect(
-      extractMessageReferences(rewriteShorthandReferences('\\@Alice', roster)),
-    ).toEqual([]);
+    expect(extractMessageReferences(rewriteShorthandReferences('\\\\@Alice', roster))).toEqual([
+      { kind: 'agent', handle: 'Alice' },
+    ]);
+    expect(extractMessageReferences(rewriteShorthandReferences('\\@Alice', roster))).toEqual([]);
   });
 
   it('treats an entity-encoded @ as not the alias form', () => {
@@ -164,25 +154,21 @@ describe('rewriteShorthandReferences — positions', () => {
     // result, producing a chip-less literal that also delivers to nothing.
     const long = 'a'.repeat(ENTITY_NAME_MAX_LENGTH + 1);
     const always: ShorthandResolver = () => 'agent';
-    expect(rewriteShorthandReferences(`cc @${long}`, always)).toBe(
-      `cc @${long}`,
-    );
+    expect(rewriteShorthandReferences(`cc @${long}`, always)).toBe(`cc @${long}`);
   });
 
   it('rewrites every occurrence, keeping surrounding bytes intact', () => {
     // Multi-byte prose before and between the handles: offsets come from the
     // source, so a CJK run must not shift a splice.
-    expect(
-      rewriteShorthandReferences('请 @Alice 复核，然后 @Alice 合并', roster),
-    ).toBe(
+    expect(rewriteShorthandReferences('请 @Alice 复核，然后 @Alice 合并', roster)).toBe(
       '请 <silverhand://agent/Alice> 复核，然后 <silverhand://agent/Alice> 合并',
     );
   });
 
   it('leaves an already-canonical body untouched while rewriting the rest', () => {
-    expect(
-      rewriteShorthandReferences('<silverhand://agent/Alice> and @shiki', roster),
-    ).toBe('<silverhand://agent/Alice> and <silverhand://human/shiki>');
+    expect(rewriteShorthandReferences('<silverhand://agent/Alice> and @shiki', roster)).toBe(
+      '<silverhand://agent/Alice> and <silverhand://human/shiki>',
+    );
   });
 });
 
@@ -207,8 +193,7 @@ describe('rewriteShorthandReferences — the rewritten body delivers', () => {
       '',
       'mail me@example.com',
     ].join('\n');
-    expect(extractMessageReferences(rewriteShorthandReferences(body, roster)))
-      .toEqual([]);
+    expect(extractMessageReferences(rewriteShorthandReferences(body, roster))).toEqual([]);
   });
 
   it('delivers once per addressee however many times the shorthand appears', () => {
@@ -229,10 +214,7 @@ describe('rewriteShorthandReferences — the rewritten body delivers', () => {
  */
 describe('findShorthandCandidates', () => {
   it('lists the handles whose delivery depends on the roster, once each', () => {
-    expect(findShorthandCandidates('cc @Alice, @nobody and @Alice')).toEqual([
-      'Alice',
-      'nobody',
-    ]);
+    expect(findShorthandCandidates('cc @Alice, @nobody and @Alice')).toEqual(['Alice', 'nobody']);
   });
 
   it('is empty for a body with no @ at all', () => {
@@ -282,10 +264,7 @@ describe('rewriteShorthandReferences — a body that begins with a BOM', () => {
 
   it('finds and rewrites EVERY shorthand, including the last one', () => {
     // Two handles, because the shift only dropped the occurrence nearest the end.
-    expect(findShorthandCandidates(`${bom}@Alice and @shiki`)).toEqual([
-      'Alice',
-      'shiki',
-    ]);
+    expect(findShorthandCandidates(`${bom}@Alice and @shiki`)).toEqual(['Alice', 'shiki']);
     expect(rewriteShorthandReferences(`${bom}@Alice and @shiki`, roster)).toBe(
       `${bom}<silverhand://agent/Alice> and <silverhand://human/shiki>`,
     );
@@ -321,9 +300,7 @@ describe('rewriteShorthandReferences — a body that begins with a BOM', () => {
     //
     // A coordinate rule that removed the whole run would parse both as code and
     // rewrite neither, which is a body whose author is never told.
-    expect(rewriteShorthandReferences(`${bom}    @Alice`, roster)).toBe(
-      `${bom}    @Alice`,
-    );
+    expect(rewriteShorthandReferences(`${bom}    @Alice`, roster)).toBe(`${bom}    @Alice`);
     expect(findShorthandCandidates(`${bom}    @Alice`)).toEqual([]);
     expect(rewriteShorthandReferences(`${bom}${bom}    @Alice`, roster)).toBe(
       `${bom}${bom}    <silverhand://agent/Alice>`,
@@ -353,10 +330,9 @@ describe('rewriteShorthandReferences — a body that begins with a BOM', () => {
         rewriteShorthandReferences(`${invisible}@Alice`, roster),
         JSON.stringify(invisible),
       ).toBe(`${invisible}<silverhand://agent/Alice>`);
-      expect(
-        findShorthandCandidates(`${invisible}@Alice`),
-        JSON.stringify(invisible),
-      ).toEqual(['Alice']);
+      expect(findShorthandCandidates(`${invisible}@Alice`), JSON.stringify(invisible)).toEqual([
+        'Alice',
+      ]);
     }
   });
 });

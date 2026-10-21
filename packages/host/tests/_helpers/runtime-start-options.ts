@@ -32,9 +32,7 @@ export function testStartOptions(
 export function testStartOptions(
   overrides?: TestStartOptionsOverrides & { sessionScope?: 'conversation' },
 ): ConversationStartOptions;
-export function testStartOptions(
-  overrides: TestStartOptionsOverrides = {},
-): StartOptions {
+export function testStartOptions(overrides: TestStartOptionsOverrides = {}): StartOptions {
   const agentId = overrides.agentId ?? 'a1';
   const agentName = overrides.agentName ?? 'tester';
   const conversationId = overrides.conversationId ?? 'c1';
@@ -44,8 +42,7 @@ export function testStartOptions(
   // An `agent_home` ref must carry THIS agent's own home workspace id (the
   // daemon resolver validates id == agentHomeWorkspaceId(agentId)); a regular
   // workspace uses an arbitrary id.
-  const workspaceId =
-    workspaceKind === 'agent_home' ? agentHomeWorkspaceId(agentId) : 'ws1';
+  const workspaceId = workspaceKind === 'agent_home' ? agentHomeWorkspaceId(agentId) : 'ws1';
 
   const common = {
     agent: {
@@ -126,18 +123,19 @@ export function testStartOptions(
  * disk; override it to model the lazy window (never-spawned member workspace)
  * or a half-seed → `path: null`.
  */
-export function testRuntimeStartResolveDeps(overrides: {
-  agentHomeRootDir?: string;
-  computerId?: string;
-  bundleL2Present?: (bundleDir: string) => Promise<boolean>;
-  resolveComputerId?: () => string;
-} = {}): RuntimeStartResolveDeps {
+export function testRuntimeStartResolveDeps(
+  overrides: {
+    agentHomeRootDir?: string;
+    computerId?: string;
+    bundleL2Present?: (bundleDir: string) => Promise<boolean>;
+    resolveComputerId?: () => string;
+  } = {},
+): RuntimeStartResolveDeps {
   const computerId = overrides.computerId ?? 'test-computer';
   return {
     // Never home-derived: a test that does not care which root is used still
     // gets an explicit, obviously-fake one rather than the real user home.
-    agentHomeRootDir:
-      overrides.agentHomeRootDir ?? join(tmpdir(), 'silverhand-test-agents-root'),
+    agentHomeRootDir: overrides.agentHomeRootDir ?? join(tmpdir(), 'silverhand-test-agents-root'),
     bundleL2Present: overrides.bundleL2Present ?? (async () => true),
     resolveComputerId: overrides.resolveComputerId ?? (() => computerId),
   };

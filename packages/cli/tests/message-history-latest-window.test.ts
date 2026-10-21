@@ -27,14 +27,18 @@ interface ReadHistoryCall {
 }
 
 function fakeReadHistoryClient(): {
-  client: { readHistory: (input: ReadHistoryCall) => Promise<{ target: { thread_root_id: null }; messages: [] }> };
+  client: {
+    readHistory: (
+      input: ReadHistoryCall,
+    ) => Promise<{ target: { thread_root_id: null }; messages: [] }>;
+  };
   capture: () => ReadHistoryCall | null;
 } {
   let last: ReadHistoryCall | null = null;
   return {
     capture: () => last,
     client: {
-      readHistory: async input => {
+      readHistory: async (input) => {
         last = input;
         return { target: { thread_root_id: null }, messages: [] };
       },
@@ -82,7 +86,9 @@ describe('message history latest-window default', () => {
       await history.run({
         env,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        client: { readHistory: async () => ({ target: { thread_root_id: null }, messages: [] }) } as any,
+        client: {
+          readHistory: async () => ({ target: { thread_root_id: null }, messages: [] }),
+        } as any,
         args: parsedArgs({
           target: '#conv:Conversation0001',
           'before-seq': '10',

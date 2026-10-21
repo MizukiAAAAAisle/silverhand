@@ -124,11 +124,7 @@ export class BackendClient {
     stale_event_id: string;
     resolution_reason: 'obsolete';
   }): Promise<{ ok: boolean }> {
-    return this.request(
-      'POST',
-      internalPaths.agentResolveStaleMessage(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentResolveStaleMessage(this.env.agentId), input);
   }
 
   /** Add or remove the agent's own emoji reaction on a message
@@ -151,31 +147,17 @@ export class BackendClient {
    *  the server normalizes to the canonical root and backfills its prior
    *  history into this agent's inbox. */
   followThread(input: AgentFollowThreadInput): Promise<AgentFollowThreadOutput> {
-    return this.request(
-      'POST',
-      internalPaths.agentFollowThread(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentFollowThread(this.env.agentId), input);
   }
 
   /** Stop following a reply cluster (§5). Idempotent; a later mention /
    *  reply re-follows automatically. */
-  unfollowThread(
-    input: AgentFollowThreadInput,
-  ): Promise<AgentFollowThreadOutput> {
-    return this.request(
-      'POST',
-      internalPaths.agentUnfollowThread(this.env.agentId),
-      input,
-    );
+  unfollowThread(input: AgentFollowThreadInput): Promise<AgentFollowThreadOutput> {
+    return this.request('POST', internalPaths.agentUnfollowThread(this.env.agentId), input);
   }
 
   createChannel(input: AgentCreateChannelInput): Promise<{ channel_id: string }> {
-    return this.request(
-      'POST',
-      internalPaths.agentCreateChannel(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentCreateChannel(this.env.agentId), input);
   }
 
   /**
@@ -199,45 +181,25 @@ export class BackendClient {
      *  membership is or is not a cluster-level thing. */
     target: string;
   }): Promise<ConversationMembersResponse> {
-    return this.request(
-      'POST',
-      internalPaths.agentAddConversationMember(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentAddConversationMember(this.env.agentId), input);
   }
 
   readHistory(input: AgentReadHistoryInput): Promise<AgentReadHistoryDto> {
-    return this.request(
-      'POST',
-      internalPaths.agentReadHistory(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentReadHistory(this.env.agentId), input);
   }
 
   listWorkspaces(): Promise<AgentListWorkspacesDto> {
-    return this.request(
-      'GET',
-      internalPaths.agentListWorkspaces(this.env.agentId),
-    );
+    return this.request('GET', internalPaths.agentListWorkspaces(this.env.agentId));
   }
 
   listChannels(input: { workspace_id?: string } = {}): Promise<AgentListChannelsDto> {
-    return this.request(
-      'GET',
-      internalPaths.agentListChannels(this.env.agentId),
-      undefined,
-      { workspace_id: input.workspace_id },
-    );
+    return this.request('GET', internalPaths.agentListChannels(this.env.agentId), undefined, {
+      workspace_id: input.workspace_id,
+    });
   }
 
-  searchMessages(
-    input: AgentSearchMessagesInput,
-  ): Promise<AgentSearchMessagesDto> {
-    return this.request(
-      'POST',
-      internalPaths.agentSearchMessages(this.env.agentId),
-      input,
-    );
+  searchMessages(input: AgentSearchMessagesInput): Promise<AgentSearchMessagesDto> {
+    return this.request('POST', internalPaths.agentSearchMessages(this.env.agentId), input);
   }
 
   // ── Tasks ────────────────────────────────────────────────────────
@@ -275,11 +237,7 @@ export class BackendClient {
   }
 
   claimTasks(input: ClaimTasksInput): Promise<ClaimTasksResult> {
-    return this.request(
-      'POST',
-      internalPaths.agentClaimConversationTasks(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentClaimConversationTasks(this.env.agentId), input);
   }
 
   unclaimTask(input: {
@@ -313,11 +271,7 @@ export class BackendClient {
    *  with the typed envelope, so the caller reads `success` / `code` from
    *  the result. */
   editTask(input: EditTaskInput): Promise<TaskEditResult> {
-    return this.request(
-      'POST',
-      internalPaths.agentEditConversationTask(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentEditConversationTask(this.env.agentId), input);
   }
 
   getTaskDetail(input: {
@@ -341,37 +295,22 @@ export class BackendClient {
 
   // ── Schedules ────────────────────────────────────────────────────
   createSchedule(input: ScheduleCreateInput): Promise<ScheduleCreateOutput> {
-    return this.request(
-      'POST',
-      internalPaths.agentScheduleCreate(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentScheduleCreate(this.env.agentId), input);
   }
 
   listSchedules(input: ScheduleListInput): Promise<ScheduleListOutput> {
-    return this.request(
-      'POST',
-      internalPaths.agentScheduleList(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentScheduleList(this.env.agentId), input);
   }
 
   cancelSchedule(input: ScheduleCancelInput): Promise<ScheduleCancelOutput> {
-    return this.request(
-      'POST',
-      internalPaths.agentScheduleCancel(this.env.agentId),
-      input,
-    );
+    return this.request('POST', internalPaths.agentScheduleCancel(this.env.agentId), input);
   }
 
   // ── Profile (L1 agent-global config) ─────────────────────────────
   /** Read the agent's own profile MCP config (#task:1135). `raw` is the
    *  verbatim `mcp.json` text, or `null` when the agent has none. */
   getProfileMcp(): Promise<{ raw: string | null }> {
-    return this.request(
-      'GET',
-      internalPaths.agentProfileMcpGet(this.env.agentId),
-    );
+    return this.request('GET', internalPaths.agentProfileMcpGet(this.env.agentId));
   }
 
   /** Replace the agent's own profile MCP config (#task:1135). Sends the
@@ -381,9 +320,7 @@ export class BackendClient {
    *  owning host. Effect is next-spawn (no hot reload). */
   async setProfileMcp(raw: string): Promise<{ ok: boolean; bytes_written: number }> {
     markRequestAttempted();
-    const url =
-      this.env.serverUrl +
-      internalPaths.agentProfileMcpSet(this.env.agentId);
+    const url = this.env.serverUrl + internalPaths.agentProfileMcpSet(this.env.agentId);
     let res: Response;
     try {
       res = await fetch(url, {
@@ -406,24 +343,17 @@ export class BackendClient {
    *  tools/list) and returns the diagnostic snapshot. `serverName` is the RAW
    *  name; connection/handshake/tools failures come back as
    *  `{ ok:false, phase, message }`, not thrown. */
-  probeProfileMcp(
-    serverName: string,
-    includeTools: boolean,
-  ): Promise<McpProbeResult> {
-    return this.request(
-      'POST',
-      internalPaths.agentProfileMcpProbe(this.env.agentId),
-      { server_name: serverName, include_tools: includeTools },
-    );
+  probeProfileMcp(serverName: string, includeTools: boolean): Promise<McpProbeResult> {
+    return this.request('POST', internalPaths.agentProfileMcpProbe(this.env.agentId), {
+      server_name: serverName,
+      include_tools: includeTools,
+    });
   }
 
   /** Read the agent's own profile metadata (#task:1178) — display_name /
    *  description / avatar_url + identity. Backs `silverhand profile get`. */
   getProfile(): Promise<{ profile: AgentProfileDto }> {
-    return this.request(
-      'GET',
-      internalPaths.agentProfileGet(this.env.agentId),
-    );
+    return this.request('GET', internalPaths.agentProfileGet(this.env.agentId));
   }
 
   /** Read ANOTHER agent's profile by handle (#task:1823) — read-only, same
@@ -431,10 +361,7 @@ export class BackendClient {
    *  the co-membership is evaluated in (omitted = the source conversation's).
    *  A target the caller cannot see is an ordinary `not_found`. Backs
    *  `silverhand profile get --handle <name>`. */
-  getPeerProfile(
-    handle: string,
-    workspaceId?: string,
-  ): Promise<{ profile: AgentProfileDto }> {
+  getPeerProfile(handle: string, workspaceId?: string): Promise<{ profile: AgentProfileDto }> {
     const query = new URLSearchParams({ handle });
     if (workspaceId !== undefined) query.set('workspace_id', workspaceId);
     return this.request(
@@ -457,9 +384,7 @@ export class BackendClient {
       | { action: 'clear' };
   }): Promise<{ profile: AgentProfileDto }> {
     markRequestAttempted();
-    const url =
-      this.env.serverUrl +
-      internalPaths.agentProfileUpdate(this.env.agentId);
+    const url = this.env.serverUrl + internalPaths.agentProfileUpdate(this.env.agentId);
     const form = new FormData();
     if (input.display_name !== undefined) form.append('display_name', input.display_name);
     if (input.description !== undefined) form.append('description', input.description);
@@ -524,9 +449,7 @@ export class BackendClient {
         retriable: false,
       });
     }
-    const url =
-      this.env.serverUrl +
-      internalPaths.agentUploadAttachment(this.env.agentId);
+    const url = this.env.serverUrl + internalPaths.agentUploadAttachment(this.env.agentId);
     const form = new FormData();
     // The address first, verbatim: the CLI does not decompose or normalize it,
     // so the ONE grammar authority on the server side answers a malformed
@@ -568,10 +491,7 @@ export class BackendClient {
    *  filename, and content-type are unchanged — only the content updates, so a
    *  reviewer's resolved local path (`file view`) stays valid across iterations.
    *  Backend enforces creator ownership + same-channel scope. */
-  async updateAttachment(input: {
-    attachmentId: string;
-    path: string;
-  }): Promise<AttachmentDto> {
+  async updateAttachment(input: { attachmentId: string; path: string }): Promise<AttachmentDto> {
     if (!isAbsolute(input.path)) {
       throw new CliError({
         code: 'validation_error',
@@ -623,10 +543,7 @@ export class BackendClient {
   }
 
   locateAttachment(attachmentId: string): Promise<AttachmentLocateDto> {
-    return this.request(
-      'GET',
-      internalPaths.agentLocateAttachment(this.env.agentId, attachmentId),
-    );
+    return this.request('GET', internalPaths.agentLocateAttachment(this.env.agentId, attachmentId));
   }
 
   async downloadAttachment(attachmentId: string): Promise<{
@@ -635,8 +552,7 @@ export class BackendClient {
   }> {
     markRequestAttempted();
     const url =
-      this.env.serverUrl +
-      internalPaths.agentDownloadAttachment(this.env.agentId, attachmentId);
+      this.env.serverUrl + internalPaths.agentDownloadAttachment(this.env.agentId, attachmentId);
     let res: Response;
     try {
       res = await fetch(url, {

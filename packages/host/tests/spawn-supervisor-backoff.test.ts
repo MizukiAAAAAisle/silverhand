@@ -54,7 +54,7 @@ interface ReadyFrameOverrides {
   socketPath: string;
 }
 
-const READY_FIXTURE = wireFixtures.find(f => f.name === 'event/ready');
+const READY_FIXTURE = wireFixtures.find((f) => f.name === 'event/ready');
 if (!READY_FIXTURE) {
   throw new Error('expected wireFixtures to include event/ready');
 }
@@ -69,13 +69,15 @@ if (READY_BASE.protocol_version !== HOST_PROTOCOL_VERSION) {
 }
 
 function buildReadyFrame(o: ReadyFrameOverrides): string {
-  return JSON.stringify({
-    ...READY_BASE,
-    daemon_version: o.version,
-    instance_id: `instance-${o.pid}`,
-    socket_path: o.socketPath,
-    daemon_pid: o.pid,
-  }) + '\n';
+  return (
+    JSON.stringify({
+      ...READY_BASE,
+      daemon_version: o.version,
+      instance_id: `instance-${o.pid}`,
+      socket_path: o.socketPath,
+      daemon_pid: o.pid,
+    }) + '\n'
+  );
 }
 
 // ── Fake clock ─────────────────────────────────────────────────────
@@ -124,14 +126,14 @@ class FakeClock implements SpawnClock {
     // Hard cap iterations to catch runaway test bugs early.
     for (let safety = 0; safety < 1000; safety++) {
       const due = this.timers
-        .filter(t => !t.cleared && t.deadline <= target)
+        .filter((t) => !t.cleared && t.deadline <= target)
         .sort((a, b) => a.deadline - b.deadline || a.id - b.id);
       if (due.length === 0) break;
       const next = due[0]!;
       this.current = next.deadline;
       // Mark fired by removing from registry BEFORE invoking, so
       // re-arming the same slot inside the callback is observable.
-      this.timers = this.timers.filter(t => t !== next);
+      this.timers = this.timers.filter((t) => t !== next);
       next.fn();
     }
     this.current = target;
@@ -139,7 +141,7 @@ class FakeClock implements SpawnClock {
 
   /** Count of un-cleared, un-fired timers. */
   get pendingCount(): number {
-    return this.timers.filter(t => !t.cleared).length;
+    return this.timers.filter((t) => !t.cleared).length;
   }
 }
 
@@ -288,8 +290,8 @@ async function spawnAndHandshake(args?: {
     socketPath: '/tmp/silverhand-fake.sock',
   });
   const handle = await pending;
-  handle.onDaemonGenerationChanged(info => fx.generationEvents.push(info));
-  handle.onExit(info => fx.exitEvents.push(info));
+  handle.onDaemonGenerationChanged((info) => fx.generationEvents.push(info));
+  handle.onExit((info) => fx.exitEvents.push(info));
   return { ...fx, handle };
 }
 
@@ -337,7 +339,11 @@ describe('spawnDaemonChild supervisor — backoff + respawn', () => {
   });
   afterEach(async () => {
     for (const h of liveHandles) {
-      try { await h.kill({ gracefulMs: 10 }); } catch { /* ignore */ }
+      try {
+        await h.kill({ gracefulMs: 10 });
+      } catch {
+        /* ignore */
+      }
     }
   });
 
@@ -513,7 +519,7 @@ describe('spawnDaemonChild supervisor — backoff + respawn', () => {
    */
   it('successful run > successResetMs resets backoff + attempt counter', async () => {
     const fx = await spawnAndHandshake({
-      maxRestarts: 1,             // budget = 1 unique crash before fatal
+      maxRestarts: 1, // budget = 1 unique crash before fatal
       successResetMs: 5_000,
       backoffSchedule: [100, 9_999], // [0]=100ms easy to assert
     });

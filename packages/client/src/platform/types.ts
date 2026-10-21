@@ -129,9 +129,10 @@ export interface AppUpdateCapability {
  *  passes the starting config and uploads what comes back. */
 export interface AvatarMakerCapability {
   /** Null when the person closes the editor without choosing. */
-  edit(input: {
+  edit(input: { config: { parts: Record<string, number>; bg: number } }): Promise<{
     config: { parts: Record<string, number>; bg: number };
-  }): Promise<{ config: { parts: Record<string, number>; bg: number }; pngBytes: Uint8Array<ArrayBuffer> } | null>;
+    pngBytes: Uint8Array<ArrayBuffer>;
+  } | null>;
 }
 
 /** Installed once by an application entry point, before mounting the UI. */

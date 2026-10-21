@@ -43,8 +43,7 @@ const ROOT = 'NbBXIEpDUnSWW48x';
 
 const stream = (threadRootId: string | null = null) => ({
   conversationId: requireAddressableId(CONV, 'test'),
-  threadRootId:
-    threadRootId === null ? null : requireAddressableId(threadRootId, 'test'),
+  threadRootId: threadRootId === null ? null : requireAddressableId(threadRootId, 'test'),
 });
 
 /**
@@ -74,26 +73,25 @@ const FORMS: ReadonlyArray<{
       title: fixedConversationTitle('general'),
     },
     taught: `${NAMED_STREAM_ADDRESS_PREFIX}<workspace>/<title>`,
-    instantiate: form =>
-      form.replace('<workspace>', 'silverhand').replace('<title>', 'general'),
+    instantiate: (form) => form.replace('<workspace>', 'silverhand').replace('<title>', 'general'),
   },
   {
     label: 'direct_pair',
     naming: { kind: 'direct_pair', otherHandle: 'shiki' },
     taught: `${DIRECT_PAIR_SHORTHAND_PREFIX}<handle>`,
-    instantiate: form => form.replace('<handle>', 'shiki'),
+    instantiate: (form) => form.replace('<handle>', 'shiki'),
   },
   {
     label: 'id_only',
     naming: { kind: 'id_only' },
     taught: `${CONVERSATION_ADDRESS_PREFIX}<id>`,
-    instantiate: form => form.replace('<id>', CONV),
+    instantiate: (form) => form.replace('<id>', CONV),
   },
   {
     label: 'unnameable',
     naming: { kind: 'unnameable', reason: 'agent_home' },
     taught: `${CONVERSATION_ADDRESS_PREFIX}<id>`,
-    instantiate: form => form.replace('<id>', CONV),
+    instantiate: (form) => form.replace('<id>', CONV),
   },
 ];
 
@@ -191,9 +189,7 @@ describe('platform prompt teaches the absolute delivery target', () => {
       expect(parsedThreadRootId(inThread), inThread).toBe(ROOT);
       // And it is the same token the emitter produces for the threaded stream —
       // teaching that parses but differs from what arrives is still drift.
-      expect(formatStreamAddressToken(stream(ROOT), form.naming).token).toBe(
-        inThread,
-      );
+      expect(formatStreamAddressToken(stream(ROOT), form.naming).token).toBe(inThread);
     }
   });
 

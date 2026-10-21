@@ -1,9 +1,7 @@
 // AUTO-SPLIT from the former monolithic api/dto.ts (#task:963).
 // Bounded context: runtime. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
-import {
-  RuntimeKindSchema,
-} from '../db/schema.js';
+import { RuntimeKindSchema } from '../db/schema.js';
 
 // Ephemeral per-agent run state used by `agent_activity` realtime events and
 // reconnect snapshots. These rows are not persisted to the messages DB.
@@ -30,9 +28,7 @@ export const AgentRunTerminalReasonSchema = z.enum([
   'timeout',
   'conversation_closed',
 ]);
-export type AgentRunTerminalReason = z.infer<
-  typeof AgentRunTerminalReasonSchema
->;
+export type AgentRunTerminalReason = z.infer<typeof AgentRunTerminalReasonSchema>;
 
 export const AgentActivitySnippetKindSchema = z.enum([
   'thinking',
@@ -41,9 +37,7 @@ export const AgentActivitySnippetKindSchema = z.enum([
   // never blended into the thinking/text streaming semantics.
   'api_response',
 ]);
-export type AgentActivitySnippetKind = z.infer<
-  typeof AgentActivitySnippetKindSchema
->;
+export type AgentActivitySnippetKind = z.infer<typeof AgentActivitySnippetKindSchema>;
 
 export const AgentRunStateSchema = z.object({
   runId: z.string(),
@@ -78,9 +72,7 @@ export const RuntimeAvailabilityStateSchema = z.enum([
   'absent',
   'unknown',
 ]);
-export type RuntimeAvailabilityState = z.infer<
-  typeof RuntimeAvailabilityStateSchema
->;
+export type RuntimeAvailabilityState = z.infer<typeof RuntimeAvailabilityStateSchema>;
 
 export const RuntimeDetectionReasonSchema = z.enum([
   'resolved',
@@ -88,9 +80,7 @@ export const RuntimeDetectionReasonSchema = z.enum([
   'not_found',
   'probe_failed',
 ]);
-export type RuntimeDetectionReason = z.infer<
-  typeof RuntimeDetectionReasonSchema
->;
+export type RuntimeDetectionReason = z.infer<typeof RuntimeDetectionReasonSchema>;
 
 export const RuntimeInfoSchema = z.object({
   kind: RuntimeKindSchema,
@@ -106,6 +96,4 @@ export const RuntimeCatalogResponseSchema = z.object({
   runtimes: z.array(RuntimeInfoSchema),
   detected_at: z.number(),
 });
-export type RuntimeCatalogResponse = z.infer<
-  typeof RuntimeCatalogResponseSchema
->;
+export type RuntimeCatalogResponse = z.infer<typeof RuntimeCatalogResponseSchema>;

@@ -59,8 +59,7 @@ export function parseArgs(argv: string[], opts: ParseOptions = {}): ParsedArgs {
       }
       if (value === undefined) {
         const next = argv[i + 1];
-        const looksLikeValue =
-          !booleans.has(key) && next !== undefined && !next.startsWith('--');
+        const looksLikeValue = !booleans.has(key) && next !== undefined && !next.startsWith('--');
         if (looksLikeValue) {
           value = next;
           i += 2;
@@ -134,7 +133,7 @@ export function flagStringArray(args: ParsedArgs, name: string): string[] | unde
 export function flagNumberArray(args: ParsedArgs, name: string): number[] | undefined {
   const arr = flagStringArray(args, name);
   if (arr === undefined) return undefined;
-  return arr.map(s => {
+  return arr.map((s) => {
     const n = Number(s);
     if (!Number.isFinite(n)) {
       throw new Error(`flag --${name} expects numbers, got ${JSON.stringify(s)}`);

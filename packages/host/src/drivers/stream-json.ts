@@ -19,9 +19,7 @@ import { type ParsedEvent } from './index.js';
 
 /** Optional per-driver classifier for a terminal `result`-frame error
  *  message — lets a driver tag e.g. `session_not_found` as fatal. */
-export type StreamJsonErrorClassifier = (
-  message: string,
-) => { code?: string; fatal?: boolean };
+export type StreamJsonErrorClassifier = (message: string) => { code?: string; fatal?: boolean };
 
 /** Encode one user turn for the runtime's stdin (the kickoff/notify
  *  message). Identical across Claude-shaped runtimes. `payloadUuid`
@@ -130,8 +128,7 @@ export function parseStreamJsonLine(
             events.push({
               kind: 'tool_output',
               name: typeof block.name === 'string' ? block.name : undefined,
-              toolCallId:
-                typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined,
+              toolCallId: typeof block.tool_use_id === 'string' ? block.tool_use_id : undefined,
               outcome,
             });
           }
@@ -142,8 +139,7 @@ export function parseStreamJsonLine(
 
     case 'result': {
       const subtype = typeof event.subtype === 'string' ? event.subtype : 'success';
-      const stopReason =
-        typeof event.stop_reason === 'string' ? event.stop_reason : null;
+      const stopReason = typeof event.stop_reason === 'string' ? event.stop_reason : null;
       const errorIfNotBudget = (fallback: string) => {
         if (stopReason !== 'max_tokens') {
           const detail = collectResultError(event) || fallback;
@@ -176,15 +172,13 @@ export function parseStreamJsonLine(
         case 'error_max_structured_output_retries':
           events.push({
             kind: 'error',
-            message:
-              collectResultError(event) || 'Structured output retries exceeded',
+            message: collectResultError(event) || 'Structured output retries exceeded',
           });
           break;
       }
       events.push({
         kind: 'turn_end',
-        sessionId:
-          typeof event.session_id === 'string' ? event.session_id : undefined,
+        sessionId: typeof event.session_id === 'string' ? event.session_id : undefined,
       });
       break;
     }
@@ -200,9 +194,7 @@ export function parseStreamJsonLine(
           ? event.command_uuid
           : null;
       const state =
-        event.state === 'queued' ||
-        event.state === 'started' ||
-        event.state === 'completed'
+        event.state === 'queued' || event.state === 'started' || event.state === 'completed'
           ? event.state
           : null;
       if (commandUuid && state) {
@@ -256,8 +248,7 @@ function parseStreamJsonApiError(event: any, runtimeLabel?: string): ParsedEvent
     typeof event.retryAttempt === 'number' && Number.isFinite(event.retryAttempt)
       ? event.retryAttempt
       : null;
-  const code =
-    causeCode === 'ConnectionRefused' ? 'api_connection_refused' : 'api_error';
+  const code = causeCode === 'ConnectionRefused' ? 'api_connection_refused' : 'api_error';
   const prefix = runtimeLabel ? `${runtimeLabel} API` : 'API';
   const base =
     causeCode === 'ConnectionRefused'

@@ -1,12 +1,5 @@
 import { execFile, spawn, type ChildProcess } from 'node:child_process';
-import {
-  closeSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  readdirSync,
-  unlinkSync,
-} from 'node:fs';
+import { closeSync, mkdirSync, openSync, readFileSync, readdirSync, unlinkSync } from 'node:fs';
 import { Socket } from 'node:net';
 import { hostname } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
@@ -220,9 +213,7 @@ export async function runConnectCommand(
       connectToken: parsed.options.connectToken,
     });
   } catch (err) {
-    process.stderr.write(
-      `silverhand-daemon connect: ${(err as Error).message}\n`,
-    );
+    process.stderr.write(`silverhand-daemon connect: ${(err as Error).message}\n`);
     return 1;
   }
   let dataRoot: string;
@@ -299,7 +290,7 @@ export async function runConnectCommand(
     installSignals: true,
     writeStdoutHandshake: false,
     alsoStderr: parsed.options.alsoStderr,
-    supervisorFactory: deps => new Supervisor(deps),
+    supervisorFactory: (deps) => new Supervisor(deps),
   });
   logDaemon(running.logger, {
     action: 'connect_ready',
@@ -409,7 +400,7 @@ export async function runStopCommand(
       process.stderr.write(
         [
           'silverhand-daemon stop: multiple Silverhand daemons are running; pass --data-root.',
-          ...discovered.targets.map(root => `  ${formatStopCommand(root)}`),
+          ...discovered.targets.map((root) => `  ${formatStopCommand(root)}`),
           '',
         ].join('\n'),
       );
@@ -602,14 +593,18 @@ async function runConnectDaemonMode(input: {
     );
   } catch (err) {
     closeSync(logFd);
-    process.stderr.write(`silverhand-daemon connect: failed to start daemon: ${(err as Error).message}\n`);
+    process.stderr.write(
+      `silverhand-daemon connect: failed to start daemon: ${(err as Error).message}\n`,
+    );
     return 1;
   }
   closeSync(logFd);
   child.unref();
 
   if (!child.pid) {
-    process.stderr.write('silverhand-daemon connect: failed to start daemon: child pid unavailable\n');
+    process.stderr.write(
+      'silverhand-daemon connect: failed to start daemon: child pid unavailable\n',
+    );
     return 1;
   }
 
@@ -754,15 +749,15 @@ export async function discoverStopTarget(deps: StopCommandDeps): Promise<StopTar
   if (liveTargets.length === 1) {
     return { status: 'found', dataRoot: liveTargets[0]!.dataRoot, pid: liveTargets[0]!.pid };
   }
-  return { status: 'ambiguous', targets: liveTargets.map(t => t.dataRoot) };
+  return { status: 'ambiguous', targets: liveTargets.map((t) => t.dataRoot) };
 }
 
 function listDefaultConnectDataRoots(): string[] {
   const computersRoot = computersRootDir(defaultSilverhandStateRoot());
   try {
     return readdirSync(computersRoot, { withFileTypes: true })
-      .filter(entry => entry.isDirectory())
-      .map(entry => join(computersRoot, entry.name));
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => join(computersRoot, entry.name));
   } catch {
     return [];
   }
@@ -806,7 +801,7 @@ async function waitForDetachedDaemonReady(
   while (Date.now() < deadline) {
     if (exit) return exit;
     const pid = readPidFile(opts.pidFilePath);
-    if (pid === child.pid && await canConnectUnixSocket(opts.socketPath)) {
+    if (pid === child.pid && (await canConnectUnixSocket(opts.socketPath))) {
       return { status: 'ready' };
     }
     await sleep(100);
@@ -815,7 +810,7 @@ async function waitForDetachedDaemonReady(
 }
 
 async function canConnectUnixSocket(socketPath: string): Promise<boolean> {
-  return new Promise(resolve => {
+  return new Promise((resolve) => {
     const sock = new Socket();
     let settled = false;
     const settle = (ok: boolean): void => {
@@ -852,7 +847,7 @@ async function waitForExit(pid: number, timeoutMs: number): Promise<'gone' | 'st
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function connectUsage(): string {

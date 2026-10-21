@@ -32,12 +32,7 @@ describe('redactSpawnArgs', () => {
 
   it('redacts an inline standing prompt but keeps the flag', () => {
     const prompt = 'You are Alice. L2 memory: internal workspace rules ...';
-    const redacted = redactSpawnArgs([
-      '--append-system-prompt',
-      prompt,
-      '--model',
-      'opus',
-    ]);
+    const redacted = redactSpawnArgs(['--append-system-prompt', prompt, '--model', 'opus']);
     const serialized = JSON.stringify(redacted);
     expect(serialized).not.toContain('internal workspace rules');
     expect(redacted[0]).toBe('--append-system-prompt');
@@ -65,12 +60,7 @@ describe('redactSpawnArgs', () => {
   });
 
   it('redacts the value of a two-token secret flag, keeping the flag name', () => {
-    const redacted = redactSpawnArgs([
-      '--api-key',
-      'sk-live-secret',
-      '--model',
-      'opus',
-    ]);
+    const redacted = redactSpawnArgs(['--api-key', 'sk-live-secret', '--model', 'opus']);
     const serialized = JSON.stringify(redacted);
     expect(serialized).not.toContain('sk-live-secret');
     expect(redacted[0]).toBe('--api-key');
@@ -80,12 +70,10 @@ describe('redactSpawnArgs', () => {
   });
 
   it('redacts two-token --token and --authorization values', () => {
-    expect(JSON.stringify(redactSpawnArgs(['--token', 'abc123']))).not.toContain(
+    expect(JSON.stringify(redactSpawnArgs(['--token', 'abc123']))).not.toContain('abc123');
+    expect(JSON.stringify(redactSpawnArgs(['--authorization', 'Bearer abc123']))).not.toContain(
       'abc123',
     );
-    expect(
-      JSON.stringify(redactSpawnArgs(['--authorization', 'Bearer abc123'])),
-    ).not.toContain('abc123');
   });
 
   it('redacts generic --auth / --header flags (no http prefix required)', () => {
@@ -226,11 +214,7 @@ describe('summarizeSilverhandEnvPresence', () => {
     ).toEqual({
       all_present: false,
       present_keys: ['SILVERHAND_CONVERSATION_ID'],
-      missing_keys: [
-        'SILVERHAND_AGENT_ID',
-        'SILVERHAND_SERVER_URL',
-        'SILVERHAND_AUTH_TOKEN',
-      ],
+      missing_keys: ['SILVERHAND_AGENT_ID', 'SILVERHAND_SERVER_URL', 'SILVERHAND_AUTH_TOKEN'],
     });
   });
 });
@@ -246,9 +230,7 @@ describe('summarizeSpawnPath', () => {
     const summary = summarizeSpawnPath(path);
     expect(summary.path_dir_count).toBe(4);
     expect(summary.path_dirs[0]).toBe('/Users/test/.codex/tmp/arg0/codex-arg0XY');
-    expect(summary.path_suspicious_dirs).toContain(
-      '/Users/test/.codex/tmp/arg0/codex-arg0XY',
-    );
+    expect(summary.path_suspicious_dirs).toContain('/Users/test/.codex/tmp/arg0/codex-arg0XY');
     expect(summary.path_relative_dirs).toEqual(['relative/dir']);
     expect(summary.path_nonexistent_dirs).toContain('/nonexistent-dir-xyz');
   });
@@ -282,15 +264,15 @@ describe('describeSpawnError', () => {
   });
 
   it('maps EBADARCH, EACCES, and ENOENT', () => {
-    expect(describeSpawnError(Object.assign(new Error('x'), { code: 'EBADARCH' })).readable).toContain(
-      'EBADARCH',
-    );
+    expect(
+      describeSpawnError(Object.assign(new Error('x'), { code: 'EBADARCH' })).readable,
+    ).toContain('EBADARCH');
     expect(describeSpawnError(Object.assign(new Error('x'), { errno: -13 })).readable).toContain(
       'EACCES',
     );
-    expect(describeSpawnError(Object.assign(new Error('x'), { code: 'ENOENT' })).readable).toContain(
-      'ENOENT',
-    );
+    expect(
+      describeSpawnError(Object.assign(new Error('x'), { code: 'ENOENT' })).readable,
+    ).toContain('ENOENT');
   });
 
   it('degrades gracefully on an unmapped error', () => {

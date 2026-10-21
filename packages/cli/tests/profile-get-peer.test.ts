@@ -42,10 +42,7 @@ function fakeClient(): { client: BackendClient; calls: Calls } {
   return { client, calls };
 }
 
-function run(
-  flags: Record<string, unknown>,
-  client: BackendClient,
-): Promise<unknown> {
+function run(flags: Record<string, unknown>, client: BackendClient): Promise<unknown> {
   const cmd = findCommand('profile', 'get')!;
   return cmd.run({
     env: {

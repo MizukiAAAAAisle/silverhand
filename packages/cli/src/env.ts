@@ -27,21 +27,20 @@ interface CliEnvBase {
   lastDeliveredSeqFile?: string;
 }
 
-export type CliEnv = CliEnvBase & (
-  | {
-      /** A ConversationSlot's ambient stream is its only correction target. */
-      slot: 'conversation';
-      conversationId: string;
-    }
-  | { slot: 'agent'; conversationId: null }
-);
+export type CliEnv = CliEnvBase &
+  (
+    | {
+        /** A ConversationSlot's ambient stream is its only correction target. */
+        slot: 'conversation';
+        conversationId: string;
+      }
+    | { slot: 'agent'; conversationId: null }
+  );
 
 /** Resolves the four command inputs. Throws a `CliError` (validation_error,
  *  exit 1) listing every missing key when any is absent — agents see one
  *  actionable error on stderr instead of trial-and-error. */
-export function loadEnv(
-  env: NodeJS.ProcessEnv = process.env,
-): CliEnv {
+export function loadEnv(env: NodeJS.ProcessEnv = process.env): CliEnv {
   const missing: string[] = [];
   const ambientConversationId = env[SILVERHAND_CONVERSATION_ID_ENV]?.trim();
   const agentId = env[SILVERHAND_AGENT_ID_ENV];

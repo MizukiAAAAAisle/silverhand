@@ -21,7 +21,10 @@ export default defineConfig({
             import.meta.dirname,
             "../../packages/app-ui/src/features/avatar-maker/model/avatar-library.json",
           ),
-          resolve(import.meta.dirname, "native/Sources/SilverhandNative/Resources/AvatarLibrary.json"),
+          resolve(
+            import.meta.dirname,
+            "native/Sources/SilverhandNative/Resources/AvatarLibrary.json",
+          ),
         );
         writeFileSync(
           resolve(import.meta.dirname, "native/Sources/SilverhandNative/Resources/Protocol.json"),

@@ -28,20 +28,11 @@
  * masquerading as this agent; a bare-existence check would still be unsafe.
  */
 
-import {
-  linkSync,
-  mkdirSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { linkSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import { z } from 'zod';
-import {
-  AGENT_HOME_SENTINEL_FILENAME,
-  AGENT_HOME_TEMPLATE_VERSION,
-} from './template.js';
+import { AGENT_HOME_SENTINEL_FILENAME, AGENT_HOME_TEMPLATE_VERSION } from './template.js';
 
 export const AgentHomeSentinelSchema = z
   .object({
@@ -94,9 +85,7 @@ export function readSentinel(agentDir: string): ReadSentinelResult {
   } catch (err) {
     return {
       kind: 'invalid',
-      reason: `sentinel is not valid JSON: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      reason: `sentinel is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
     };
   }
   const validated = AgentHomeSentinelSchema.safeParse(parsed);
@@ -104,7 +93,7 @@ export function readSentinel(agentDir: string): ReadSentinelResult {
     return {
       kind: 'invalid',
       reason: `sentinel does not match schema: ${validated.error.errors
-        .map(e => `${e.path.join('.')}: ${e.message}`)
+        .map((e) => `${e.path.join('.')}: ${e.message}`)
         .join('; ')}`,
     };
   }
@@ -127,9 +116,7 @@ export interface SentinelMatchInput {
   template_choice: string;
 }
 
-export type SentinelMatchResult =
-  | { kind: 'match' }
-  | { kind: 'mismatch'; reason: string };
+export type SentinelMatchResult = { kind: 'match' } | { kind: 'mismatch'; reason: string };
 
 export function compareSentinel(
   sentinel: AgentHomeSentinel,
@@ -170,10 +157,7 @@ export function compareSentinel(
  * only by the daemon's UID (it carries the agent_id, which is
  * not secret but is also not interesting to other users).
  */
-export function writeSentinelAtomic(
-  agentDir: string,
-  sentinel: AgentHomeSentinel,
-): void {
+export function writeSentinelAtomic(agentDir: string, sentinel: AgentHomeSentinel): void {
   const filePath = sentinelPath(agentDir);
   mkdirSync(dirname(filePath), { recursive: true });
   const tmpPath = join(

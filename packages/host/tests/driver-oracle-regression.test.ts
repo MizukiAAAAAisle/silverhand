@@ -7,10 +7,7 @@ import { ClaudeDriver } from '../src/drivers/claude.js';
 import { CodexDriver } from '../src/drivers/codex.js';
 import { CursorDriver } from '../src/drivers/cursor.js';
 import type { Driver } from '../src/drivers/index.js';
-import {
-  DRIVER_PARSE_ORACLES,
-  type DriverParseOracle,
-} from './_fixtures/driver-oracles.js';
+import { DRIVER_PARSE_ORACLES, type DriverParseOracle } from './_fixtures/driver-oracles.js';
 
 function makeDriver(oracle: DriverParseOracle): Driver {
   switch (oracle.runtime) {
@@ -51,16 +48,16 @@ async function initializeCodex(driver: CodexDriver, oracle: DriverParseOracle) {
       systemPromptPath,
       initialPrompt: '',
     },
-    writeLine: async line => {
+    writeLine: async (line) => {
       writes.push(JSON.parse(line));
     },
   });
-  await new Promise<void>(resolve => queueMicrotask(resolve));
-  const initialize = writes.find(request => request.method === 'initialize');
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  const initialize = writes.find((request) => request.method === 'initialize');
   expect(initialize).toBeDefined();
   expect(initialize!.id).toEqual(expect.any(Number));
   expect(driver.parseLine(JSON.stringify({ id: initialize!.id, result: {} }))).toEqual([]);
-  expect(writes.some(request => request.method === 'initialized')).toBe(true);
+  expect(writes.some((request) => request.method === 'initialized')).toBe(true);
   return writes;
 }
 
@@ -68,14 +65,12 @@ describe('daemon oracle regression matrix — driver parser fixtures', () => {
   for (const oracle of DRIVER_PARSE_ORACLES) {
     it(`${oracle.id}: ${oracle.description}`, async () => {
       const driver = makeDriver(oracle);
-      const writes = driver instanceof CodexDriver
-        ? await initializeCodex(driver, oracle)
-        : [];
+      const writes = driver instanceof CodexDriver ? await initializeCodex(driver, oracle) : [];
 
       for (const [index, step] of oracle.steps.entries()) {
         let line = step.line;
         if (step.responseTo) {
-          const request = writes.find(request => request.method === step.responseTo);
+          const request = writes.find((request) => request.method === step.responseTo);
           expect(request, `${oracle.id}: missing ${step.responseTo} request`).toBeDefined();
           expect(request!.id).toEqual(expect.any(Number));
           line = JSON.stringify({ ...JSON.parse(line), id: request!.id });
@@ -97,8 +92,7 @@ describe('daemon oracle regression matrix — driver parser fixtures', () => {
   });
 
   it('oracle ids are unique', () => {
-    const ids = DRIVER_PARSE_ORACLES.map(oracle => oracle.id);
+    const ids = DRIVER_PARSE_ORACLES.map((oracle) => oracle.id);
     expect(new Set(ids).size).toBe(ids.length);
   });
-
 });

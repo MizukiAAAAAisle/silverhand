@@ -11,11 +11,7 @@
  * NDJSON splitter — frames are passed as objects so we test the client
  * state machine in isolation.
  */
-import type {
-  Transport,
-  TransportEvents,
-  DecodedFrame,
-} from '../../src/client/transport.js';
+import type { Transport, TransportEvents, DecodedFrame } from '../../src/client/transport.js';
 import {
   AnyFrameSchema,
   HOST_PROTOCOL_VERSION,

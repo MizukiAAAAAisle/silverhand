@@ -4,9 +4,19 @@
   "hostWebSocketPath": "/api/hosts/connect",
   "updateRequiredCloseReason": "update_required",
   "parsedEventKinds": [
-    "session_init", "thinking", "text", "tool_call", "tool_call_input",
-    "tool_output", "turn_end", "compaction_started", "compaction_finished",
-    "input_lifecycle", "api_response", "error", "unknown"
+    "session_init",
+    "thinking",
+    "text",
+    "tool_call",
+    "tool_call_input",
+    "tool_output",
+    "turn_end",
+    "compaction_started",
+    "compaction_finished",
+    "input_lifecycle",
+    "api_response",
+    "error",
+    "unknown"
   ],
   "daemonEventKinds": {
     "ready": "ready",
