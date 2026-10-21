@@ -25,17 +25,17 @@
   ],
   "inputs": {
     "packages/shared/src/address-segment.ts": "b390da6ce72d44549151d367247bf2f8e5a2aa0c7e07da25be321d1bf4110abc",
-    "packages/shared/src/conversation-title-audit.ts": "36d75a99f6b29e7f0302739a368fe6ecb26be4fb5c067a00b7cec93eac2bbce0",
-    "packages/shared/src/conversation-title.ts": "74e08fa0290476e633508b05958d9be88a412c0ae468e29a9b60bebb9b43a3db",
+    "packages/shared/src/conversation-title-audit.ts": "d7f5fe17578da2428b7c2bf6a45253cfd2a1740da3827b75361e061d65ea5fc1",
+    "packages/shared/src/conversation-title.ts": "5b8f0b3766618373619ea589e632d566e9a43e469d821de4298da76f1bb3b680",
     "packages/shared/src/db/baseline-schema.ts": "7e5b7e9a0aca9b79fa433dca341d68ef4f761c5a545069c6005a4519851130e6",
     "packages/shared/src/db/migration-contracts/task-title-v96.ts": "98b0881301cb959962489178aefca16aa4228c786f03b0b849a654d58504d583",
     "packages/shared/src/db/migrations.ts": "cf6ced5c8b290108ad2c57f61e3174ae484f22798e4b4fe1cdf38c3e698966d9",
     "packages/shared/src/db/schema-epochs.ts": "1172325299808a66f4cc4cce948811586facfee2bec9b4cc562baa1857fead8e",
-    "packages/shared/src/display-name-charset.ts": "13ad82b9e92e562014322c569df15476a8ef5d7863f541f79207a5403d542410",
+    "packages/shared/src/display-name-charset.ts": "9d5b574480b3956f37d53bba816b7bff6d3e3edfc861e58c32b896a919f2f8ba",
     "packages/shared/src/unicode-case-fold.ts": "b5cb75d46582dc93b640434ad78fe8f0a741e5e1aa183adbb27368ce2aceb120",
     "packages/shared/src/unicode-name-charset.ts": "bbcda81d89d738fdfe6a9ff0dd4dad633a79a84cd8f82e203753910196967879",
-    "packages/shared/src/workspace-name-audit.ts": "029c2b6d2c672d6f30ea1e8f31ea88984e935ffc5050425fd939bee0bcd5dac3",
-    "packages/shared/src/workspace-name.ts": "8a582a083878c3279da6452f42850c3112caae94ce3a4cb8bdf766aa90e3198c"
+    "packages/shared/src/workspace-name-audit.ts": "c555854338e8a8f7a07da52243fe84d56aa46a9d3138674c0c57e0866ed5d6a0",
+    "packages/shared/src/workspace-name.ts": "7249056cf8210ec74258e7c0d37f139e8fffeabe79d78d18886eb654729b88a3"
   },
   "steps": [
     {
