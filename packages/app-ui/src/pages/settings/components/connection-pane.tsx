@@ -319,9 +319,7 @@ export function ConnectionPane(): JSX.Element {
           <div
             role="status"
             className={cn(
-              // Width from the theme's control cluster (poster = 2px), so this
-              // banner stays identical to its twin in BackendUnreachableGate
-              // (#task:1833).
+              // Width from the theme's control cluster (poster = 2px) (#task:1833).
               "rounded-(--control-radius) border-(length:--control-border-width) px-3 py-2 text-xs",
               banner.tone === "error"
                 ? "border-error bg-bg-inset text-error"

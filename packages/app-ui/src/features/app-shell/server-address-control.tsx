@@ -9,7 +9,9 @@ import {
   refreshServerEnvironment,
   useServerEnvironment,
 } from "@/features/session/server-environment";
-import { describeProfileSaveForGate } from "./backend-unreachable-gate";
+import { describeProbeOutcome } from "@/features/settings/model/describe-probe-outcome";
+import type { SaveServerUrlBanner } from "@/features/settings/model/describe-save-server-url-outcome";
+import type { ProfileSaveWithTestResult } from "@silverhand/client";
 import { t } from "@/lib/i18n";
 
 /** Remote-only auth gates offer an escape to a different self-hosted origin. */
@@ -192,4 +194,34 @@ export function ServerConnectionStatus({
       </div>
     </section>
   );
+}
+
+export function describeProfileSaveForGate(result: ProfileSaveWithTestResult): SaveServerUrlBanner {
+  if (result.ok) {
+    return {
+      tone: "success",
+      title: t("appShell.unreachable.savedRetrying"),
+      description: t("appShell.unreachable.using", { url: result.profile.server_url }),
+    };
+  }
+  if (result.phase === "test") {
+    const banner = describeProbeOutcome(result.test);
+    return {
+      tone: banner.tone === "success" ? "success" : "error",
+      title: banner.title,
+      description: banner.description,
+    };
+  }
+  if (result.phase === "commit_guard") {
+    return {
+      tone: "error",
+      title: t("appShell.unreachable.commitGuard"),
+      description: result.message,
+    };
+  }
+  return {
+    tone: "error",
+    title: t("appShell.unreachable.writeFailed"),
+    description: result.detail ?? t("appShell.unreachable.writeFailedDetail"),
+  };
 }

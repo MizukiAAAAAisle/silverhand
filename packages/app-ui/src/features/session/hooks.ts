@@ -198,11 +198,21 @@ export function mapAuthStateToViewer(state: ClientAuthState): ViewerState {
   return { registration_required: true, suggested_name: "" };
 }
 
+/** A signed-in viewer survives losing the server: the read fails instead, so the
+ *  app keeps its content and the status banner reports the connection. */
+export async function readViewer(previous: ViewerState | undefined): Promise<ViewerState> {
+  const state = await getPlatform().client.getAuthState();
+  if (state.status === "backend_unreachable" && previous !== undefined && "id" in previous) {
+    throw new ApiError(0, "Network Error", state.message, "backend_unreachable");
+  }
+  return mapAuthStateToViewer(state);
+}
+
 export function useViewerUser() {
+  const qc = useQueryClient();
   const query = useQuery({
     queryKey: meKey,
-    queryFn: async (): Promise<ViewerState> =>
-      mapAuthStateToViewer(await getPlatform().client.getAuthState()),
+    queryFn: () => readViewer(qc.getQueryData<ViewerState>(meKey)),
     staleTime: 30 * 1000,
   });
   useEffect(() => {

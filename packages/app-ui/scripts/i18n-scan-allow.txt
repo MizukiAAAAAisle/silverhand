@@ -37,6 +37,7 @@ features/profile/message-counts.ts: Asia/Shanghai
 lib/api.ts: The operation was aborted.
 lib/api.ts: AbortError
 lib/api.ts: Network Error
+features/session/hooks.ts: Network Error
 features/avatar-maker/model/avatar-config.ts: `<rect width="…" height="…" fill="…"/>`
 # Font family names and CSS stacks.
 features/appearance/font-presets.ts: Georgia

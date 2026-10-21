@@ -2,15 +2,8 @@ export const appShell = {
   serverUnreachable: "Server unreachable",
   unreachable: {
     saveFailed: "Could not save the address.",
-    title: "Can't reach this server",
-    savedProfile: "Silverhand has a saved server profile pointing at:",
     alreadySet: "Already set to this value.",
     enterAddress: "Enter an address to save.",
-    saveAddress: "Save address",
-    editAddress: "Edit server address",
-    detail:
-      "The connection failed before signup or login could be attempted. The server may be down, the network may be unreachable.",
-    retryConnection: "Retry connection",
     savedRetrying: "Saved. Retrying connection…",
     using: "Using {url}.",
     commitGuard: "Cannot save this server URL in this build.",

@@ -35,7 +35,6 @@ import {
 import { useServerEnvironment } from "@/features/session/server-environment";
 import { EmbeddedProfileSetupGate } from "@/features/app-shell/embedded-profile-setup-gate";
 import { RegistrationGate } from "@/features/app-shell/registration-gate";
-import { BackendUnreachableGate } from "@/features/app-shell/backend-unreachable-gate";
 import { UpdateRequiredGate } from "@/features/app-shell/update-required-gate";
 import { AppStatusBanner } from "@/features/app-shell/app-status-banner";
 import { SettingsShell } from "@/pages/settings/settings-shell";
@@ -107,26 +106,6 @@ export function App({
   if (loginFirst && !viewer.data) {
     return <div className="h-screen w-screen bg-bg-base" />;
   }
-  if (
-    loginFirst &&
-    viewer.data &&
-    (isBackendUnreachable(viewer.data) || isRegistrationRequired(viewer.data))
-  ) {
-    const ready = isRegistrationRequired(viewer.data);
-    return (
-      <RegistrationGate
-        signupEnabled={signupEnabled}
-        passwordRecovery={passwordRecovery}
-        preferLogin
-        autoFocus={false}
-        connectionStatus={isBackendUnreachable(viewer.data) ? viewer.data.message : undefined}
-        connectionChecking={viewer.isFetching}
-        connectionReady={ready}
-        showServerAddress={showServerAddress}
-        onRetry={retry}
-      />
-    );
-  }
   if (!viewer.data) {
     return (
       <div className="grid h-screen w-screen place-items-center bg-bg-base text-xs text-text-muted">
@@ -135,11 +114,18 @@ export function App({
     );
   }
 
+  // Reached only before anyone signed in this session: a signed-in viewer keeps
+  // the app and the status banner reports the connection instead.
   if (isBackendUnreachable(viewer.data)) {
     return (
-      <BackendUnreachableGate
-        serverUrl={viewer.data.server_url}
-        message={viewer.data.message}
+      <RegistrationGate
+        signupEnabled={false}
+        preferLogin
+        autoFocus={!loginFirst}
+        connectionStatus={viewer.data.message}
+        connectionChecking={viewer.isFetching}
+        connectionReady={false}
+        showServerAddress
         onRetry={retry}
       />
     );
@@ -165,7 +151,9 @@ export function App({
       <RegistrationGate
         signupEnabled={signupEnabled}
         passwordRecovery={passwordRecovery}
-        preferLogin={hasSignedIn}
+        preferLogin={loginFirst || hasSignedIn}
+        autoFocus={!loginFirst}
+        connectionChecking={viewer.isFetching}
         showServerAddress={showServerAddress}
         onRetry={retry}
       />
