@@ -14,6 +14,7 @@ import type {
   AuthSignupInput,
   AuthLoginInput,
   ServerConnectionProfileView,
+  ServerInfo,
 } from "@silverhand/shared";
 import type {
   BackendProxyRequest,
@@ -27,6 +28,8 @@ import type { LocalHostCapability } from "../platform/local-host.js";
 export interface ClientAdapter {
   getConnectionPolicy(): Promise<ConnectionPolicy>;
   getConnectionInfo(): Promise<ConnectionInfo | null>;
+  /** Anonymous `/api/server/info` from the selected server. */
+  getServerInfo(): Promise<ServerInfo>;
   getAuthState(): Promise<ClientAuthState>;
   signup(input: AuthSignupInput): Promise<ClientAuthResult>;
   login(input: AuthLoginInput): Promise<ClientAuthResult>;

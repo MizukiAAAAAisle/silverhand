@@ -1,9 +1,14 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ErrorIcon, RetryIcon, SpinnerIcon } from "@/icons";
 import { getPlatform } from "@/platform";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { validateServerUrlDraft } from "@/features/settings/model/server-url-validation";
+import {
+  refreshServerEnvironment,
+  useServerEnvironment,
+} from "@/features/session/server-environment";
 import { describeProfileSaveForGate } from "./backend-unreachable-gate";
 import { t } from "@/lib/i18n";
 
@@ -17,55 +22,43 @@ export function ServerAddressControl({
   onEditingChange?: (editing: boolean) => void;
   onRetry?: () => void;
 }) {
-  const [url, setUrl] = useState("");
+  const qc = useQueryClient();
+  const environment = useServerEnvironment();
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void getPlatform()
-      .client.getConnectionInfo()
-      .then((info) => {
-        if (!cancelled) {
-          setUrl(info?.url ?? "");
-          setDraft(info?.url ?? "");
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setError(t("appShell.server.readFailed"));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const url = environment.data?.url ?? "";
+  const error = saveError ?? (environment.isError ? t("appShell.server.readFailed") : null);
+
   const save = async () => {
     if (saving || disabled) return;
     setSaving(true);
-    setError(null);
+    setSaveError(null);
     try {
       const policy = await getPlatform().client.getConnectionPolicy();
       if (
         validateServerUrlDraft(draft, { allowInsecureRemote: policy.allow_insecure_remote })
           .kind !== "ok"
       ) {
-        setError(t("appShell.server.invalid"));
+        setSaveError(t("appShell.server.invalid"));
         return;
       }
       const result = await getPlatform().client.saveServerConnectionProfile({
         serverUrl: draft.trim(),
       });
       if (result.ok) {
-        setUrl(result.profile.server_url);
+        await refreshServerEnvironment(qc);
         setEditing(false);
         onEditingChange?.(false);
         onRetry?.();
       } else {
         const message = describeProfileSaveForGate(result);
-        setError(message.description ?? message.title);
+        setSaveError(message.description ?? message.title);
       }
-    } catch (error) {
-      setError(String(error));
+    } catch (err) {
+      setSaveError(String(err));
     } finally {
       setSaving(false);
     }
@@ -108,7 +101,7 @@ export function ServerAddressControl({
               disabled={saving || disabled}
               onClick={() => {
                 setEditing(false);
-                setError(null);
+                setSaveError(null);
                 onEditingChange?.(false);
               }}
             >

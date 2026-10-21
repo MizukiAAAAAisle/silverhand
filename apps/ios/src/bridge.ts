@@ -70,6 +70,7 @@ export interface NativeBridge {
     info: BackendProxyResponse;
     me?: BackendProxyResponse;
   }>;
+  serverInfo(): Promise<BackendProxyResponse>;
   authenticate(input: { action: "login" | "signup"; body: string }): Promise<ClientAuthResult>;
   passwordRecovery(input: PasswordRecoveryCall): Promise<PasswordRecoveryResult>;
   logout(): Promise<void>;

@@ -2,7 +2,6 @@ import type { ClientPlatform, ClientAuthState } from "@silverhand/client";
 import { classifyMeFetchOutcome } from "@silverhand/client";
 import {
   ServerInfoSchema,
-  serverFeatures,
   UpgradeRequiredBodySchema,
   classifyDesktopServerApiCompatibility,
   DESKTOP_SERVER_API_EPOCH,
@@ -71,6 +70,12 @@ export function createIOSPlatform(
         const profile = await bridge.getProfile();
         return profile.server_url ? { url: profile.server_url, mode: "remote" } : null;
       },
+      getServerInfo: async () => {
+        const response = await bridge.serverInfo();
+        if (response.status !== 200)
+          throw new Error(`Server discovery returned HTTP ${response.status}`);
+        return ServerInfoSchema.parse(parse(response.bodyText));
+      },
       getServerConnectionProfile: async () => {
         const profile = await bridge.getProfile();
         return "updated_at" in profile ? profile : null;
@@ -117,14 +122,7 @@ export function createIOSPlatform(
           const info = ServerInfoSchema.parse(parse(state.info.bodyText));
           const skew = compatibility(info);
           if (skew) return skew;
-          const features = serverFeatures(info);
-          const unauthenticated = {
-            status: "unauthenticated" as const,
-            signup_enabled: features.signup_enabled,
-            password_recovery: features.password_recovery_enabled
-              ? ("enabled" as const)
-              : ("disabled" as const),
-          };
+          const unauthenticated = { status: "unauthenticated" as const };
           if (!state.me) return unauthenticated;
           const result = classifyMeFetchOutcome({
             kind: "response",
@@ -132,11 +130,7 @@ export function createIOSPlatform(
             body: parse(state.me.bodyText),
           });
           if (result.kind === "valid")
-            return {
-              status: "authenticated",
-              signup_enabled: features.signup_enabled,
-              user: result.user,
-            };
+            return { status: "authenticated", user: result.user };
           if (result.kind === "rejected") return unauthenticated;
           return { status: "backend_unreachable", server_url: serverUrl, message: result.message };
         } catch (error) {

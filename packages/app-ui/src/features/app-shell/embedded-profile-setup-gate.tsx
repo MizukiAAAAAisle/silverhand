@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { UserDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
 import { cacheViewer } from "@/features/session/hooks";
+import { serverEnvironmentQuery } from "@/features/session/server-environment";
 import { eventWsClient } from "@/lib/ws-client";
 import { ProfileSetupForm } from "./profile-setup-form";
 import { EmbeddedProfileSetup, setupTransport, type SetupState } from "./embedded-profile-setup";
@@ -23,6 +24,7 @@ export function EmbeddedProfileSetupGate({
   useEffect(() => {
     const model = new EmbeddedProfileSetup({
       ...setupTransport,
+      mode: async () => (await qc.fetchQuery(serverEnvironmentQuery)).mode,
       isCurrent: () => qc.getQueryData<UserDto>(["me"])?.id === viewerId,
       applyUser: (user) => {
         if (user.id !== viewerId) {

@@ -1,4 +1,3 @@
-import { getPlatform } from "@/platform";
 import {
   AVATAR_DESIGN_FIELD,
   apiPaths,
@@ -43,13 +42,6 @@ export function setupErrorCode(error: unknown): string | null {
 }
 
 export const setupTransport = {
-  mode: async () => {
-    const info = await getPlatform().client.getConnectionInfo();
-    if (!info) {
-      throw new Error("Backend not ready");
-    }
-    return info.mode;
-  },
   request: (method: "GET" | "PUT", body?: string) =>
     api(apiPaths.embeddedProfileSetup, { method, body }),
   upload: async (file: File, design: string | null) => {

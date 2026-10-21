@@ -201,6 +201,15 @@ public final class ClientSession {
     return result
   }
 
+  public func serverInfo() async throws -> [String: Any] {
+    try checkStorage()
+    guard let record else { throw ClientError.noServer }
+    let captured = generation
+    let info = try await fetch(request(origin: record.serverURL, path: contract.serverInfo))
+    try check(captured)
+    return info.bridge()
+  }
+
   public func authenticate(action: String, body: String) async throws -> [String: Any] {
     try checkStorage()
     guard let record else { throw ClientError.noServer }

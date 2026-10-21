@@ -8,8 +8,8 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   public let identifier = "SilverhandClientPlugin"
   public let jsName = "SilverhandClient"
   public let pluginMethods: [CAPPluginMethod] = [
-    "getProfile", "saveProfile", "clearProfile", "authState", "authenticate", "passwordRecovery",
-    "logout", "request",
+    "getProfile", "saveProfile", "clearProfile", "authState", "serverInfo", "authenticate",
+    "passwordRecovery", "logout", "request",
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
@@ -417,6 +417,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
   @objc public func authState(_ call: CAPPluginCall) { run(call) { try await $0.authState() } }
+  @objc public func serverInfo(_ call: CAPPluginCall) { run(call) { try await $0.serverInfo() } }
   @objc public func authenticate(_ call: CAPPluginCall) {
     run(call) {
       try await $0.authenticate(

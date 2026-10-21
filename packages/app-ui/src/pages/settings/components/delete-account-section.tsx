@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiPaths } from "@silverhand/shared";
 import { api, ApiError } from "@/lib/api";
 import { useLogout } from "@/features/session/hooks";
+import { useServerFeature } from "@/features/session/server-environment";
 import {
   Dialog,
   DialogContent,
@@ -24,7 +25,6 @@ interface Blockers {
   workspaces: Blocker[];
 }
 interface Preflight {
-  available: boolean;
   blockers: Blockers | null;
 }
 
@@ -55,14 +55,17 @@ function BlockerList({ blockers }: { blockers: Blockers }): JSX.Element {
   );
 }
 
-/** Settings › Account danger zone. Not offered in embedded mode. */
+/** Settings › Account danger zone, shown where the server offers account deletion. */
 export function DeleteAccountSection({ handle }: { handle: string }): JSX.Element | null {
+  const offered = useServerFeature("account_deletion_enabled");
   const [open, setOpen] = useState(false);
   const preflight = useQuery({
     queryKey: ["account-deletion"],
     queryFn: () => api<Preflight>(apiPaths.meDeletion),
+    enabled: offered,
   });
-  if (!preflight.data?.available) return null;
+
+  if (!offered) return null;
   return (
     <div className="flex items-center justify-between gap-3">
       <div className="min-w-0">
@@ -85,7 +88,7 @@ export function DeleteAccountSection({ handle }: { handle: string }): JSX.Elemen
         open={open}
         onOpenChange={setOpen}
         handle={handle}
-        blockers={preflight.data.blockers}
+        blockers={preflight.data?.blockers ?? null}
       />
     </div>
   );

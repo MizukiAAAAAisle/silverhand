@@ -32,6 +32,7 @@ import {
   useViewerAvatarObjectUrl,
   useViewerUser,
 } from "@/features/session/hooks";
+import { useServerEnvironment } from "@/features/session/server-environment";
 import { EmbeddedProfileSetupGate } from "@/features/app-shell/embedded-profile-setup-gate";
 import { RegistrationGate } from "@/features/app-shell/registration-gate";
 import { BackendUnreachableGate } from "@/features/app-shell/backend-unreachable-gate";
@@ -71,6 +72,20 @@ export function App({
   useRuntimeEpochPromotion();
 
   const viewer = useViewerUser();
+  const environment = useServerEnvironment();
+  const features = environment.data?.features ?? null;
+  const signupEnabled = features?.signup_enabled ?? false;
+  // The embedded local server has no account recovery, so the entry is absent there.
+  const passwordRecovery =
+    environment.data?.mode === "remote"
+      ? features?.password_recovery_enabled
+        ? ("enabled" as const)
+        : ("disabled" as const)
+      : undefined;
+  const retry = (): void => {
+    void viewer.refetch();
+    void environment.refetch();
+  };
   const [navigationLaunch] = useState(() => new NavigationLaunch(initialNavigationUrl));
   const [hasSignedIn, setHasSignedIn] = useState(false);
   const authenticated = Boolean(viewer.data && "id" in viewer.data);
@@ -97,21 +112,18 @@ export function App({
     viewer.data &&
     (isBackendUnreachable(viewer.data) || isRegistrationRequired(viewer.data))
   ) {
-    const registration = isRegistrationRequired(viewer.data) ? viewer.data : null;
-    const ready = registration !== null;
+    const ready = isRegistrationRequired(viewer.data);
     return (
       <RegistrationGate
-        signupEnabled={registration?.signup_enabled ?? false}
-        passwordRecovery={registration?.password_recovery}
+        signupEnabled={signupEnabled}
+        passwordRecovery={passwordRecovery}
         preferLogin
         autoFocus={false}
         connectionStatus={isBackendUnreachable(viewer.data) ? viewer.data.message : undefined}
         connectionChecking={viewer.isFetching}
         connectionReady={ready}
         showServerAddress={showServerAddress}
-        onRetry={() => {
-          void viewer.refetch();
-        }}
+        onRetry={retry}
       />
     );
   }
@@ -128,9 +140,7 @@ export function App({
       <BackendUnreachableGate
         serverUrl={viewer.data.server_url}
         message={viewer.data.message}
-        onRetry={() => {
-          void viewer.refetch();
-        }}
+        onRetry={retry}
       />
     );
   }
@@ -147,15 +157,17 @@ export function App({
     );
   }
   if (isRegistrationRequired(viewer.data)) {
+    // Signup or login is chosen once on mount, so wait for the server's answer.
+    if (environment.isPending) {
+      return <div className="h-screen w-screen bg-bg-base" />;
+    }
     return (
       <RegistrationGate
-        signupEnabled={viewer.data.signup_enabled}
-        passwordRecovery={viewer.data.password_recovery}
+        signupEnabled={signupEnabled}
+        passwordRecovery={passwordRecovery}
         preferLogin={hasSignedIn}
         showServerAddress={showServerAddress}
-        onRetry={() => {
-          void viewer.refetch();
-        }}
+        onRetry={retry}
       />
     );
   }

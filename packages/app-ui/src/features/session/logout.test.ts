@@ -14,7 +14,6 @@ const user = {
 const signedOut = {
   registration_required: true as const,
   suggested_name: "",
-  signup_enabled: false,
 };
 const clients: QueryClient[] = [];
 afterEach(() => {

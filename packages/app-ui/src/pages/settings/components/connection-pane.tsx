@@ -13,6 +13,7 @@ import {
   hostStatusKey,
   useBackendInfoSnapshot,
 } from "@/features/computers/hooks/hooks";
+import { refreshServerEnvironment } from "@/features/session/server-environment";
 import { computerCopy } from "@/features/computers/model/computer-copy";
 import { eventWsClient, type WsClientStatus } from "@/lib/ws-client";
 import { describeProbeOutcome } from "@/features/settings/model/describe-probe-outcome";
@@ -230,6 +231,7 @@ export function ConnectionPane(): JSX.Element {
           eventWsClient.connect();
         }
         void qc.invalidateQueries({ queryKey: backendInfoKey });
+        void refreshServerEnvironment(qc);
         void qc.invalidateQueries({ queryKey: hostsKey });
         const hostId = snapshot?.local_host_id ?? null;
         if (hostId !== null) {

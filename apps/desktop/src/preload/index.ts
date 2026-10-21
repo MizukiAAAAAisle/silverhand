@@ -78,6 +78,7 @@ const api: DesktopBridge = {
   getDesktopBuildConfig: async (): Promise<DesktopBuildConfig> => desktopBuildConfig(),
   getBackendInfo: (): Promise<DesktopBackendInfo | null> => ipcRenderer.invoke("backend:info"),
   getAuthState: (): Promise<ClientAuthState> => ipcRenderer.invoke("auth:getState"),
+  getServerInfo: () => ipcRenderer.invoke("server:info"),
   signup: (input: AuthSignupInput): Promise<ClientAuthResult> =>
     ipcRenderer.invoke("auth:signup", input),
   login: (input: AuthLoginInput): Promise<ClientAuthResult> =>

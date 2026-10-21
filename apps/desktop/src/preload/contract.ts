@@ -2,6 +2,7 @@ import type {
   AuthLoginInput,
   AuthSignupInput,
   ServerConnectionProfileView,
+  ServerInfo,
 } from "@silverhand/shared";
 import type {
   ConnectionInfo,
@@ -33,6 +34,7 @@ export interface DesktopBridge {
   getDesktopBuildConfig(): Promise<DesktopBuildConfig>;
   getBackendInfo(): Promise<DesktopBackendInfo | null>;
   getAuthState(): Promise<ClientAuthState>;
+  getServerInfo(): Promise<ServerInfo>;
   signup(input: AuthSignupInput): Promise<ClientAuthResult>;
   login(input: AuthLoginInput): Promise<ClientAuthResult>;
   logout(): Promise<{ ok: true }>;

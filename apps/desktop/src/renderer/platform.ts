@@ -9,6 +9,7 @@ export function createDesktopPlatform(
   return {
     client: {
       getAuthState: () => bridge.getAuthState(),
+      getServerInfo: () => bridge.getServerInfo(),
       signup: (input) => bridge.signup(input),
       login: (input) => bridge.login(input),
       logout: () => bridge.logout(),

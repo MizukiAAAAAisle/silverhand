@@ -62,7 +62,6 @@ import {
   type ServerConnectionProfileView,
   type ServerInfo,
   type UserDto,
-  serverFeatures,
 } from "@silverhand/shared";
 import {
   createCategorizedLoggers,
@@ -800,11 +799,7 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
     await runHydrate();
   }
   if (userSessionToken && userSessionUser) {
-    return {
-      status: "authenticated",
-      signup_enabled: serverFeatures(info).signup_enabled,
-      user: userSessionUser,
-    };
+    return { status: "authenticated", user: userSessionUser };
   }
 
   if (loadPersistedUserSessionToken()) {
@@ -815,17 +810,7 @@ async function desktopAuthState(): Promise<DesktopAuthState> {
       message: "session validation pending — /api/me did not return a verdict",
     };
   }
-  return {
-    status: "unauthenticated",
-    signup_enabled: serverFeatures(info).signup_enabled,
-    ...(backend?.kind === "remote"
-      ? {
-          password_recovery: serverFeatures(info).password_recovery_enabled
-            ? ("enabled" as const)
-            : ("disabled" as const),
-        }
-      : {}),
-  };
+  return { status: "unauthenticated" };
 }
 
 /** Anonymous recovery call on the current server; a late answer after a server
@@ -2324,6 +2309,7 @@ guardedIpc.handle("backend:info", async () => {
 });
 
 guardedIpc.handle("auth:getState", () => desktopAuthState());
+guardedIpc.handle("server:info", () => fetchServerInfo());
 
 guardedIpc.handle("auth:signup", (_event, input: AuthSignupInput) =>
   postAuthSession(authPaths.signup, input),

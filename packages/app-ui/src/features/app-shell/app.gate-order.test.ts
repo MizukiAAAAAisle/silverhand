@@ -57,6 +57,7 @@ const silverhand = {
 async function renderApp(
   viewer: ViewerState | undefined,
   showServerAddress = false,
+  signupEnabled = true,
 ): Promise<string> {
   // Late-import so the silverhand stub is installed before app.tsx is
   // evaluated. app.tsx pulls in `useAppearance` and a handful of
@@ -69,6 +70,15 @@ async function renderApp(
     defaultOptions: { queries: { retry: false } },
   });
   if (viewer !== undefined) qc.setQueryData(["me"], viewer);
+  qc.setQueryData(["server-environment"], {
+    url: "https://server.example.test",
+    mode: "remote",
+    features: {
+      signup_enabled: signupEnabled,
+      password_recovery_enabled: false,
+      account_deletion_enabled: false,
+    },
+  });
   return renderToStaticMarkup(
     React.createElement(
       QueryClientProvider,
@@ -139,7 +149,6 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
     const viewer: SetupRequired = {
       registration_required: true,
       suggested_name: "",
-      signup_enabled: true,
     };
     const html = await renderApp(viewer);
     expect(html).toContain(SIG_REG_EMAIL_FIELD);
@@ -156,9 +165,8 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
     const viewer: SetupRequired = {
       registration_required: true,
       suggested_name: "",
-      signup_enabled: false,
     };
-    const html = await renderApp(viewer);
+    const html = await renderApp(viewer, false, false);
     expect(html).toContain(SIG_REG_EMAIL_FIELD);
     expect(html).toContain(SIG_REG_LOGIN_AUTOCOMPLETE);
     // Login mode suppresses the new-password (signup/confirm) wiring.
@@ -179,7 +187,6 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
       message: "mixed",
       registration_required: true,
       suggested_name: "",
-      signup_enabled: true,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);
     expect(html).toContain(SIG_UNREACHABLE_GATE);
@@ -207,7 +214,6 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
       server_api_epoch: 0,
       registration_required: true,
       suggested_name: "",
-      signup_enabled: true,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);
     expect(html).toContain('data-gate="update-required"');
@@ -246,10 +252,11 @@ it("opens Login for a returning user even when signup remains available", async 
 it.each([true, false])(
   "server editing follows the product option (enabled=%s) in login and signup",
   async (enabled) => {
-    for (const signup_enabled of [true, false]) {
+    for (const signupEnabled of [true, false]) {
       const html = await renderApp(
-        { registration_required: true, suggested_name: "", signup_enabled },
+        { registration_required: true, suggested_name: "" },
         enabled,
+        signupEnabled,
       );
       expect(html.includes('aria-label="Change server"')).toBe(enabled);
       expect(html).toContain('type="email"');
@@ -259,7 +266,7 @@ it.each([true, false])(
 
 it("the app update dialog is reachable from every gate (login, unreachable, update required)", async () => {
   const gates = [
-    { registration_required: true, suggested_name: "", signup_enabled: false },
+    { registration_required: true, suggested_name: "" },
     { backend_unreachable: true, server_url: "https://down.example.test", message: "down" },
     { update_required: true, direction: "app", server_api_epoch: 2 },
   ] as unknown as ViewerState[];

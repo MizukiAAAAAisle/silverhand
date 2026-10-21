@@ -22,6 +22,7 @@ const client = {
   getConnectionInfo: vi.fn(async () => connection),
   getConnectionPolicy: vi.fn(),
   getAuthState: vi.fn(),
+  getServerInfo: vi.fn(),
   signup: vi.fn(),
   login: vi.fn(async () => ({ ok: true as const, user })),
   logout: vi.fn(),
@@ -66,9 +67,9 @@ describe("pure remote application", () => {
     expect(backendInfoRefetchIntervalMs(snapshot, { pollProtocolCompatibility: true })).toBe(false);
     await expect(api("/api/messages")).resolves.toEqual({ messages: [] });
     expect(() => requireLocalHost()).toThrow("does not provide a local host");
-    expect(mapAuthStateToViewer({ status: "unauthenticated", signup_enabled: true })).toMatchObject(
-      { registration_required: true },
-    );
+    expect(mapAuthStateToViewer({ status: "unauthenticated" })).toMatchObject({
+      registration_required: true,
+    });
   });
 
   it("revokes a remote app computer with no native host capability", async () => {

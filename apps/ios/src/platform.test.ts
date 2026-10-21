@@ -41,6 +41,18 @@ function harness() {
         }),
       },
     })),
+    serverInfo: vi.fn(async () => ({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      bodyText: JSON.stringify({
+        signup_enabled: true,
+        desktop_api: {
+          current_epoch: DESKTOP_SERVER_API_EPOCH,
+          minimum_client_epoch: DESKTOP_SERVER_API_EPOCH,
+        },
+      }),
+    })),
     saveProfile: vi.fn(),
     clearProfile: vi.fn(),
     request: vi.fn(),
@@ -157,33 +169,30 @@ describe("iOS platform", () => {
       url: "https://server.example",
       mode: "remote",
     });
-    expect(await platform.client.getAuthState()).toEqual({
-      status: "unauthenticated",
-      signup_enabled: true,
-      password_recovery: "disabled",
-    });
+    expect(await platform.client.getAuthState()).toEqual({ status: "unauthenticated" });
   });
 
-  it("reads features first and keeps a nested false over the legacy signup flag", async () => {
+  it("reads server info from the selected server and rejects a failed discovery", async () => {
     const { native, platform } = harness();
-    native.authState.mockResolvedValue({
-      serverUrl: "https://server.example",
-      info: {
-        status: 200,
-        statusText: "OK",
-        headers: {},
-        bodyText: JSON.stringify({
-          signup_enabled: true,
-          features: { signup_enabled: false, password_recovery_enabled: true },
-          desktop_api: { current_epoch: DESKTOP_SERVER_API_EPOCH, minimum_client_epoch: 1 },
-        }),
-      },
+    native.serverInfo.mockResolvedValueOnce({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      bodyText: JSON.stringify({
+        signup_enabled: true,
+        features: { signup_enabled: false, account_deletion_enabled: true },
+      }),
     });
-    expect(await platform.client.getAuthState()).toEqual({
-      status: "unauthenticated",
-      signup_enabled: false,
-      password_recovery: "enabled",
+    expect(await platform.client.getServerInfo()).toMatchObject({
+      features: { signup_enabled: false, account_deletion_enabled: true },
     });
+    native.serverInfo.mockResolvedValueOnce({
+      status: 503,
+      statusText: "Unavailable",
+      headers: {},
+      bodyText: "",
+    });
+    await expect(platform.client.getServerInfo()).rejects.toThrow("503");
   });
 
   it("routes password recovery natively without a session", async () => {

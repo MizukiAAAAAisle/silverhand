@@ -1,13 +1,8 @@
 import type { UserDto } from "@silverhand/shared";
 
 export type ClientAuthState =
-  | { status: "authenticated"; signup_enabled: boolean; user: UserDto }
-  | {
-      status: "unauthenticated";
-      signup_enabled: boolean;
-      /** Omitted where recovery does not apply (the embedded local server). */
-      password_recovery?: "enabled" | "disabled";
-    }
+  | { status: "authenticated"; user: UserDto }
+  | { status: "unauthenticated" }
   | { status: "backend_unreachable"; server_url: string; message: string }
   | {
       status: "app_update_required";
