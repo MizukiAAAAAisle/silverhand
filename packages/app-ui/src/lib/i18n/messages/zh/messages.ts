@@ -57,6 +57,7 @@ export const messages: Translation<typeof en> = {
   replies: "回复",
   react: "回应",
   thread2: "话题",
+  replyInThread: "在话题中回复",
   deselectMessage: "取消选择消息",
   selectMessage: "选择消息",
   addReaction: "添加回应",

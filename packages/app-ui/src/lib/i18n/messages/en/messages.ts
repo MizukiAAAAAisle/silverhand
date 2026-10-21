@@ -54,6 +54,7 @@ export const messages = {
   replies: "Replies",
   react: "React",
   thread2: "Thread",
+  replyInThread: "Reply in thread",
   deselectMessage: "Deselect message",
   selectMessage: "Select message",
   addReaction: "Add reaction",

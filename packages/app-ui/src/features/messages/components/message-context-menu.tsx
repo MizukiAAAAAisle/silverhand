@@ -8,12 +8,15 @@ import {
   CopyMarkdownIcon,
   SelectTextIcon,
   ShareLinkIcon,
+  ThreadIcon,
 } from "@/icons";
 import {
   AppContextMenu,
   AppContextMenuItem,
+  AppContextMenuReactions,
   AppContextMenuSeparator,
 } from "@/components/menus/app-context-menu";
+import { QUICK_REACTIONS } from "./reaction-picker";
 import { t } from "@/lib/i18n";
 
 /**
@@ -51,6 +54,8 @@ export function MessageContextMenu({
   onToggleSave,
   onShare,
   onUnfollowThread,
+  onReact,
+  onReplyInThread,
 }: {
   trigger: ReactElement;
   /** The same unmodified message body used by Copy markdown. */
@@ -60,6 +65,10 @@ export function MessageContextMenu({
   onToggleSave?: () => void;
   onShare?: () => void;
   onUnfollowThread?: () => void;
+  /** Touch only: on a pointer device the row's own hover controls react and
+   *  open threads, so the right-click menu stays as it was. */
+  onReact?: (emoji: string) => void;
+  onReplyInThread?: () => void;
 }): JSX.Element {
   const touch = useCoarsePointer();
   const [selecting, setSelecting] = useState(false);
@@ -97,8 +106,11 @@ export function MessageContextMenu({
     };
   }, [selecting]);
   const canSelectText = touch && !!text?.trim();
+  const react = touch ? onReact : undefined;
+  const replyInThread = touch ? onReplyInThread : undefined;
   const hasAnyAction =
-    canSelectText || !!(onCopyMarkdown || onToggleSave || onShare || onUnfollowThread);
+    canSelectText ||
+    !!(react || replyInThread || onCopyMarkdown || onToggleSave || onShare || onUnfollowThread);
   if (!hasAnyAction) return trigger;
 
   return (
@@ -124,6 +136,21 @@ export function MessageContextMenu({
         }
       }}
     >
+      {react ? (
+        <>
+          <AppContextMenuReactions
+            emojis={QUICK_REACTIONS.slice(0, 6)}
+            labelFor={(emoji) => t("messages.reactWith", { emoji })}
+            onPick={react}
+          />
+          <AppContextMenuSeparator />
+        </>
+      ) : null}
+      {replyInThread ? (
+        <AppContextMenuItem icon={<ThreadIcon className="size-3.5" />} onSelect={replyInThread}>
+          {t("messages.replyInThread")}
+        </AppContextMenuItem>
+      ) : null}
       {canSelectText ? (
         <AppContextMenuItem
           icon={<SelectTextIcon className="size-3.5" />}

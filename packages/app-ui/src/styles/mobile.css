@@ -441,7 +441,11 @@
 }
 /* Menus on touch read as iOS menus: glass with a large radius. */
 :root[data-layout="compact"] [data-app-menu] {
-  min-width: 200px;
+  /* A context menu always opens beside the press point; pressed mid-screen
+     neither side holds the full width, so the menu narrows to the side it
+     takes rather than running off the screen. */
+  min-width: min(200px, var(--radix-context-menu-content-available-width, 200px));
+  max-width: var(--radix-context-menu-content-available-width, none);
   padding: 6px;
   border: 0;
   border-radius: 20px;
@@ -458,6 +462,11 @@
   min-height: 44px;
   padding-inline: 12px;
   border-radius: 14px;
+}
+:root[data-layout="compact"] [data-app-menu] [data-app-menu-reactions] [role="menuitem"] {
+  min-height: 0;
+  padding: 0;
+  border-radius: 999px;
 }
 /* The title alone names the conversation; the `#` would break the bar into
    pieces. */

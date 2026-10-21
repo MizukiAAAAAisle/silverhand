@@ -721,8 +721,18 @@ function ActorMessageItem({
       id={`msg-${message.id}`}
       data-message-row
       data-search-active={searchActive || undefined}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      // Pointer events, not mouse events: a tap on touch synthesizes a
+      // mouseenter with no matching leave, which would pin the row framed.
+      onPointerEnter={(event) => {
+        if (event.pointerType === "mouse") {
+          setHover(true);
+        }
+      }}
+      onPointerLeave={(event) => {
+        if (event.pointerType === "mouse") {
+          setHover(false);
+        }
+      }}
       onClickCapture={
         // shiki `0eolIYXZmVVYAjrM`: when MessageList is in selection
         // mode, clicking anywhere on the row toggles selection — not
@@ -950,6 +960,14 @@ function ActorMessageItem({
       onToggleSave={committed && onSave ? () => onSave(message) : undefined}
       onShare={committed && onShare ? () => onShare(message) : undefined}
       onUnfollowThread={committed && onUnfollowThread ? () => onUnfollowThread(message) : undefined}
+      onReact={
+        committed && canReact
+          ? (emoji) => toggleReaction.mutate({ target: reactionTarget, emoji, remove: false })
+          : undefined
+      }
+      onReplyInThread={
+        committed && onStartThread && canParticipate ? () => onStartThread(message) : undefined
+      }
     />
   );
 }

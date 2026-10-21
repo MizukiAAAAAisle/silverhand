@@ -81,6 +81,7 @@ export function AppContextMenu({
       <ContextMenu.Portal>
         <ContextMenu.Content
           data-app-menu
+          collisionPadding={8}
           className={cn(MENU_CONTENT_CLASS, contentClassName)}
           onCloseAutoFocus={onCloseAutoFocus}
         >
@@ -110,6 +111,33 @@ export function AppContextMenuItem({
         {children}
       </AppMenuItemContent>
     </ContextMenu.Item>
+  );
+}
+
+/** A row of emoji at the top of a menu; each one is a menu item, so arrow keys
+ *  and selection close the menu like any other item. */
+export function AppContextMenuReactions({
+  emojis,
+  labelFor,
+  onPick,
+}: {
+  emojis: readonly string[];
+  labelFor: (emoji: string) => string;
+  onPick: (emoji: string) => void;
+}): JSX.Element {
+  return (
+    <div data-app-menu-reactions className="flex items-center justify-between gap-1 px-1 py-0.5">
+      {emojis.map((emoji) => (
+        <ContextMenu.Item
+          key={emoji}
+          aria-label={labelFor(emoji)}
+          onSelect={() => onPick(emoji)}
+          className="flex aspect-square min-w-0 max-w-9 flex-1 cursor-pointer select-none items-center justify-center rounded-full text-xl leading-none outline-none transition-colors data-highlighted:bg-bg-hover"
+        >
+          {emoji}
+        </ContextMenu.Item>
+      ))}
+    </div>
   );
 }
 

@@ -8,7 +8,7 @@ import { t } from "@/lib/i18n";
  * the bundle stays lean and the picker stays simple
  * (docs/reactions-design.md; shiki 2026-06-14 拍板 native Apple + 这 8 个).
  */
-const QUICK_REACTIONS = ["👍", "🎉", "👀", "💯", "🔥", "🚀", "😄", "🤣"] as const;
+export const QUICK_REACTIONS = ["👍", "🎉", "👀", "💯", "🔥", "🚀", "😄", "🤣"] as const;
 
 export interface ReactionPickerProps {
   /** The popover anchor. Must be a single ref-forwarding element (a native
