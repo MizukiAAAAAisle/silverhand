@@ -22,7 +22,7 @@ export const profile: Translation<typeof en> = {
   loadingAgent: "正在加载 agent",
   loadingProfile: "正在加载资料",
   computer: "电脑",
-  session: "会话",
+  session: "Session",
   dailyCounts: "{year} 年每日消息数",
   messagesLastYearSuffix: {
     other: "条消息(最近一年)",

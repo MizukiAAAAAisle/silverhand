@@ -144,7 +144,7 @@ export const messages: Translation<typeof en> = {
   mentioned: "{author} 提及",
   mention: "提及",
   aUser: "某位用户",
-  sessionReset: "{actor} 重置了 {agent} 的会话上下文",
+  sessionReset: "{actor} 重置了 {agent} 的 session 上下文",
   channelRenamed: "频道已改名",
   projectRenamed: "项目已改名",
   memberRemoved: "{actor} 将 {member} 移出了这个对话",
