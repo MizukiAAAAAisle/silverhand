@@ -5,11 +5,11 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { AppRoot } from "./app";
 import { startAppUpdateStore } from "./features/app-update/app-update-store";
 import { queryClient } from "./lib/query-client";
-// Rajdhani is poster's tech/racing display face — bundled (not a CDN
-// link) so chrome label / task pill / sidebar count metrics don't
-// flash through a system fallback during a cold start with no network.
-// Single weight (700) only, ~16KB woff2.
-import "@fontsource/rajdhani/700.css";
+// Poster's display face is bundled (not a CDN link) so label and pill
+// metrics don't flash through a system fallback on an offline cold start.
+// The italic carries the conversation title.
+import "@fontsource/barlow-condensed/700.css";
+import "@fontsource/barlow-condensed/700-italic.css";
 import "@fontsource/space-grotesk/400.css";
 import "@fontsource/space-grotesk/500.css";
 import "@fontsource/space-grotesk/600.css";

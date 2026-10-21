@@ -20,7 +20,7 @@
   --chrome-label-tracking: 0.06em;
   --font-chrome-label: var(--font-display);
   --font-display:
-    "Rajdhani", "Impact", "Helvetica Neue Condensed", "Arial Narrow", system-ui, sans-serif;
+    "Barlow Condensed", "Impact", "Helvetica Neue Condensed", "Arial Narrow", system-ui, sans-serif;
   --font-mono: "Space Mono", ui-monospace, monospace;
   --font-sans:
     "Space Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue",
