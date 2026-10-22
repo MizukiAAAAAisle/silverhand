@@ -655,17 +655,20 @@ where
             == 1;
         if inserted && conversation_allows_delivery(&mut tx, &conversation)
             .await.map_err(ThreadFollowStoreError::from)? {
-            // Backfill the prior thread context — the root + all replies (the thread
-            // cluster: id=root OR thread_root_id=root) — into the agent's inbox as
-            // `observe` deliveries. Idempotent on (conversation, agent, message), skips
-            // the agent's own messages. Complete (no cap), ordered by seq.
+            // Backfill the root + the most recent replies as `observe` deliveries.
+            // Idempotent on (conversation, agent, message), skips the agent's own
+            // messages, ordered by seq.
             sqlx::query(
                 "INSERT INTO conversation_inboxes \
                    (conversation_id, agent_id, message_id, delivered_at, created_at, delivery_kind) \
                  SELECT m.conversation_id, ?, m.id, NULL, ?, 'observe' \
                    FROM messages m \
                   WHERE m.conversation_id = ? \
-                    AND (m.id = ? OR m.thread_root_id = ?) \
+                    AND (m.id = ? OR m.id IN ( \
+                         SELECT r.id FROM messages r \
+                          WHERE r.conversation_id = m.conversation_id AND r.thread_root_id = ? \
+                            AND NOT (r.from_kind = 'agent' AND r.from_agent_id = ?) \
+                          ORDER BY r.seq DESC LIMIT ?)) \
                     AND NOT (m.from_kind = 'agent' AND m.from_agent_id = ?) \
                     AND NOT EXISTS (SELECT 1 FROM conversation_inboxes ci \
                                      WHERE ci.conversation_id = m.conversation_id \
@@ -677,6 +680,8 @@ where
             .bind(conversation.as_str())
             .bind(root.id.as_str())
             .bind(root.id.as_str())
+            .bind(agent.as_str())
+            .bind(crate::conversation_messaging::messaging::THREAD_BACKFILL_RECENT_REPLIES)
             .bind(agent.as_str())
             .bind(agent.as_str())
             .execute(&mut *tx)
@@ -953,6 +958,52 @@ INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,content,seq,crea
                 .await
                 .unwrap();
         assert_eq!(messages, ["m2"]);
+    }
+
+    #[tokio::test]
+    async fn agent_follow_backfills_only_the_most_recent_replies() {
+        use silverhand_backend_core::conversation_messaging::messaging::collaboration::thread_follow::AgentThreadFollowWrite;
+
+        let (dir, store) = follow_store().await;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect_with(
+                SqliteConnectOptions::new().filename(dir.path().join("agent-follow.sqlite")),
+            )
+            .await
+            .unwrap();
+        // m3..m16 by agent-c, plus agent-a's own reply at seq 15 that is never queued.
+        for seq in 3..=16 {
+            let author = if seq == 15 { "agent-a" } else { "agent-c" };
+            sqlx::query(
+                "INSERT INTO messages(id,conversation_id,from_kind,from_agent_id,content,seq,created_at,thread_root_id) \
+                 VALUES(?,'chan','agent',?,'reply',?,?,'m1')",
+            )
+            .bind(format!("m{seq}"))
+            .bind(author)
+            .bind(seq)
+            .bind(seq + 10)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+        AgentThreadFollowWrite::follow(&store.thread_follow(), ag("agent-a"), cv("chan"), rt("m1"))
+            .await
+            .unwrap()
+            .unwrap();
+        let queued: Vec<String> = sqlx::query_scalar(
+            "SELECT i.message_id FROM conversation_inboxes i JOIN messages m ON m.id = i.message_id \
+             ORDER BY m.seq",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            queued,
+            [
+                "m6", "m7", "m8", "m9", "m10", "m11", "m12", "m13", "m14", "m16"
+            ]
+        );
     }
 
     #[tokio::test]

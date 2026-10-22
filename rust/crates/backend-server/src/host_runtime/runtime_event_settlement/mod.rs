@@ -641,7 +641,7 @@ where
                     activity
                         .active_agents
                         .insert(admission.principal().agent().clone());
-                    state.runs.insert(admission, event.state.clone());
+                    state.runs.insert(admission.clone(), event.state.clone());
                 }
                 let mut first_failure = None;
                 for target in targets {
@@ -659,6 +659,21 @@ where
                     {
                         first_failure = Some(error);
                     }
+                }
+                // A turn that ended while `turn` deliveries are still queued behind
+                // the batch it took is drained now; nothing else would wake it.
+                let conversation = event.coordinate.conversation()?;
+                let drain = event.state.terminal_reason == Some(AgentRunTerminalReason::TurnEnded)
+                    && self
+                        .durable
+                        .has_pending_turn(admission, conversation.clone())
+                        .await?;
+                if drain {
+                    return Ok(RuntimeEventDirective::Drain {
+                        conversation,
+                        agent: event.coordinate.agent()?,
+                        post_commit_failure: first_failure,
+                    });
                 }
                 if let Some(error) = first_failure {
                     return Err(error.into());

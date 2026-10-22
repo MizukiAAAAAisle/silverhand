@@ -506,10 +506,9 @@ pub trait RootMessageLocate {
 
 /// The internal agent thread-follow write authority. `follow` resolves the
 /// canonical root from the root message, gates the agent's live participation, then
-/// upserts an `agent` follower row and — only on a NEW insert — backfills the prior
-/// thread context (root + replies with `seq < now`) into the agent's
-/// `conversation_inboxes` as `observe` deliveries (idempotent, skips the agent's own
-/// messages, complete/no cap). `unfollow` removes the follower row (no backfill
+/// upserts an `agent` follower row and — only on a NEW insert — backfills the root
+/// and the most recent replies into the agent's `conversation_inboxes` as `observe`
+/// deliveries (idempotent, skips the agent's own messages). `unfollow` removes the follower row (no backfill
 /// retraction — it only stops FUTURE delivery). Both are idempotent.
 pub trait AgentThreadFollowWrite {
     fn follow(

@@ -735,6 +735,14 @@ pub trait DaemonEventDurablePort: Clone + Send + Sync + 'static {
         scope: crate::host_runtime::runtime_credential::RuntimeScope,
     ) -> impl Future<Output = Result<Option<RuntimeEventAdmission>, PersistenceFailure>> + Send;
 
+    /// Whether the current custody still has an unclaimed `turn` delivery in
+    /// `conversation`. Pending `observe` context alone is not owed a run.
+    fn has_pending_turn(
+        &self,
+        admission: RuntimeEventAdmission,
+        conversation: ConversationId,
+    ) -> impl Future<Output = Result<bool, PersistenceFailure>> + Send;
+
     fn commit_exit(
         &self,
         event: CommitRuntimeExit,

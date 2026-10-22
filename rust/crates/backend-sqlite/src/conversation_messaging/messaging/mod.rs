@@ -257,11 +257,16 @@ const SELECT_USER_ID_BY_NAME: &str = "SELECT id FROM users WHERE name = ?";
 const FOLLOW_CLUSTER: &str = "INSERT INTO thread_followers (thread_root_id, conversation_id, \
      principal_kind, principal_id, followed_at, source) VALUES (?, ?, ?, ?, ?, ?) ON \
      CONFLICT(thread_root_id, principal_kind, principal_id) DO NOTHING";
-/// The cluster's history as of this reply: every earlier message of the cluster,
+/// The cluster's recent history as of this reply: the last
+/// `THREAD_BACKFILL_RECENT_REPLIES` earlier replies not written by the follower,
 /// oldest first. The root is fetched separately because it is not one of its own
 /// replies.
-const SELECT_CLUSTER_HISTORY: &str = "SELECT id, from_kind, from_agent_id FROM messages WHERE \
-     conversation_id = ? AND thread_root_id = ? AND seq < ? ORDER BY seq ASC";
+const SELECT_CLUSTER_HISTORY: &str = "SELECT id FROM (SELECT id, seq FROM messages WHERE \
+     conversation_id = ? AND thread_root_id = ? AND seq < ? AND NOT (from_kind = 'agent' AND \
+     from_agent_id = ?) ORDER BY seq DESC LIMIT ?) ORDER BY seq ASC";
+/// A new follower is caught up with the root plus this many recent replies; older
+/// replies stay readable through `message history`.
+pub(crate) const THREAD_BACKFILL_RECENT_REPLIES: i64 = 10;
 /// Delivery rows are idempotent per (conversation, agent, message), so a
 /// re-followed cluster cannot queue the same message twice.
 const ENSURE_INBOX_DELIVERY: &str = "INSERT INTO conversation_inboxes (conversation_id, agent_id, \
@@ -2656,10 +2661,9 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
     }
 
     /// Queues the cluster as it stood before this reply: the root, which anchors it,
-    /// and every earlier message of it. Complete by design — a follower that joined
-    /// mid-cluster must not land with a hole next to the newest replies — and the
-    /// agent's own messages are skipped because it has already seen what it said.
-    /// The current reply is not queued here; delivering it is a separate act.
+    /// and its most recent earlier replies. The agent's own messages are skipped
+    /// because it has already seen what it said. The current reply is not queued
+    /// here; delivering it is a separate act.
     #[allow(clippy::too_many_arguments)]
     async fn backfill_cluster_history(
         &mut self,
@@ -2683,28 +2687,20 @@ impl<E: SendEntropy + Send + Sync> TxScope<'_, '_, E> {
             .await?;
         }
 
-        let history = sqlx::query(SELECT_CLUSTER_HISTORY)
+        let history: Vec<String> = sqlx::query_scalar(SELECT_CLUSTER_HISTORY)
             .bind(conversation.as_str())
             .bind(root.as_str())
             .bind(current_seq.get())
+            .bind(agent.as_str())
+            .bind(THREAD_BACKFILL_RECENT_REPLIES)
             .fetch_all(&mut *self.tx)
             .await
             .map_err(driver)?;
-        for row in history {
-            let earlier = MessageRow {
-                id: row.try_get("id").map_err(driver)?,
-                thread_root_id: None,
-                from_kind: row.try_get("from_kind").map_err(driver)?,
-                from_agent_id: row.try_get("from_agent_id").map_err(driver)?,
-                from_user_id: None,
-            };
-            if earlier.authored_by(agent) {
-                continue;
-            }
+        for id in history {
             self.ensure_delivery(
                 conversation,
                 agent,
-                &earlier.id,
+                &id,
                 DELIVERY_KIND_OBSERVE,
                 queued_at_ms,
             )

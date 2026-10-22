@@ -497,6 +497,14 @@ impl DaemonEventDurablePort for CountingRuntimeDeliveryStore {
         self.inner.current_admission(host_id, scope).await
     }
 
+    async fn has_pending_turn(
+        &self,
+        admission: RuntimeEventAdmission,
+        conversation: ConversationId,
+    ) -> Result<bool, PersistenceFailure> {
+        self.inner.has_pending_turn(admission, conversation).await
+    }
+
     async fn commit_exit(
         &self,
         event: CommitRuntimeExit,
@@ -6613,4 +6621,93 @@ async fn assert_grok_auth_activity_reads(
             .iter()
             .any(|row| row["id"] == id && row["payload"]["message"] == "Authentication required")
     );
+}
+
+#[tokio::test]
+async fn a_turn_end_drains_queued_turns_but_not_observe_only_context() {
+    let fixture = fixture("daemon-turn-end-drain.sqlite").await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut daemon).await;
+    let generation = start_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    respond(
+        &mut daemon,
+        &start_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+
+    let turn_ended = |ts: i64| {
+        product_frame(
+            "runtime_state",
+            Some(generation),
+            json!({
+                "state": {
+                    "runId": format!("run-{ts}"),
+                    "agentId": AGENT,
+                    "conversationId": CONVERSATION,
+                    "status": "idle",
+                    "terminalReason": "turn_ended",
+                    "startedAt": 10,
+                    "updatedAt": ts,
+                    "lastActivityAt": ts,
+                },
+                "ts": ts,
+            }),
+        )
+    };
+
+    // A queued turn behind the batch the run took is drained when the turn ends.
+    let mut db = open(&fixture.path).await;
+    add_inbox(&mut db, "message-2", 2).await;
+    sqlx::query("UPDATE conversation_inboxes SET delivered_at = 15 WHERE message_id = 'message-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    send_product(&mut daemon, turn_ended(20)).await;
+    let drain = next_json(&mut daemon).await;
+    assert_eq!(drain["kind"], "runtime_deliver");
+    assert_eq!(drain["params"]["deliveries"][0]["seq"], 2);
+    respond(
+        &mut daemon,
+        &drain,
+        json!({ "disposition": "admitted", "pid": 7, "started_at": 100 }),
+    )
+    .await;
+
+    // Only observe context left: the turn end wakes nobody.
+    sqlx::query("UPDATE conversation_inboxes SET in_flight_owner = NULL, in_flight_at = NULL, delivered_at = 30")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    add_inbox(&mut db, "message-3", 3).await;
+    sqlx::query(
+        "UPDATE conversation_inboxes SET delivery_kind = 'observe' WHERE message_id = 'message-3'",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    send_product(&mut daemon, turn_ended(40)).await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(300), daemon.next())
+            .await
+            .is_err(),
+        "observe-only pending context must not be drained"
+    );
+
+    daemon.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
 }
