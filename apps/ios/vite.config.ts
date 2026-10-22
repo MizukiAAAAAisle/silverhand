@@ -37,6 +37,8 @@ export default defineConfig({
               login: authPaths.login,
               signup: authPaths.signup,
               logout: authPaths.logout,
+              passwordRecoveryRequest: authPaths.passwordRecoveryRequest,
+              passwordRecoveryReset: authPaths.passwordRecoveryReset,
             },
             null,
             2,
