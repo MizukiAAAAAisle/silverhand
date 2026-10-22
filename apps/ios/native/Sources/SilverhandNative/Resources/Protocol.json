@@ -1,4 +1,5 @@
 {
+  "_generatedBy": "apps/ios/native-protocol.ts",
   "desktopApi": 4,
   "desktopMinClient": 4,
   "desktopMinServer": 4,

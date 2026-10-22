@@ -1,12 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import {
-  apiPaths,
-  authPaths,
-  DESKTOP_SERVER_API_EPOCH,
-  MINIMUM_SERVER_API_EPOCH,
-} from "@silverhand/shared";
-import admission from "../../../packages/shared/src/backend-admission.json";
+import { DESKTOP_SERVER_API_EPOCH, MINIMUM_SERVER_API_EPOCH } from "@silverhand/shared";
+import { nativeProtocol, nativeProtocolJson } from "../native-protocol";
 import { createIOSPlatform } from "./platform";
 import type { NativeBridge } from "./bridge";
 
@@ -283,24 +278,14 @@ describe("iOS platform", () => {
   });
 
   it("keeps native admission and route resource tied to shared authority", () => {
-    const native = JSON.parse(
-      readFileSync(
-        new URL("../native/Sources/SilverhandNative/Resources/Protocol.json", import.meta.url),
-        "utf8",
-      ),
+    const committed = readFileSync(
+      new URL("../native/Sources/SilverhandNative/Resources/Protocol.json", import.meta.url),
+      "utf8",
     );
-    expect(native).toEqual({
-      ...admission,
+    expect(committed).toBe(nativeProtocolJson());
+    expect(nativeProtocol()).toMatchObject({
       desktopApi: DESKTOP_SERVER_API_EPOCH,
       desktopMinServer: MINIMUM_SERVER_API_EPOCH,
-      serverInfo: apiPaths.serverInfo,
-      me: apiPaths.me,
-      mePassword: apiPaths.mePassword,
-      login: authPaths.login,
-      signup: authPaths.signup,
-      logout: authPaths.logout,
-      passwordRecoveryRequest: authPaths.passwordRecoveryRequest,
-      passwordRecoveryReset: authPaths.passwordRecoveryReset,
     });
   });
 
