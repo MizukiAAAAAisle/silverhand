@@ -58,19 +58,18 @@ SILVERHAND_LISTEN_ADDR=127.0.0.1:8080
 SILVERHAND_ALLOWED_ORIGINS=https://silverhand.example.com
 ```
 
-| Variable                        | Notes                                                                                       |
-| ------------------------------- | ------------------------------------------------------------------------------------------- |
-| `SILVERHAND_DEPLOYMENT_PROFILE` | Always `remote-only` for a self-hosted server.                                              |
-| `SILVERHAND_DATABASE_PATH`      | SQLite database file. It is created on first start.                                         |
-| `SILVERHAND_BLOBS_ROOT`         | Attachment storage directory.                                                               |
-| `SILVERHAND_LOG_DIR`            | Diagnostic and audit log directory.                                                         |
-| `SILVERHAND_LISTEN_ADDR`        | Numeric IP and port. Bind to loopback and expose the server only through the proxy.         |
-| `SILVERHAND_ALLOWED_ORIGINS`    | Your public HTTPS origin, without a path. Comma-separate multiple origins.                  |
-| `SILVERHAND_DISABLE_SIGNUP`     | Optional. `1` closes public signup.                                                         |
-| `SILVERHAND_SMTP_URL`           | Optional. Set it together with `SILVERHAND_MAIL_FROM` to enable password recovery by email. |
-| `SILVERHAND_MIGRATE`            | `1` allows an existing database to be upgraded on start. See [Upgrading](#upgrading).       |
+| Variable                        | Notes                                                                                 |
+| ------------------------------- | ------------------------------------------------------------------------------------- |
+| `SILVERHAND_DEPLOYMENT_PROFILE` | Always `remote-only` for a self-hosted server.                                        |
+| `SILVERHAND_DATABASE_PATH`      | SQLite database file. It is created on first start.                                   |
+| `SILVERHAND_BLOBS_ROOT`         | Attachment storage directory.                                                         |
+| `SILVERHAND_LOG_DIR`            | Diagnostic and audit log directory.                                                   |
+| `SILVERHAND_LISTEN_ADDR`        | Numeric IP and port. Bind to loopback and expose the server only through the proxy.   |
+| `SILVERHAND_ALLOWED_ORIGINS`    | Your public HTTPS origin, without a path. Comma-separate multiple origins.            |
+| `SILVERHAND_DISABLE_SIGNUP`     | Optional. `1` closes public signup.                                                   |
+| `SILVERHAND_MIGRATE`            | `1` allows an existing database to be upgraded on start. See [Upgrading](#upgrading). |
 
-Use absolute paths. The full reference, including metrics, is in [docs/server-env-config.md](docs/server-env-config.md).
+Use absolute paths. The full reference is in [docs/server-env-config.md](docs/server-env-config.md).
 
 ## 3. Run as a service
 
@@ -123,8 +122,6 @@ server {
         proxy_send_timeout 1h;
         proxy_buffering off;
     }
-
-    location /metrics { return 404; }
 }
 ```
 
@@ -204,8 +201,3 @@ Before migrating, the server copies the database's directory to a sibling `silve
 Stop the server, then copy the whole data directory. That directory holds the database with its `-wal` file and the `blobs` directory. Start the server again afterwards.
 
 Do not open the live database with an external SQLite client while the server is running.
-
-## Optional features
-
-- **Password recovery by email**: set `SILVERHAND_SMTP_URL` (`smtps://…:465` or `smtp://…:587?tls=required`) and `SILVERHAND_MAIL_FROM`. See [Password recovery](docs/server-env-config.md#password-recovery).
-- **Metrics**: `SILVERHAND_METRICS_LISTEN=127.0.0.1:9464` exposes Prometheus metrics on loopback only. Never route it through the public proxy. See [docs/server-observability.md](docs/server-observability.md); starter Prometheus and Grafana configuration is in `ops/observability/`.
