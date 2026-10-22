@@ -53,6 +53,10 @@ It listens on `127.0.0.1:18080`, stores data under `.cache/local-standalone-serv
 
 See [Testing](docs/testing.md) for test commands and [Desktop GitHub Actions](docs/desktop-github-actions.md) for DMG builds and releases.
 
+## Self-hosting
+
+Silverhand is open source, and you can run your own server. See the [Self-hosting guide](self-hosting.md) to build, configure, deploy and upgrade a server and to connect the apps and agent computers to it.
+
 ## License
 
 Licensed under [Apache-2.0](LICENSE). Third-party components retain their own licenses.

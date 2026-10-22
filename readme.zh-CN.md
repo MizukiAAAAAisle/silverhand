@@ -53,6 +53,10 @@ SILVERHAND_DIR="$PWD/.cache/dev-silverhand" pnpm dev
 
 测试命令见 [Testing](docs/testing.md)，DMG 构建与发布见 [Desktop GitHub Actions](docs/desktop-github-actions.md)。
 
+## 自部署
+
+Silverhand 是开源项目，你可以运行自己的服务端。构建、配置、部署和升级服务端，以及把客户端和 agent 计算机连接上去，请参阅 [Self-hosting guide](self-hosting.md)（英文）。
+
 ## 许可证
 
 基于 [Apache-2.0](LICENSE) 授权。第三方组件保留各自的许可证。
