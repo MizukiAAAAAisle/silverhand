@@ -259,10 +259,12 @@ final class ClientSessionTests: XCTestCase {
       path: "/api/me",
       headers: [
         "Authorization": "Bearer injected", "Cookie": "injected", "Origin": "https://evil.example",
+        "Idempotency-Key": "create-1",
       ])
     XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer A-secret")
     XCTAssertNil(requests.last?.value(forHTTPHeaderField: "Cookie"))
     XCTAssertNil(requests.last?.value(forHTTPHeaderField: "Origin"))
+    XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Idempotency-Key"), "create-1")
   }
 
   func testPasswordSuccessInvalidatesButFailureKeepsSession() async throws {

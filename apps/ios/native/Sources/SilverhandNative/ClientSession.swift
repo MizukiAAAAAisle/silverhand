@@ -90,7 +90,9 @@ public final class ClientSession {
     result.setValue(String(contract.desktopApi), forHTTPHeaderField: contract.desktopApiEpochHeader)
     if let token { result.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
     for (key, value) in headers
-    where ["accept", "content-type", "if-match", "if-none-match"].contains(key.lowercased()) {
+    where ["accept", "content-type", "if-match", "if-none-match", "idempotency-key"].contains(
+      key.lowercased())
+    {
       result.setValue(value, forHTTPHeaderField: key)
     }
     if let body {
