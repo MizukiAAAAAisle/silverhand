@@ -132,15 +132,24 @@
    no long-press callout (a long press opens the row menu). */
 .mobile-header,
 .mobile-tabbar,
-[data-layout="compact"] :is([data-pane-header], [data-side-panel-header], [data-sidebar]) {
+[data-layout="compact"] :is([data-pane-header], [data-side-panel-header]) {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
 }
-/* WebKit will not type into a field whose ancestor refuses selection. */
-[data-layout="compact"] [data-sidebar] :is(input, textarea, [contenteditable="true"]) {
-  -webkit-user-select: text;
-  user-select: text;
+/* The sidebar refuses selection on any touch screen, wide layouts included:
+   there a long press opens the row menu, never a text selection. */
+@media (pointer: coarse) {
+  [data-sidebar] {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* WebKit will not type into a field whose ancestor refuses selection. */
+  [data-sidebar] :is(input, textarea, [contenteditable="true"]) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
 }
 /* Glass answers a press by swelling and brightening, never by dimming. */
 .mobile-back-icon,

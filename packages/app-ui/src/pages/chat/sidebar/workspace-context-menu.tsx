@@ -1,4 +1,3 @@
-import { useSidebarBranchDrag } from "@/components/layout/sidebar-branch-drag";
 import { useState, type ReactElement, type JSX } from "react";
 import { LeaveIcon } from "@/icons";
 import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-context-menu";
@@ -42,7 +41,6 @@ export function WorkspaceContextMenu({
    *  Leaving an archived workspace routes through Settings instead. */
   leaveWorkspace?: { id: string; name: string } | null;
 }): JSX.Element {
-  const branchDrag = useSidebarBranchDrag();
   const [confirmingLeave, setConfirmingLeave] = useState(false);
 
   // A row with no capability at all would render an empty menu, so it gets no
@@ -51,7 +49,7 @@ export function WorkspaceContextMenu({
 
   return (
     <>
-      <AppContextMenu trigger={trigger} touchLongPress={!branchDrag}>
+      <AppContextMenu trigger={trigger}>
         {muteWorkspaceId ? <WorkspaceMuteMenuItem workspaceId={muteWorkspaceId} /> : null}
         {leaveWorkspace ? (
           <WorkspaceLeaveMenuItem

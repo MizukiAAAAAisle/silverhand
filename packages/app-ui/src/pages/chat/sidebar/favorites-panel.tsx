@@ -268,7 +268,7 @@ function DirectFavoriteRow({
     />
   );
   return (
-    <AppContextMenu trigger={row} touchLongPress={!draggable}>
+    <AppContextMenu trigger={row}>
       <DirectPairStarMenuItem conversationId={pair.conversation_id} starred />
     </AppContextMenu>
   );
@@ -304,7 +304,7 @@ function FavoriteRow({
   );
 
   return (
-    <AppContextMenu trigger={row} touchLongPress={!draggable}>
+    <AppContextMenu trigger={row}>
       <FavoriteMenuItems
         item={item}
         attention={attention}

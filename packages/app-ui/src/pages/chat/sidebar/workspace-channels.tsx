@@ -307,7 +307,7 @@ function WorkspaceChannelRow({
   );
 
   return (
-    <AppContextMenu trigger={row} touchLongPress={!draggable}>
+    <AppContextMenu trigger={row}>
       <ChannelRowMenuItems
         channelId={channel.id}
         title={channel.title}

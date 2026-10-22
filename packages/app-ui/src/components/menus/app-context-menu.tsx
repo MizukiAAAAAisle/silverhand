@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ComponentPropsWithoutRef, ReactElement, ReactNode } from "react";
 import * as ContextMenu from "@radix-ui/react-context-menu";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
@@ -40,11 +41,45 @@ function AppMenuItemContent({
   );
 }
 
+/** At most one context menu is open. On touch, Radix dismisses an open menu on
+ *  the `click` after an outside press, and a long press never produces one, so
+ *  a long press on another row would open a second menu over the first. Radix's
+ *  context menu cannot be closed from outside, so opening one remounts the
+ *  previous one, which drops its open state. */
+let closeOpenMenu: (() => void) | null = null;
+
+function useSingleOpenMenu() {
+  const [generation, setGeneration] = useState(0);
+  const closeRef = useRef(() => setGeneration((value) => value + 1));
+
+  useEffect(() => {
+    const close = closeRef.current;
+    return () => {
+      if (closeOpenMenu === close) {
+        closeOpenMenu = null;
+      }
+    };
+  }, []);
+
+  const onOpenChange = useCallback((open: boolean) => {
+    const close = closeRef.current;
+    if (open) {
+      if (closeOpenMenu && closeOpenMenu !== close) {
+        closeOpenMenu();
+      }
+      closeOpenMenu = close;
+    } else if (closeOpenMenu === close) {
+      closeOpenMenu = null;
+    }
+  }, []);
+
+  return { generation, onOpenChange };
+}
+
 export function AppContextMenu({
   trigger,
   children,
   contentClassName,
-  touchLongPress = true,
   triggerClassName,
   triggerRef,
   disabled = false,
@@ -55,26 +90,21 @@ export function AppContextMenu({
   triggerRef?: React.Ref<HTMLSpanElement>;
   disabled?: boolean;
   onCloseAutoFocus?: ComponentPropsWithoutRef<typeof ContextMenu.Content>["onCloseAutoFocus"];
-  /** Sortable rows reserve touch long-press for dragging; mouse menus stay enabled. */
-  touchLongPress?: boolean;
   children: ReactNode;
   /** Extra classes merged onto the menu content — e.g. a narrower `min-w-*`
    *  than the shared default for a compact single-action menu. */
   contentClassName?: string;
 }): JSX.Element {
+  const menu = useSingleOpenMenu();
+
   return (
-    <ContextMenu.Root>
+    <ContextMenu.Root key={menu.generation} onOpenChange={menu.onOpenChange}>
       <ContextMenu.Trigger
         asChild
         className={triggerClassName}
         ref={triggerRef}
         disabled={disabled}
         style={disabled ? { WebkitTouchCallout: "default" } : undefined}
-        onPointerDown={(event) => {
-          // Radix checks defaultPrevented before scheduling its long-press menu.
-          // Touch scrolling is owned by TouchSensor, not PointerSensor.
-          if (!touchLongPress && event.pointerType === "touch") event.preventDefault();
-        }}
       >
         {trigger}
       </ContextMenu.Trigger>
