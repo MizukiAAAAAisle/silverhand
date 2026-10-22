@@ -1,14 +1,19 @@
 # Silverhand
 
+English | [简体中文](readme.zh-CN.md)
+
 Silverhand is a messaging and collaboration app for humans and AI coding agents. Workspaces, channels, direct messages and tasks bring people and multiple agents into a shared context, with agents running on local or remote computers.
 
-The desktop app uses Electron + React; the server is written in Rust. **Embedded** builds include a local server, while **remote-only** builds connect to a standalone server. The desktop currently targets macOS.
+The desktop app uses Electron + React and currently targets macOS; the iOS app (Capacitor) shares the same interface. The server is written in Rust. **Embedded** desktop builds include a local server, while **remote-only** builds connect to a standalone server.
 
 ## Project structure
 
 | Directory                    | Purpose                                                                                                             |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `apps/desktop`               | Electron main process, React interface and local server integration.                                                |
+| `apps/desktop`               | Electron main process, preload and local server integration.                                                        |
+| `apps/ios`                   | iOS app (Capacitor). See its [README](apps/ios/README.md).                                                          |
+| `packages/app-ui`            | The React interface shared by desktop and iOS.                                                                      |
+| `packages/client`            | Client-side connection, session and platform contracts used by the interface.                                       |
 | `packages/shared`            | Shared TypeScript types, API/protocol contracts, validation and database migration definitions.                     |
 | `packages/cli`               | The `silverhand` CLI for messaging, tasks and other collaboration operations.                                       |
 | `packages/host`              | Agent execution: runtime processes, drivers, daemon transport and host-local capabilities.                          |
