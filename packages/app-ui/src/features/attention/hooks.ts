@@ -23,6 +23,7 @@ import type {
 } from "@silverhand/shared";
 import { apiPaths } from "@silverhand/shared";
 import { api } from "@/lib/api";
+import { t } from "@/lib/i18n";
 import { resolveEffectiveAttentionMode } from "@/features/attention/attention-mode";
 import { activityItemSource, postObserve } from "./observe";
 import {
@@ -809,25 +810,24 @@ export function useClearActivityItem() {
 }
 
 /**
- * Mark a batch of Activity items read in one transaction (#task:1231 phase B —
- * "Mark all read"). Each item is routed through {@link activityItemSource}, so
- * directed items clear by `notification_id` and ambient items by an explicit
- * stream-head clear — a Mark-all NEVER converts a directed dismiss into a stream
- * clear. The whole batch is one `observe()` call (one server transaction); an
- * empty batch is a no-op.
- *
- * The caller passes the items to clear (today: the currently-visible/filtered
- * list, so "Mark all read" clears what the user is looking at and never a hidden,
- * filtered-out item). `observe()` caps a batch at 1000 sources; a real attention
- * queue is far below that, so v1 does not chunk.
+ * Mark everything in Activity read: every listed item through {@link activityItemSource}
+ * in one `observe()` call (directed by `notification_id`, ambient by an explicit
+ * stream-head clear), then every remaining unread directed notification. The second
+ * step reaches notices Activity cannot list, such as a start failure whose
+ * conversation was archived; without it their sticky toasts would return on the next
+ * launch. `observe()` caps a batch at 1000 sources, far above a real queue.
  */
 export function useMarkActivityAllRead() {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: async (items: ActivityItemDto[]) => {
       const sources = items.map(activityItemSource).filter((s): s is ObserveSource => s != null);
-      if (sources.length === 0) return { changed: false };
-      return postObserve(sources);
+      const result = sources.length > 0 ? await postObserve(sources) : undefined;
+      await api(apiPaths.notificationsRead, {
+        method: "POST",
+        body: JSON.stringify({ all: true }),
+      });
+      return result;
     },
     onSuccess: (result, items) => {
       reconcileUnreadAfterObserveIfRealtimeUnavailable(qc, result);
@@ -841,7 +841,7 @@ export function useMarkActivityAllRead() {
       void qc.invalidateQueries({ queryKey: ["notifications"] });
     },
     onError: () => {
-      toast.error("Failed to mark all as read, please retry");
+      toast.error(t("activity.markAllReadFailed"));
     },
   });
 }

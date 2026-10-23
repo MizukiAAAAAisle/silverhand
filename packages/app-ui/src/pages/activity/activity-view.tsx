@@ -1,7 +1,7 @@
 import { useListReadingPosition } from "@/navigation/view-memory";
 import { plainTextFromMarkdown } from "@/lib/plain-text-from-markdown";
 import { useMemo, useState } from "react";
-import { ActivityIcon, CheckIcon, ThreadIcon, WarningIcon } from "@/icons";
+import { ActivityIcon, CheckAllIcon, CheckIcon, ThreadIcon, WarningIcon } from "@/icons";
 import type { ActivityItemDto, MessageAuthorDto, AgentDto } from "@silverhand/shared";
 import { WorkspaceIcon } from "@/components/workspace-icon";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
@@ -21,11 +21,17 @@ import type { CounterpartPresentation } from "@/features/direct-pairs/counterpar
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import type { AgentAvatarSource } from "@/features/agents/hooks/avatar-hooks";
-import { useActivity, useClearActivityItem } from "@/features/attention/hooks";
+import {
+  useActivity,
+  useClearActivityItem,
+  useMarkActivityAllRead,
+} from "@/features/attention/hooks";
 import { activityItemSource } from "@/features/attention/observe";
 import { ActivityListSkeleton } from "./activity-list-skeleton";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
+import { iconMarkup } from "@/components/layout/native-page-bar";
+import { useCompactLayout } from "@/navigation/layout";
 import { t } from "@/lib/i18n";
 
 /**
@@ -67,10 +73,9 @@ import { t } from "@/lib/i18n";
  *   - mention / agent_failed (directed) → mark the `notification_id` read.
  *   - unread (ambient)                  → advance the stream cursor via an
  *     EXPLICIT stream-head clear (#task:1231 phase B; knowingly tail-swallows, §2).
- *   Each row exposes a hover-✓ that clears WITHOUT navigating. (A header
- *   "Mark all read" that batched the visible list in one `observe()` call was
- *   removed from the UI — #task:1446 — pending a new home; `useMarkActivityAllRead`
- *   and its batch semantics are kept for when it returns.) Navigating to a source
+ *   Each row exposes a hover-✓ that clears WITHOUT navigating. The header's
+ *   mark-all clears the whole list regardless of the active filter, plus every
+ *   unread directed notification the list cannot show. Navigating to a source
  *   still clears it too (directed on click; ambient via open-time mark-read).
  *
  * `kind=task` is intentionally NOT in Activity v1:
@@ -352,6 +357,8 @@ export function ActivityView({
 }: ActivityViewProps): JSX.Element {
   const readingPosition = useListReadingPosition("activity-list");
   const { data, isLoading, isError } = useActivity();
+  const markAllRead = useMarkActivityAllRead();
+  const compact = useCompactLayout();
   const [filter, setFilter] = useState<FilterKey>("all");
 
   const items = data?.items ?? [];
@@ -428,14 +435,45 @@ export function ActivityView({
   const directed = filtered.filter((it) => it.salience === "directed");
   const ambient = filtered.filter((it) => it.salience === "ambient");
 
+  const markAll = () => markAllRead.mutate(items);
+  const canMarkAll = items.length > 0 && !markAllRead.isPending;
+
   return (
     <PaneShell width={width}>
-      <PaneHeader icon={<ActivityIcon className="size-3.5" />} title={t("activity.activity")} />
+      <PaneHeader
+        icon={<ActivityIcon className="size-3.5" />}
+        title={t("activity.activity")}
+        trailing={
+          canMarkAll ? (
+            <button
+              type="button"
+              title={t("activity.markAllRead")}
+              aria-label={t("activity.markAllRead")}
+              onClick={markAll}
+              className={
+                compact
+                  ? "ml-auto glass-surface glass-round focus-outline"
+                  : "ml-auto grid size-7 place-items-center rounded-(--control-radius) text-text-muted transition-colors hover:bg-(--bg-option-hover) hover:text-text-primary focus-outline"
+              }
+            >
+              <CheckAllIcon size={compact ? 20 : 16} />
+            </button>
+          ) : undefined
+        }
+        nativeActions={[
+          canMarkAll
+            ? {
+                id: "mark-all-read",
+                label: t("activity.markAllRead"),
+                icon: iconMarkup(CheckAllIcon),
+                run: markAll,
+              }
+            : null,
+        ]}
+      />
 
       {/* Filter chips. Selected chips use the theme selection token, never a
-          semantic hue (they must not steal the items' volume budget). (The
-          "Mark all read" action was removed from the UI — #task:1446 — pending a
-          new home; `useMarkActivityAllRead` + the observe machinery are kept.) */}
+          semantic hue (they must not steal the items' volume budget). */}
       <div className="flex shrink-0 items-center gap-1.5 px-4 py-2">
         {filterTabs().map((f) => {
           const on = f.key === filter;

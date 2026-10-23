@@ -10,6 +10,8 @@ export const activity = {
   requiresAttention: "Requires attention",
   subscribed: "Subscribed",
   markAsRead: "Mark as read",
+  markAllRead: "Mark all as read",
+  markAllReadFailed: "Couldn't mark all as read. Try again.",
   newCount: "{n} new",
   emptyFilter: {
     all: "Nothing here",

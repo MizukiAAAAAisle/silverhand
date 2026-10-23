@@ -147,6 +147,9 @@ export function useNotificationToasts(
 
   const seenIds = useRef<Set<string>>(new Set());
   const initialized = useRef(false);
+  // Sticky start-failure toasts on screen. Each lives only while its notice is
+  // unread, so a read from anywhere else (Activity, another device) takes it down.
+  const stickyIds = useRef<Set<string>>(new Set());
   // Live notification rows the user can click on. Toast `onClick` reads
   // straight from this map; native-notification clicks come back from
   // main as ids and look up here too. We keep it as a ref instead of
@@ -244,6 +247,14 @@ export function useNotificationToasts(
     if (!data) return;
     const notifications = data.notifications;
 
+    const unreadIds = new Set(notifications.map((n) => n.id));
+    for (const id of stickyIds.current) {
+      if (!unreadIds.has(id)) {
+        toast.dismiss(id);
+        stickyIds.current.delete(id);
+      }
+    }
+
     if (!initialized.current) {
       // First load: existing notifications are seen without toasting, except an
       // unread agent start failure — it may have no Activity row (owner outside
@@ -303,6 +314,7 @@ export function useNotificationToasts(
         if (isAgentFailure) {
           // Sticky until the read is confirmed: that acknowledge lets the next
           // failure of this agent notify again. A failed read keeps it up for retry.
+          stickyIds.current.add(n.id);
           toast.error(label, {
             id: n.id,
             duration: Infinity,

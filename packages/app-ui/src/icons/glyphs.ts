@@ -19,6 +19,7 @@ import {
   CalendarClock,
   Camera,
   Check,
+  CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -120,6 +121,7 @@ export const CameraIcon = icon("camera", Camera);
 export const UploadIcon = icon("upload", Upload);
 export const CancelledIcon = icon("cancelled", Ban);
 export const CheckIcon = icon("check", Check);
+export const CheckAllIcon = icon("check-all", CheckCheck);
 export const ChevronDownIcon = icon("chevron-down", ChevronDown);
 export const ChevronLeftIcon = icon("chevron-left", ChevronLeft);
 export const ChevronRightIcon = icon("chevron-right", ChevronRight);
