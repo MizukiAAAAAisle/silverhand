@@ -265,7 +265,9 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     let top = view.safeAreaInsets.top
     let bottom: CGFloat
     if verticalBarEdge != nil, titlebar.state != nil {
-      bottom = verticalBarTop
+      // The panes' own 48pt headers clear the display's corners by their own
+      // padding, so they need only a small gap above.
+      bottom = view.safeAreaInsets.top + 10
     } else if verticalBarEdge != nil {
       bottom = verticalBarTop + PageAccessory.titleHeight
     } else if !stack.isNavigationBarHidden {
