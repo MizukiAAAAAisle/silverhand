@@ -171,7 +171,9 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
   const nativeComposer = useNativeComposerPlatform();
   const [accessoryHeight, setAccessoryHeight] = useState(0);
   const accessoryRef = useRef<HTMLDivElement>(null);
+  const nativeHostRef = useRef<HTMLDivElement>(null);
   useNativeComposer({
+    host: nativeHostRef,
     shown: nativeComposer && counterpart !== null,
     draftKey: `direct-draft:${target.kind}:${target.id}`,
     conversationId: null,
@@ -370,7 +372,7 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
       {nativeComposer ? (
         // The native composer floats over the page; this holds the controls
         // that float above it.
-        <div data-native-composer>
+        <div ref={nativeHostRef} data-native-composer>
           <div ref={accessoryRef} data-native-composer-accessory>
             {sendError}
             {tray}

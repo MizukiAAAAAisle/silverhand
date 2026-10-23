@@ -32,7 +32,10 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   let content = SilverhandViewController()
   let titlebar = Titlebar()
   let pageBar = PageBar()
-  let composer = ComposerView()
+  /// One per pane showing a conversation, by draft key.
+  private(set) var composers: [String: ComposerView] = [:]
+  var onComposerEvent: (([String: Any]) -> Void)?
+  private var composerTopLimit: CGFloat = 0
   let banner = BannerView()
   let selectionBar = SelectionBarView()
   var onIntent: (([String: Any]) -> Void)?
@@ -130,7 +133,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       if !session.isEmpty { hideBar(!visible || blocked, animated: false) }
     }
     applyBars()
-    composer.publishMetrics()
+    for composer in composers.values { composer.publishMetrics() }
   }
 
   enum Bars: Equatable {
@@ -208,7 +211,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// the swipe with the bars back as they were.
   func setBackProgress(_ progress: CGFloat?) {
     guard let stack = selectedViewController as? UINavigationController else { return }
-    composer.setBackProgress(progress)
+    for composer in composers.values { composer.setBackProgress(progress) }
     selectionBar.setBackProgress(progress)
     guard let progress else {
       endSwipe()
@@ -278,7 +281,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     content.publishBarMetrics(
       bottom: bottom, tabs: PageAccessory.tabsHeight, vertical: verticalBarEdge != nil)
-    composer.topLimit = bottom + (pageBar.accessory.window == nil ? 0 : pageBar.accessory.height)
+    composerTopLimit = bottom + (pageBar.accessory.window == nil ? 0 : pageBar.accessory.height)
+    for composer in composers.values { composer.topLimit = composerTopLimit }
   }
 
   /// Draws `bars` into the page's navigation item. A page's bar keeps what
@@ -387,7 +391,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       presentedViewController?.dismiss(animated: false)
       banner.dismiss()
     }
-    composer.setBlocked(blocked)
+    for composer in composers.values { composer.setBlocked(blocked) }
     selectionBar.isHidden = blocked
     if let index = names.firstIndex(of: call.getString("tab") ?? ""), let host = page(index) {
       selectedIndex = index
@@ -472,7 +476,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     // The page resets its bars whenever its layout changes, while the
     // composer is a page's own and leaves with it; only a lost session takes
     // it with the bars.
-    composer.remove()
+    removeComposer(key: nil)
     removeSelectionBar(key: nil)
     banner.dismiss()
   }
@@ -570,10 +574,13 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     return tap
   }()
 
-  @objc private func pageTapped() { composer.endEditing() }
+  private var editingComposer: ComposerView? { composers.values.first { $0.isEditing } }
+
+  @objc private func pageTapped() { editingComposer?.endEditing() }
 
   func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
-    recognizer !== pageTap || composer.endsEditing(at: recognizer.location(in: view))
+    recognizer !== pageTap
+      || editingComposer?.endsEditing(at: recognizer.location(in: view)) == true
   }
 
   func gestureRecognizer(
@@ -593,8 +600,9 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
 
   @objc private func pageTouched(_ touch: UILongPressGestureRecognizer) {
     switch touch.state {
-    case .began: composer.holdFocus(true, at: touch.location(in: view))
-    case .ended, .cancelled, .failed: composer.holdFocus(false, at: .zero)
+    case .began: editingComposer?.holdFocus(true, at: touch.location(in: view))
+    case .ended, .cancelled, .failed:
+      for composer in composers.values { composer.holdFocus(false, at: .zero) }
     default: break
     }
   }
@@ -608,17 +616,41 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       web.addGestureRecognizer(pageTap)
       web.addGestureRecognizer(pageTouch)
     }
+    // A screen-wide composer is the page's only one: a new draft replaces it.
+    if state.frame == nil {
+      for (key, other) in composers where key != state.key {
+        other.remove()
+        composers[key] = nil
+      }
+    }
+    let composer = composers[state.key] ?? ComposerView()
+    composers[state.key] = composer
+    composer.onEvent = { [weak self] event in self?.onComposerEvent?(event) }
     composer.presenter = self
+    composer.topLimit = composerTopLimit
     composer.install(in: view)
     composer.setBlocked(blocked)
+    composer.setSteppedAside(selectionBar.state != nil)
     composer.apply(state)
+  }
+
+  /// Removes the composer for draft `key`; without a key, every one.
+  func removeComposer(key: String?) {
+    for (candidate, composer) in composers where key == nil || candidate == key {
+      composer.remove()
+      composers[candidate] = nil
+    }
+  }
+
+  func setComposerText(key: String, text: String, caret: Int, focus: Bool) {
+    composers[key]?.setText(key: key, text: text, caret: caret, focus: focus)
   }
 
   func showSelectionBar(_ state: SelectionBarState) {
     selectionBar.install(in: view)
     selectionBar.isHidden = blocked
     selectionBar.apply(state)
-    composer.setSteppedAside(true)
+    for composer in composers.values { composer.setSteppedAside(true) }
   }
 
   /// Removes the selection bar if it shows pane `key`, or whatever it shows
@@ -626,7 +658,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   func removeSelectionBar(key: String?) {
     guard selectionBar.state != nil, key == nil || selectionBar.state?.key == key else { return }
     selectionBar.remove()
-    composer.setSteppedAside(false)
+    for composer in composers.values { composer.setSteppedAside(false) }
   }
 
   func tabBarController(

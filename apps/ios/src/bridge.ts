@@ -135,10 +135,6 @@ export interface NativeBridge {
     handler: (event: BannerEvent) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
-    event: "composerMetrics",
-    handler: (metrics: { rest: number; reserve: number; overlay: number; picker: number }) => void,
-  ): Promise<PluginListenerHandle>;
-  addListener(
     event: "fold",
     handler: (
       state: { axis: "vertical" | "horizontal"; start: number; end: number } | { axis?: undefined },

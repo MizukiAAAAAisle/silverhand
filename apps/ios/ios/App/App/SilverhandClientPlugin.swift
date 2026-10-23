@@ -356,13 +356,14 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
           },
           title: activity["title"] as? String ?? "", detail: activity["detail"] as? String ?? "",
           label: activity["label"] as? String ?? "", since: activity["since"] as? Double ?? 0)
+      },
+      frame: (state["frame"] as? JSObject).map {
+        ComposerFrame(
+          left: CGFloat($0["left"] as? Double ?? 0), width: CGFloat($0["width"] as? Double ?? 0))
       })
     Task { @MainActor [self] in
       if let host = navigationHost {
-        host.composer.onEvent = { [weak self] event in self?.notifyListeners("composer", data: event) }
-        host.composer.onMetrics = { [weak self] metrics in
-          self?.publishState("composerMetrics", metrics)
-        }
+        host.onComposerEvent = { [weak self] event in self?.notifyListeners("composer", data: event) }
         host.showComposer(next)
       }
       call.resolve()
@@ -419,9 +420,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   @objc public func composerRemove(_ call: CAPPluginCall) {
     let key = call.getString("key")
     Task { @MainActor in
-      if let composer = navigationHost?.composer, key == nil || composer.state?.key == key {
-        composer.remove()
-      }
+      navigationHost?.removeComposer(key: key)
       call.resolve()
     }
   }
@@ -431,7 +430,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     let caret = call.getInt("caret") ?? (text as NSString).length
     let focus = call.getBool("focus") ?? false
     Task { @MainActor in
-      navigationHost?.composer.setText(key: key, text: text, caret: caret, focus: focus)
+      navigationHost?.setComposerText(key: key, text: text, caret: caret, focus: focus)
       call.resolve()
     }
   }

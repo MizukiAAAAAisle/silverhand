@@ -849,8 +849,8 @@
 /* The native composer (iOS) floats over the page. The message scroller ends
    in room for it at the height its text gives it; the controls that float
    above it (activity, attachments) sit on its drawn top, above any picker
-   native lists there. Both
-   are measured from the bottom of the window, where a page showing it ends. */
+   native lists there. Native reports them per composer; the page sets them on
+   the composer's pane, measured from the pane's bottom. */
 [data-native-composer-room] {
   flex-shrink: 0;
   height: var(--native-composer-reserve, 0px);
@@ -868,7 +868,8 @@
   bottom: calc(var(--native-composer-overlay, 0px) + var(--native-composer-picker, 0px) + 8px);
   z-index: var(--z-sticky);
 }
-[data-layout="compact"] [data-scroll-bottom] {
+[data-layout="compact"] [data-scroll-bottom],
+[data-panel]:has([data-native-composer]) [data-scroll-bottom] {
   bottom: max(
     16px,
     calc(var(--native-composer-overlay, 0px) + var(--native-composer-picker, 0px) + 12px)

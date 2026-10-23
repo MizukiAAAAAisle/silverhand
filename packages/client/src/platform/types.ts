@@ -299,7 +299,7 @@ export interface ComposerMenuItem {
   icon: string;
   pick?: "photos" | "files";
 }
-/** The compact layout's composer, drawn natively over the page. The shared
+/** The composer, drawn natively over the page. The shared
  * UI keeps the draft, the send and every string; native edits the text and
  * reports it. `key` names the draft: native starts a new one empty until
  * `setText`. iOS decodes each field by name (`SilverhandClientPlugin.swift`). */
@@ -321,6 +321,10 @@ export interface ComposerState {
   /** The agents at work here, on a line above the composer; a tap comes back
    * as `activity`. Absent while none runs. */
   activity?: ComposerActivity;
+  /** The pane it belongs to, in viewport points, where panes stand side by
+   * side; each pane's composer shows at once. Absent spans the screen and
+   * replaces any other. */
+  frame?: { left: number; width: number };
 }
 /** One line for the agents running: up to three faces, the first agent's
  * name and state, and how long it has run, which native counts from `since`
@@ -361,7 +365,18 @@ export type ComposerEvent =
   | { kind: "add"; key: string; id: string }
   | { kind: "pick"; key: string; id: string }
   | { kind: "activity"; key: string; id: string }
-  | { kind: "files"; key: string; files: { name: string; type: string; base64: string }[] };
+  | { kind: "files"; key: string; files: { name: string; type: string; base64: string }[] }
+  /** Distances up from the bottom of the window to the composer's top: at
+   * rest, at the height its text gives it (the keyboard included), and as
+   * drawn; `picker` is the room the candidate list takes over it. */
+  | {
+      kind: "metrics";
+      key: string;
+      rest: number;
+      reserve: number;
+      overlay: number;
+      picker: number;
+    };
 export interface ComposerCapability {
   /** Shows the composer for draft `state.key`. */
   sync(state: ComposerState): Promise<void>;

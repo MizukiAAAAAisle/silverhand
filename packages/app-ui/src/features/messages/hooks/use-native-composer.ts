@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type {
   ComposerMenuItem,
   ComposerPicker,
@@ -17,12 +17,56 @@ import { useOpenAgentActivity } from "./use-open-agent-activity";
 import { useNativeComposerActivity } from "./use-native-composer-activity";
 import { t } from "@/lib/i18n";
 
-/** Whether the compact composer is drawn natively (iOS). */
+/** Whether the composer is drawn natively (iOS). */
 export function useNativeComposerPlatform(): boolean {
-  return useCompactLayout() && getPlatform().composer !== undefined;
+  return getPlatform().composer !== undefined;
+}
+
+const METRICS = ["rest", "reserve", "overlay", "picker"] as const;
+
+type PaneFrame = { left: number; width: number };
+
+/** The pane `host` sits in, as native lays a composer over it: null in the
+ * compact layout, where the composer spans the screen, and undefined until
+ * measured, as a screen-wide composer would replace the other pane's. */
+function usePaneFrame(
+  host: RefObject<HTMLElement | null>,
+  enabled: boolean,
+): PaneFrame | null | undefined {
+  const compact = useCompactLayout();
+  const [frame, setFrame] = useState<PaneFrame | undefined>(undefined);
+
+  useEffect(() => {
+    const pane = host.current?.closest<HTMLElement>("[data-panel]");
+    if (!enabled || compact || !pane) {
+      setFrame(undefined);
+      return;
+    }
+    const measure = () => {
+      const rect = pane.getBoundingClientRect();
+      const left = Math.round(rect.left);
+      const width = Math.round(rect.width);
+      setFrame((previous) =>
+        previous?.left === left && previous.width === width ? previous : { left, width },
+      );
+    };
+    measure();
+    // A pane moves without resizing only when the window does.
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [host, enabled, compact]);
+
+  return compact ? null : frame;
 }
 
 interface NativeComposerOptions {
+  /** An element inside the composer's pane, whose page clears the composer. */
+  host: RefObject<HTMLElement | null>;
   /** False while something covers the composer. */
   shown: boolean;
   draftKey: string;
@@ -96,7 +140,7 @@ export function useNativeComposer(options: NativeComposerOptions): {
   const capability = getPlatform().composer;
   const live = usePageLive();
   const native = useNativeComposerPlatform();
-  const shown = options.shown && live && native;
+  const wanted = options.shown && live && native;
   const activity = useNativeComposerActivity(
     options.conversationId,
     options.activityAgentIds,
@@ -104,6 +148,8 @@ export function useNativeComposer(options: NativeComposerOptions): {
   );
   const openAgentActivity = useOpenAgentActivity();
   const key = options.draftKey;
+  const frame = usePaneFrame(options.host, wanted);
+  const shown = wanted && frame !== undefined;
   const state: ComposerState = {
     key,
     placeholder: options.placeholder,
@@ -117,6 +163,7 @@ export function useNativeComposer(options: NativeComposerOptions): {
       ? nativePickerOf(picker, options.agentAvatarUrls, options.humanAvatarUrls)
       : undefined,
     activity,
+    frame: frame ?? undefined,
   };
   const latest = useRef({ ...options, openAgentActivity });
   latest.current = { ...options, openAgentActivity };
@@ -128,18 +175,24 @@ export function useNativeComposer(options: NativeComposerOptions): {
     if (!shown || !capability) {
       return;
     }
-    void capability.sync(JSON.parse(serialized) as ComposerState).catch(() => {});
-  }, [capability, shown, serialized]);
-
-  useEffect(() => {
-    if (!shown || !capability) {
-      return;
-    }
+    // The page clears the composer through these, set on its pane.
+    const pane = options.host.current?.closest<HTMLElement>("[data-panel]") ?? null;
     const listening = capability.subscribe((event) => {
       if (event.key !== key) {
         return;
       }
-      if (event.kind === "change") {
+      if (event.kind === "metrics") {
+        // Native measures from the window's bottom; the page's end may sit
+        // above it (a frame's padding).
+        const host = options.host.current;
+        const gap = host
+          ? Math.max(0, window.innerHeight - host.getBoundingClientRect().bottom)
+          : 0;
+        for (const name of METRICS) {
+          const value = name === "picker" ? event[name] : Math.max(0, event[name] - gap);
+          pane?.style.setProperty(`--native-composer-${name}`, `${value}px`);
+        }
+      } else if (event.kind === "change") {
         shownText.current = event.text;
         latest.current.onChange(event.text, event.caret, event.composing);
       } else if (event.kind === "send") {
@@ -162,10 +215,21 @@ export function useNativeComposer(options: NativeComposerOptions): {
     });
     return () => {
       void listening.then((remove) => remove());
+      for (const name of METRICS) {
+        pane?.style.removeProperty(`--native-composer-${name}`);
+      }
       shownText.current = null;
       void capability.remove(key).catch(() => {});
     };
-  }, [capability, shown, key]);
+  }, [capability, shown, key, options.host]);
+
+  // After the listener above, so it hears native's first metrics.
+  useEffect(() => {
+    if (!shown || !capability) {
+      return;
+    }
+    void capability.sync(JSON.parse(serialized) as ComposerState).catch(() => {});
+  }, [capability, shown, serialized]);
 
   useEffect(() => {
     if (!shown || !capability || draft === shownText.current) {

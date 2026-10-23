@@ -133,6 +133,7 @@ export function Composer({
   const native = useNativeComposerPlatform();
   const [accessoryHeight, setAccessoryHeight] = useState(0);
   const accessoryRef = useRef<HTMLDivElement>(null);
+  const nativeHostRef = useRef<HTMLDivElement>(null);
   const placeholder = archived
     ? t("messages.thisConversationIsArchived")
     : readOnly
@@ -141,6 +142,7 @@ export function Composer({
         ? t("messages.thisConversationIsClosed")
         : t("messages.message");
   const nativeComposer = useNativeComposer({
+    host: nativeHostRef,
     shown: native && !covered,
     draftKey,
     conversationId,
@@ -423,7 +425,7 @@ export function Composer({
     // The native composer floats over the page; this holds the room the page
     // gives it and the controls that float above it.
     return (
-      <div data-native-composer aria-hidden={covered || undefined}>
+      <div ref={nativeHostRef} data-native-composer aria-hidden={covered || undefined}>
         {covered ? null : (
           <div ref={accessoryRef} data-native-composer-accessory>
             {tray}
