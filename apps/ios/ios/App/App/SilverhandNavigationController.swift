@@ -265,7 +265,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     let top = view.safeAreaInsets.top
     let bottom: CGFloat
     if verticalBarEdge != nil, titlebar.state != nil {
-      bottom = verticalBarTop
+      // The page's own frame insets its panes from the display edge.
+      bottom = 0
     } else if verticalBarEdge != nil {
       bottom = verticalBarTop + PageAccessory.titleHeight
     } else if !stack.isNavigationBarHidden {
@@ -275,7 +276,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       bottom = top + navigationBarHeight
     }
     content.publishBarMetrics(
-      bottom: bottom, tabs: PageAccessory.tabsHeight, vertical: verticalBarEdge != nil)
+      bottom: bottom, tabs: PageAccessory.tabsHeight, vertical: verticalBarEdge != nil,
+      corner: displayCornerRadius)
     composer.topLimit = bottom + (pageBar.accessory.window == nil ? 0 : pageBar.accessory.height)
   }
 
@@ -406,6 +408,17 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// Where the page's own title starts beside the vertical bar. The top safe
   /// area there is zero, so the corner-adapted one keeps the title off the
   /// display's rounded corner.
+  /// The display's corner radius, as the system resolves a radius concentric
+  /// with it for a view at the corner.
+  private lazy var displayCornerRadius: CGFloat = {
+    guard #available(iOS 26.0, *) else { return 0 }
+    let probe = UIView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+    probe.cornerConfiguration = .corners(radius: .containerConcentric())
+    view.addSubview(probe)
+    defer { probe.removeFromSuperview() }
+    return probe.effectiveRadius(corner: .topLeft)
+  }()
+
   private var verticalBarTop: CGFloat {
     var top = view.safeAreaInsets.top
     if #available(iOS 26.0, *) {

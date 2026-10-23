@@ -15,6 +15,21 @@
 :root[data-vertical-bar] .nav-rail {
   display: none;
 }
+/* With no titlebar row the panes meet the display's left corners: inset by
+   the frame on every side, their outer corners run concentric with the
+   display's. Inner corners keep the theme's pane radius. */
+:root[data-vertical-bar] [data-app-frame] {
+  padding-top: var(--frame-padding, 0px);
+}
+:root[data-vertical-bar] [data-section-sheet] {
+  --display-pane-radius: max(
+    var(--pane-radius, var(--card-radius, 0px)),
+    var(--display-corner-radius, 0px) - var(--frame-padding, 0px)
+  );
+  overflow: hidden;
+  border-radius: var(--display-pane-radius) var(--pane-radius, var(--card-radius, 0px))
+    var(--pane-radius, var(--card-radius, 0px)) var(--display-pane-radius);
+}
 /* On touch devices the frame takes the page paper in every theme, iris's
    gradient included, so the chrome around the panes meets the system bars
    instead of a desktop window frame. Outranks the theme blocks' own values. */

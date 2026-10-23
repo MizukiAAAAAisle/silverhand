@@ -43,16 +43,17 @@ it("publishes the fold band and clears it when the device opens", () => {
 });
 
 it("publishes the bar extents pages clear", () => {
-  emit("barMetrics", { bottom: 116, tabs: 48, vertical: false });
+  emit("barMetrics", { bottom: 116, tabs: 48, vertical: false, corner: 55 });
   expect(root.style.get("--native-bar-bottom")).toBe("116px");
+  expect(root.style.get("--display-corner-radius")).toBe("55px");
   expect(root.style.get("--native-bar-tabs")).toBe("48px");
   expect(root.dataset["verticalBar"]).toBeUndefined();
 });
 
 it("marks bars standing on a side edge, and clears the mark when they leave it", () => {
-  emit("barMetrics", { bottom: 24, tabs: 48, vertical: true });
+  emit("barMetrics", { bottom: 0, tabs: 48, vertical: true, corner: 55 });
   expect(root.dataset["verticalBar"]).toBe("");
 
-  emit("barMetrics", { bottom: 116, tabs: 48, vertical: false });
+  emit("barMetrics", { bottom: 116, tabs: 48, vertical: false, corner: 55 });
   expect(root.dataset["verticalBar"]).toBeUndefined();
 });
