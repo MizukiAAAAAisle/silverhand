@@ -8,53 +8,6 @@
 [data-app-frame] {
   background: var(--bg-app, transparent);
 }
-/* On an open iPhone Duo the native vertical bar takes the rail's place. */
-:root[data-vertical-bar] {
-  --nav-rail-width: 0px;
-}
-:root[data-vertical-bar] .nav-rail {
-  display: none;
-}
-/* Without a titlebar row the panes meet the display's own rounded corners,
-   which a desktop frame of inset cards cannot follow. The open Duo takes one
-   canvas instead, as the compact layout does: no frame, no card corners or
-   borders, and iris's hairline between panes. */
-:root[data-vertical-bar] .app-shell {
-  --frame-padding: 0px;
-  --pane-radius: 0px;
-  --pane-border: 0;
-  --pane-gap: 0px;
-  --frame-corner-radius: 0px;
-}
-:root[data-vertical-bar] [data-section-sheet] {
-  border-radius: 0;
-  box-shadow: none;
-}
-/* The bar's clearance and the home indicator's inset move into the panes, so
-   their surfaces and the dividers between them run edge to edge. Below, the
-   composer's own 12px padding counts toward the indicator's inset. */
-:root[data-vertical-bar] [data-native-titlebar] {
-  height: 0;
-}
-:root[data-vertical-bar] [data-section-sheet] [data-panel]:not([data-panel] [data-panel]) {
-  padding-top: var(--native-bar-bottom, 0px);
-  padding-bottom: max(0px, env(safe-area-inset-bottom, 0px) - 12px);
-}
-:root[data-vertical-bar] [data-section-sheet] [data-panel="sidebar"] {
-  padding-top: calc(var(--native-bar-bottom, 0px) + 6px);
-}
-/* Panes meet at iris's divider in every theme: a hairline down the splitter's
-   middle, which darkens with the track on hover and drag. */
-:root[data-vertical-bar] [role="separator"][aria-orientation="vertical"]::after {
-  content: "";
-  position: absolute;
-  inset-block: 0;
-  left: 50%;
-  width: 1px;
-  transform: translateX(-50%);
-  background-color: var(--border);
-  pointer-events: none;
-}
 /* On touch devices the frame takes the page paper in every theme, iris's
    gradient included, so the chrome around the panes meets the system bars
    instead of a desktop window frame. Outranks the theme blocks' own values. */
@@ -82,14 +35,6 @@
   :root[data-theme="glass"] {
     --pane-border: 1px solid var(--border-subtle);
   }
-}
-/* The open Duo's one canvas (above) takes the page colour in every theme,
-   Poster's included. After the touch rules, which it outranks. */
-:root[data-vertical-bar][data-theme][data-layout] {
-  --bg-app: var(--bg-base);
-}
-:root[data-vertical-bar][data-theme][data-layout] [data-section-sheet] {
-  border: 0;
 }
 /* iOS navigation bar: back, centered title, page action. Equal side columns
    keep the title centered whatever the sides hold. */

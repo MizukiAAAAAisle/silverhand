@@ -21,6 +21,7 @@
 @import "./themes/soft.css";
 @import "./themes/poster-components.css";
 @import "./mobile.css";
+@import "./vertical-bar.css";
 
 /* Shared layers, in cascade order after every theme. */
 @import "./tokens.css";
