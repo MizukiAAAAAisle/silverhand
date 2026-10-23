@@ -24,7 +24,7 @@ export function useNativeComposerPlatform(): boolean {
 
 const METRICS = ["rest", "reserve", "overlay", "picker"] as const;
 
-type PaneFrame = { left: number; width: number };
+type PaneFrame = { left: number; width: number; bottom: number };
 
 /** The pane `host` sits in, as native lays a composer over it: null in the
  * compact layout, where the composer spans the screen, and undefined until
@@ -46,8 +46,11 @@ function usePaneFrame(
       const rect = pane.getBoundingClientRect();
       const left = Math.round(rect.left);
       const width = Math.round(rect.width);
+      const bottom = Math.max(0, Math.round(window.innerHeight - rect.bottom));
       setFrame((previous) =>
-        previous?.left === left && previous.width === width ? previous : { left, width },
+        previous?.left === left && previous.width === width && previous.bottom === bottom
+          ? previous
+          : { left, width, bottom },
       );
     };
     measure();

@@ -359,7 +359,8 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
       },
       frame: (state["frame"] as? JSObject).map {
         ComposerFrame(
-          left: CGFloat($0["left"] as? Double ?? 0), width: CGFloat($0["width"] as? Double ?? 0))
+          left: CGFloat($0["left"] as? Double ?? 0), width: CGFloat($0["width"] as? Double ?? 0),
+          bottom: CGFloat($0["bottom"] as? Double ?? 0))
       })
     Task { @MainActor [self] in
       if let host = navigationHost {

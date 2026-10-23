@@ -22,7 +22,8 @@ struct ComposerState: Equatable {
 }
 
 struct ComposerFrame: Equatable {
-  let left, width: CGFloat
+  /// `bottom` is the pane's end, up from the window's bottom.
+  let left, width, bottom: CGFloat
 }
 
 /// The compact composer, floating over the page above the keyboard. The page
@@ -76,6 +77,8 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   /// keyboard; the other stays at rest under it.
   private var keyboardBottom: [NSLayoutConstraint] = []
   private var restBottom: NSLayoutConstraint?
+  /// Keeps it at least at rest, the keyboard down or hardware.
+  private var restCap: NSLayoutConstraint?
   private var editing = false
   /// The text's height the user dragged to; nil follows the text.
   private var draggedHeight: CGFloat?
@@ -180,15 +183,13 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     keyboardBottom = [
       bottomAnchor.constraint(lessThanOrEqualTo: guide.topAnchor, constant: -Self.padding), pull,
     ]
-    let rest = bottomAnchor.constraint(
-      equalTo: host.safeAreaLayoutGuide.bottomAnchor, constant: Self.homeOverlap)
+    let rest = bottomAnchor.constraint(equalTo: host.bottomAnchor)
     rest.priority = .defaultHigh
     restBottom = rest
-    NSLayoutConstraint.activate([
-      bottomAnchor.constraint(
-        lessThanOrEqualTo: host.safeAreaLayoutGuide.bottomAnchor, constant: Self.homeOverlap),
-      height,
-    ])
+    restCap?.isActive = false
+    let cap = bottomAnchor.constraint(lessThanOrEqualTo: host.bottomAnchor)
+    restCap = cap
+    NSLayoutConstraint.activate([cap, height])
     placeSides()
     placeBottom()
 
@@ -227,6 +228,8 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   }
 
   private func placeBottom() {
+    restBottom?.constant = -restInset
+    restCap?.constant = -restInset
     let follows = state?.frame == nil || editing
     restBottom?.isActive = !follows
     if follows { NSLayoutConstraint.activate(keyboardBottom) } else {
@@ -475,12 +478,21 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     publishMetrics()
   }
 
+  /// The composer's distance up from the window's bottom with the keyboard
+  /// down; in a pane that ends above the window (iPad's frame), as far in
+  /// from the pane's end as from its sides.
+  private var restInset: CGFloat {
+    let home = max(Self.padding, (superview?.safeAreaInsets.bottom ?? 0) - Self.homeOverlap)
+    guard let frame = state?.frame, frame.bottom > 0 else { return home }
+    return max(home, frame.bottom + 12)
+  }
+
   /// Tells the page where the composer's top is; the host calls this after
   /// each layout pass, as the keyboard moves the composer without resizing it.
   func publishMetrics() {
     guard let host = superview, let key = state?.key else { return }
     let bottom = host.bounds.maxY - frame.maxY
-    let rest = max(Self.padding, host.safeAreaInsets.bottom - Self.homeOverlap) + collapsedHeight
+    let rest = restInset + collapsedHeight
     // The activity line stays while agents run, so the page clears it as it
     // clears the composer; the picker is passing and covers the page instead.
     let lasting = activityShown && state?.picker == nil ? listSpace : 0

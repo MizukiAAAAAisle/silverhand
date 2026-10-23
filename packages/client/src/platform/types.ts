@@ -323,8 +323,8 @@ export interface ComposerState {
   activity?: ComposerActivity;
   /** The pane it belongs to, in viewport points, where panes stand side by
    * side; each pane's composer shows at once. Absent spans the screen and
-   * replaces any other. */
-  frame?: { left: number; width: number };
+   * replaces any other. `bottom` is the pane's end, up from the viewport's. */
+  frame?: { left: number; width: number; bottom: number };
 }
 /** One line for the agents running: up to three faces, the first agent's
  * name and state, and how long it has run, which native counts from `since`
