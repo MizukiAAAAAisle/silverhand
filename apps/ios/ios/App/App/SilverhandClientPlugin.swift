@@ -239,7 +239,15 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         status: state["status"] as? String,
         searchPlaceholder: state["searchPlaceholder"] as? String ?? "",
         searchShortcut: state["searchShortcut"] as? String ?? "",
-        dark: state["dark"] as? Bool ?? false)
+        dark: state["dark"] as? Bool ?? false,
+        actions: (state["actions"] as? JSArray ?? []).compactMap { value in
+          guard let item = value as? JSObject, let id = item["id"] as? String else { return nil }
+          return BarAction(
+            id: id, label: item["label"] as? String ?? "",
+            accessibilityLabel: item["accessibilityLabel"] as? String,
+            icon: item["icon"] as? String ?? "",
+            selected: item["selected"] as? Bool ?? false, dot: item["dot"] as? Bool ?? false)
+        })
     }
     Task { @MainActor [self] in
       if let host = navigationHost {

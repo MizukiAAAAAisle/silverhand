@@ -682,6 +682,8 @@ struct TitlebarState: Equatable {
   let searchShortcut: String
   /// The window frame behind the panes is dark.
   let dark: Bool
+  /// The page header's buttons, drawn beside the vertical bar's own.
+  let actions: [BarAction]
 }
 
 /// The wide layout's window titlebar: the sidebar toggle, the archive status
@@ -743,7 +745,14 @@ final class Titlebar: NSObject, UITextFieldDelegate {
     self.vertical = vertical
 
     if vertical, #available(iOS 27.1, *) {
-      let groups = [[search]] + (state.sidebar == nil ? [] : [[sidebar]])
+      let page = state.actions.map { action in
+        let item = BarGlyphs.item(for: action) { [weak self] id in
+          self?.onEvent?(["kind": "action", "id": id])
+        }
+        item.isEnabled = enabled
+        return [item]
+      }
+      let groups = [[search]] + (state.sidebar == nil ? [] : [[sidebar]]) + page
       for item in groups.joined() { item.axisBehavior = .verticalPreferred }
       item.verticalBarCompressionBehavior = .prefersTabBar
       item.trailingItemGroups = BarGlyphs.groups(groups)

@@ -202,6 +202,9 @@ export interface TitlebarState {
   /** The window frame behind the panes is dark, so the bars and status bar
    *  over it take the dark appearance. */
   dark: boolean;
+  /** The page's own header buttons, where the bar carries them in place of
+   *  the page (beside a vertical tab bar). */
+  actions: PageBarItem[];
 }
 export type TitlebarSearchKey = "up" | "down" | "tab" | "backtab" | "enter" | "escape";
 export type TitlebarEvent =
@@ -210,7 +213,8 @@ export type TitlebarEvent =
   /** Search was asked for where no native field shows; the page opens its own. */
   | { kind: "searchOpen" }
   | { kind: "searchQuery"; query: string }
-  | { kind: "searchKey"; key: TitlebarSearchKey };
+  | { kind: "searchKey"; key: TitlebarSearchKey }
+  | { kind: "action"; id: string };
 /** A native window titlebar with a search field. Results stay in the shared UI. */
 export interface TitlebarCapability {
   /** Shows the titlebar with this state; null removes it. */

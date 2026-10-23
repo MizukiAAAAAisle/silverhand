@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { TitlebarCapability } from "@silverhand/client";
 import { NativeTitlebarSearch, type TitlebarSearchNav } from "@/features/search/titlebar-search";
+import { runTitlebarAction, useTitlebarActions } from "@/components/layout/titlebar-actions";
 import { t, useLocale } from "@/lib/i18n";
 
 /**
@@ -30,6 +31,7 @@ export function NativeTitlebar({
   const locale = useLocale();
   const toggleRef = useRef(onToggleSidebar);
   toggleRef.current = onToggleSidebar;
+  const actions = useTitlebarActions();
 
   useEffect(() => {
     void titlebar
@@ -45,14 +47,17 @@ export function NativeTitlebar({
         searchPlaceholder: t("appShell.searchEverything"),
         searchShortcut: t("common.search"),
         dark: darkFrame,
+        actions,
       })
       .catch(() => {});
-  }, [locale, titlebar, sidebarShown, archived, darkFrame]);
+  }, [locale, titlebar, sidebarShown, archived, darkFrame, actions]);
 
   useEffect(() => {
     const listening = titlebar.subscribe((event) => {
       if (event.kind === "toggleSidebar") {
         toggleRef.current();
+      } else if (event.kind === "action") {
+        runTitlebarAction(event.id);
       }
     });
 

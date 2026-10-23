@@ -48,6 +48,10 @@
   background-color: var(--border);
   pointer-events: none;
 }
+/* A pane header's buttons ride the vertical bar (`useTitlebarActionsClaim`). */
+:root[data-vertical-bar] [data-pane-header-trailing] {
+  display: none;
+}
 /* The canvas takes the page colour in every theme, Poster's included. */
 :root[data-vertical-bar][data-theme][data-layout] {
   --bg-app: var(--bg-base);
