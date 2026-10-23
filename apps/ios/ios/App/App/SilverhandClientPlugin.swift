@@ -572,7 +572,7 @@ class SilverhandViewController: CAPBridgeViewController {
   }
 
   private struct BarMetrics: Equatable {
-    let bottom, search, tabs: CGFloat
+    let bottom, tabs: CGFloat
     let vertical: Bool
   }
 
@@ -624,15 +624,15 @@ class SilverhandViewController: CAPBridgeViewController {
   }
 
   /// Where the page's bars end, for the page to clear them: `bottom` of the
-  /// navigation bar (on iPhone Duo, of the title under it), `search` of the
-  /// search field the results open under, the height of the view tabs under
-  /// the bar, and whether the bars stand on a side edge (iPhone Duo).
-  func publishBarMetrics(bottom: CGFloat, search: CGFloat, tabs: CGFloat, vertical: Bool) {
-    let next = BarMetrics(bottom: bottom, search: search, tabs: tabs, vertical: vertical)
+  /// navigation bar (on iPhone Duo, of the title under it), the height of the
+  /// view tabs under the bar, and whether the bars stand on a side edge
+  /// (iPhone Duo).
+  func publishBarMetrics(bottom: CGFloat, tabs: CGFloat, vertical: Bool) {
+    let next = BarMetrics(bottom: bottom, tabs: tabs, vertical: vertical)
     guard next != barMetrics else { return }
     barMetrics = next
     plugin.publishState(
-      "barMetrics", ["bottom": bottom, "search": search, "tabs": tabs, "vertical": vertical])
+      "barMetrics", ["bottom": bottom, "tabs": tabs, "vertical": vertical])
   }
 }
 

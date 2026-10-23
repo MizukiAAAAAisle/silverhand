@@ -264,10 +264,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   private func publishBarMetrics(in stack: UINavigationController) {
     let top = view.safeAreaInsets.top
     let bottom: CGFloat
-    var search: CGFloat?
     if verticalBarEdge != nil, titlebar.state != nil {
       bottom = verticalBarTop
-      search = verticalBarTop + Titlebar.fieldHeight
     } else if verticalBarEdge != nil {
       bottom = verticalBarTop + PageAccessory.titleHeight
     } else if !stack.isNavigationBarHidden {
@@ -277,8 +275,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       bottom = top + navigationBarHeight
     }
     content.publishBarMetrics(
-      bottom: bottom, search: search ?? bottom, tabs: PageAccessory.tabsHeight,
-      vertical: verticalBarEdge != nil)
+      bottom: bottom, tabs: PageAccessory.tabsHeight, vertical: verticalBarEdge != nil)
     composer.topLimit = bottom + (pageBar.accessory.window == nil ? 0 : pageBar.accessory.height)
   }
 
@@ -309,11 +306,6 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// bar the navigation bar is empty, so the accessory starts at the top of
   /// the screen.
   private func place(_ bars: Bars, in page: UIViewController, stack: UINavigationController) {
-    if case .titlebar = bars {
-      titlebar.placeFloating(in: view, below: tabBar, top: verticalBarTop, shown: !blocked)
-    } else {
-      titlebar.placeFloating(in: view, below: tabBar, top: 0, shown: false)
-    }
     let accessory = pageBar.accessory
     guard case .page = bars, accessory.height > 0, !blocked else {
       accessory.removeFromSuperview()

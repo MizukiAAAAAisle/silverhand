@@ -146,7 +146,7 @@ export interface NativeBridge {
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "barMetrics",
-    handler: (metrics: { bottom: number; search: number; tabs: number; vertical: boolean }) => void,
+    handler: (metrics: { bottom: number; tabs: number; vertical: boolean }) => void,
   ): Promise<PluginListenerHandle>;
 }
 export const nativeBridge = registerPlugin<NativeBridge>("SilverhandClient");

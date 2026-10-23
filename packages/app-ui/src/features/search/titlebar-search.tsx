@@ -81,7 +81,6 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
   const [open, setOpen] = useState(false);
   const search = useTitlebarSearchModel(nav, () => setOpen(false));
   const inputRef = useRef<HTMLInputElement>(null);
-  const composingRef = useRef(false);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -94,26 +93,6 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
-
-  const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
-    // While an IME composition is active, Enter / arrows belong to the
-    // candidate window, not the result list (`keyCode === 229` covers the
-    // browsers that fire keydown before `compositionend`).
-    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
-    const key =
-      event.key === "ArrowDown"
-        ? "down"
-        : event.key === "ArrowUp"
-          ? "up"
-          : event.key === "Tab"
-            ? event.shiftKey
-              ? "backtab"
-              : "tab"
-            : event.key === "Enter"
-              ? "enter"
-              : null;
-    if (key && search.press(key)) event.preventDefault();
-  };
 
   return (
     <Popover.Root
@@ -150,29 +129,7 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
           }}
           className={RESULTS_FRAME}
         >
-          <div
-            data-search-divider="b"
-            className="flex items-center gap-2 border-b border-border px-3 py-2.5"
-          >
-            <SearchIcon className="size-4 shrink-0 text-text-muted" />
-            <input
-              ref={inputRef}
-              value={search.query}
-              onChange={(e) => search.setQuery(e.target.value)}
-              onKeyDown={onInputKeyDown}
-              onCompositionStart={() => {
-                composingRef.current = true;
-              }}
-              onCompositionEnd={() => {
-                composingRef.current = false;
-              }}
-              placeholder={t("search.searchMessagesChannelsHumans")}
-              className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
-            />
-            {search.isFetching ? (
-              <span className="shrink-0 text-xs text-text-muted">{t("search.searching")}</span>
-            ) : null}
-          </div>
+          <SearchInputRow search={search} inputRef={inputRef} />
           <TitlebarSearchResults search={search} />
         </Popover.Content>
       </Popover.Portal>
@@ -193,6 +150,10 @@ export function NativeTitlebarSearch({
   titlebar: TitlebarCapability;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  // Beside iPhone Duo's vertical bar there is no native field: the bar's
+  // search button opens this one, field included.
+  const [ownField, setOwnField] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const close = (clear: boolean): void => {
     setOpen(false);
     void titlebar.endSearch({ clear }).catch(() => {});
@@ -204,7 +165,11 @@ export function NativeTitlebarSearch({
 
   useEffect(() => {
     const listening = titlebar.subscribe((event) => {
-      if (event.kind === "searchFocus") {
+      if (event.kind === "searchOpen") {
+        setOwnField(true);
+        setOpen(true);
+      } else if (event.kind === "searchFocus") {
+        setOwnField(false);
         setOpen(true);
       } else if (event.kind === "searchQuery") {
         setQuery(event.query);
@@ -227,21 +192,28 @@ export function NativeTitlebarSearch({
     <Popover.Root
       open={open}
       onOpenChange={(next) => {
-        if (!next) close(false);
+        if (!next) {
+          if (ownField) search.setQuery("");
+          close(false);
+        }
       }}
     >
       {/* Stands where the native field ends, so the results open beneath it. */}
-      <Popover.Anchor className="pointer-events-none fixed top-(--native-bar-search,env(safe-area-inset-top,0px)) left-1/2 h-0 w-[clamp(420px,52vw,720px)] -translate-x-1/2" />
+      <Popover.Anchor className="pointer-events-none fixed top-(--native-bar-bottom,env(safe-area-inset-top,0px)) left-1/2 h-0 w-[clamp(420px,52vw,720px)] -translate-x-1/2" />
       <Popover.Portal>
         <Popover.Content
           align="center"
           sideOffset={6}
           data-popover-frame
-          // The native field keeps the keyboard focus.
-          onOpenAutoFocus={(event) => event.preventDefault()}
+          // A native field keeps the keyboard focus.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            if (ownField) inputRef.current?.focus();
+          }}
           onCloseAutoFocus={(event) => event.preventDefault()}
           className={RESULTS_FRAME}
         >
+          {ownField ? <SearchInputRow search={search} inputRef={inputRef} /> : null}
           <TitlebarSearchResults search={search} />
         </Popover.Content>
       </Popover.Portal>
@@ -253,6 +225,63 @@ const RESULTS_FRAME =
   "z-(--z-popover) w-(--radix-popover-trigger-width) overflow-hidden bg-bg-floating shadow-popover outline-none";
 
 type SearchKey = "up" | "down" | "tab" | "backtab" | "enter";
+
+/** The web search field at the top of the results. */
+function SearchInputRow({
+  search,
+  inputRef,
+}: {
+  search: TitlebarSearchModel;
+  inputRef: React.RefObject<HTMLInputElement>;
+}): JSX.Element {
+  const composingRef = useRef(false);
+
+  const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    // While an IME composition is active, Enter / arrows belong to the
+    // candidate window, not the result list (`keyCode === 229` covers the
+    // browsers that fire keydown before `compositionend`).
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    const key =
+      event.key === "ArrowDown"
+        ? "down"
+        : event.key === "ArrowUp"
+          ? "up"
+          : event.key === "Tab"
+            ? event.shiftKey
+              ? "backtab"
+              : "tab"
+            : event.key === "Enter"
+              ? "enter"
+              : null;
+    if (key && search.press(key)) event.preventDefault();
+  };
+
+  return (
+    <div
+      data-search-divider="b"
+      className="flex items-center gap-2 border-b border-border px-3 py-2.5"
+    >
+      <SearchIcon className="size-4 shrink-0 text-text-muted" />
+      <input
+        ref={inputRef}
+        value={search.query}
+        onChange={(e) => search.setQuery(e.target.value)}
+        onKeyDown={onInputKeyDown}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={() => {
+          composingRef.current = false;
+        }}
+        placeholder={t("search.searchMessagesChannelsHumans")}
+        className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
+      />
+      {search.isFetching ? (
+        <span className="shrink-0 text-xs text-text-muted">{t("search.searching")}</span>
+      ) : null}
+    </div>
+  );
+}
 
 type TitlebarSearchModel = ReturnType<typeof useTitlebarSearchModel>;
 

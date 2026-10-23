@@ -207,6 +207,8 @@ export type TitlebarSearchKey = "up" | "down" | "tab" | "backtab" | "enter" | "e
 export type TitlebarEvent =
   | { kind: "toggleSidebar" }
   | { kind: "searchFocus" }
+  /** Search was asked for where no native field shows; the page opens its own. */
+  | { kind: "searchOpen" }
   | { kind: "searchQuery"; query: string }
   | { kind: "searchKey"; key: TitlebarSearchKey };
 /** A native window titlebar with a search field. Results stay in the shared UI. */

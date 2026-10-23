@@ -5,13 +5,11 @@ import type { NativeBridge } from "./bridge";
 export async function installDeviceChrome(bridge: NativeBridge): Promise<void> {
   const root = document.documentElement;
 
-  // Where the native page bar ends, where the search field the results open
-  // under ends, and the height of the view tabs under the bar. A page drawing
-  // its header there clears them (`[data-native-bar-clearance]`). On iPhone
-  // Duo the bars stand on a side edge, in place of the wide layout's rail.
-  await bridge.addListener("barMetrics", ({ bottom, search, tabs, vertical }) => {
+  // Where the native page bar ends, and the height of the view tabs under it.
+  // A page drawing its header there clears them (`[data-native-bar-clearance]`).
+  // On iPhone Duo the bars stand on a side edge, in place of the wide layout's rail.
+  await bridge.addListener("barMetrics", ({ bottom, tabs, vertical }) => {
     root.style.setProperty("--native-bar-bottom", `${bottom}px`);
-    root.style.setProperty("--native-bar-search", `${search}px`);
     root.style.setProperty("--native-bar-tabs", `${tabs}px`);
     if (vertical) root.dataset["verticalBar"] = "";
     else delete root.dataset["verticalBar"];
