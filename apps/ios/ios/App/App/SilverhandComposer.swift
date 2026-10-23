@@ -26,8 +26,12 @@ struct ComposerFrame: Equatable {
   let left, width, bottom: CGFloat
 }
 
-/// The compact composer, floating over the page above the keyboard. The page
+/// The native composer, floating over the page above the keyboard. The page
 /// owns the draft, the send and every string; this edits text and reports it.
+///
+/// Without a `frame` it spans the screen; with one it stands over its pane,
+/// beside the other panes' composers, and rests at the pane's end while
+/// another one edits.
 ///
 /// At rest it is a one-line capsule; editing opens it into a card whose text
 /// grows with its lines up to `autoLines`, then scrolls. The grabber drags
@@ -52,6 +56,8 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private static let autoLines: CGFloat = 6
   private static let button: CGFloat = 36
   private static let padding: CGFloat = 8
+  /// From the screen's or the pane's sides, and from a pane's end.
+  private static let inset: CGFloat = 12
   private static let cardTop: CGFloat = 16
   private static let cardRadius: CGFloat = 26
   private static let grabberZone: CGFloat = 28
@@ -71,15 +77,16 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private let addButton = UIButton(configuration: .plain())
   private let sendButton = UIButton(configuration: .filled())
   private var heightConstraint: NSLayoutConstraint?
+  // Sides: the screen's safe area, or the pane's frame (`placeSides`).
   private var screenSides: [NSLayoutConstraint] = []
   private var paneSides: (leading: NSLayoutConstraint, width: NSLayoutConstraint)?
-  /// Beside another pane's composer only the one editing follows the
-  /// keyboard; the other stays at rest under it.
-  private var keyboardBottom: [NSLayoutConstraint] = []
-  private var restBottom: NSLayoutConstraint?
-  /// Keeps it at least at rest, the keyboard down or hardware.
+  // Bottom (`placeBottom`): never below rest (`restCap`); above the keyboard
+  // while it follows it, else at rest. Beside other panes' composers only
+  // the one editing follows the keyboard.
   private var restCap: NSLayoutConstraint?
-  private var editing = false
+  private var restBottom: NSLayoutConstraint?
+  private var keyboardBottom: [NSLayoutConstraint] = []
+  private(set) var isEditing = false
   /// The text's height the user dragged to; nil follows the text.
   private var draggedHeight: CGFloat?
   private var dragStart: CGFloat = 0
@@ -173,8 +180,10 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     pull.priority = .defaultHigh
     heightConstraint = height
     screenSides = [
-      leadingAnchor.constraint(equalTo: host.safeAreaLayoutGuide.leadingAnchor, constant: 12),
-      trailingAnchor.constraint(equalTo: host.safeAreaLayoutGuide.trailingAnchor, constant: -12),
+      leadingAnchor.constraint(
+        equalTo: host.safeAreaLayoutGuide.leadingAnchor, constant: Self.inset),
+      trailingAnchor.constraint(
+        equalTo: host.safeAreaLayoutGuide.trailingAnchor, constant: -Self.inset),
     ]
     paneSides = (
       leadingAnchor.constraint(equalTo: host.leadingAnchor),
@@ -218,8 +227,8 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     guard let paneSides else { return }
     if let frame = state?.frame {
       NSLayoutConstraint.deactivate(screenSides)
-      paneSides.leading.constant = frame.left + 12
-      paneSides.width.constant = max(0, frame.width - 24)
+      paneSides.leading.constant = frame.left + Self.inset
+      paneSides.width.constant = max(0, frame.width - Self.inset * 2)
       NSLayoutConstraint.activate([paneSides.leading, paneSides.width])
     } else {
       NSLayoutConstraint.deactivate([paneSides.leading, paneSides.width])
@@ -230,7 +239,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private func placeBottom() {
     restBottom?.constant = -restInset
     restCap?.constant = -restInset
-    let follows = state?.frame == nil || editing
+    let follows = state?.frame == nil || isEditing
     restBottom?.isActive = !follows
     if follows { NSLayoutConstraint.activate(keyboardBottom) } else {
       NSLayoutConstraint.deactivate(keyboardBottom)
@@ -311,8 +320,6 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     refresh(animated: false)
   }
 
-  var isEditing: Bool { textView.isFirstResponder }
-
   /// Whether a tap on the page at `point` ends editing: any tap but one on
   /// the controls the page floats above the composer.
   func endsEditing(at point: CGPoint) -> Bool {
@@ -378,7 +385,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     state = nil
     textView.text = ""
     draggedHeight = nil
-    editing = false
+    isEditing = false
     transform = .identity
     picker.transform = .identity
     picker.alpha = 0
@@ -419,7 +426,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private var textWidth: CGFloat { max(0, bounds.width - 32) }
 
   private func heights() -> (drawn: CGFloat, reserve: CGFloat) {
-    guard editing else { return (collapsedHeight, collapsedHeight) }
+    guard isEditing else { return (collapsedHeight, collapsedHeight) }
     let auto = autoTextHeight(width: textWidth) + cardChrome
     let dragged = draggedHeight.map { min($0, maxTextHeight) + cardChrome }
     return (dragged ?? auto, auto)
@@ -450,9 +457,9 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     backdrop.frame = bounds
     if #available(iOS 26.0, *) {
       backdrop.cornerConfiguration =
-        editing ? .uniformCorners(radius: .fixed(Self.cardRadius)) : .capsule()
+        isEditing ? .uniformCorners(radius: .fixed(Self.cardRadius)) : .capsule()
     } else {
-      backdrop.layer.cornerRadius = editing ? Self.cardRadius : bounds.height / 2
+      backdrop.layer.cornerRadius = isEditing ? Self.cardRadius : bounds.height / 2
       backdrop.clipsToBounds = true
     }
     let pad = Self.padding
@@ -460,7 +467,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     let buttonsY = bounds.height - pad - side
     addButton.frame = CGRect(x: pad, y: buttonsY, width: side, height: side)
     sendButton.frame = CGRect(x: bounds.width - pad - side, y: buttonsY, width: side, height: side)
-    if editing {
+    if isEditing {
       textView.frame = CGRect(
         x: 16, y: Self.cardTop, width: textWidth, height: max(0, buttonsY - pad - Self.cardTop))
       grabber.frame = CGRect(x: (bounds.width - 36) / 2, y: 6, width: 36, height: 5)
@@ -471,7 +478,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
         height: lineBox)
     }
     textView.isScrollEnabled = true
-    grabber.alpha = editing ? 1 : 0
+    grabber.alpha = isEditing ? 1 : 0
     placeholder.frame = CGRect(
       x: textView.frame.minX, y: textView.frame.minY + 8, width: textView.frame.width,
       height: ceil(font.lineHeight))
@@ -484,7 +491,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private var restInset: CGFloat {
     let home = max(Self.padding, (superview?.safeAreaInsets.bottom ?? 0) - Self.homeOverlap)
     guard let frame = state?.frame, frame.bottom > 0 else { return home }
-    return max(home, frame.bottom + 12)
+    return max(home, frame.bottom + Self.inset)
   }
 
   /// Tells the page where the composer's top is; the host calls this after
@@ -522,13 +529,13 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   }
 
   func textViewDidBeginEditing(_ textView: UITextView) {
-    editing = true
+    isEditing = true
     placeBottom()
     refresh(animated: true)
   }
 
   func textViewDidEndEditing(_ textView: UITextView) {
-    editing = false
+    isEditing = false
     placeBottom()
     refresh(animated: true)
     textView.setContentOffset(.zero, animated: false)
@@ -618,7 +625,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     guard recognizer is UIPanGestureRecognizer else {
       return super.gestureRecognizerShouldBegin(recognizer)
     }
-    return editing && touchStart < Self.grabberZone
+    return isEditing && touchStart < Self.grabberZone
   }
 
   @objc private func drag(_ pan: UIPanGestureRecognizer) {

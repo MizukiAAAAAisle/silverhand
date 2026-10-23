@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import type {
+  ComposerEvent,
   ComposerMenuItem,
   ComposerPicker,
   ComposerPickerIcon,
@@ -21,8 +22,6 @@ import { t } from "@/lib/i18n";
 export function useNativeComposerPlatform(): boolean {
   return getPlatform().composer !== undefined;
 }
-
-const METRICS = ["rest", "reserve", "overlay", "picker"] as const;
 
 type PaneFrame = { left: number; width: number; bottom: number };
 
@@ -65,6 +64,31 @@ function usePaneFrame(
   }, [host, enabled, compact]);
 
   return compact ? null : frame;
+}
+
+const METRICS = ["rest", "reserve", "overlay", "picker"] as const;
+
+/** Sets the composer's metrics on its pane, which the page clears
+ * (`--native-composer-*`, mobile.css); null clears them. Native measures from
+ * the window's bottom, and the pane's end may sit above it (iPad's frame). */
+function writeMetrics(
+  host: HTMLElement | null,
+  metrics: Extract<ComposerEvent, { kind: "metrics" }> | null,
+): void {
+  const pane = host?.closest<HTMLElement>("[data-panel]");
+  if (!host || !pane) {
+    return;
+  }
+  const gap = Math.max(0, window.innerHeight - host.getBoundingClientRect().bottom);
+  for (const name of METRICS) {
+    const property = `--native-composer-${name}`;
+    if (!metrics) {
+      pane.style.removeProperty(property);
+    } else {
+      const value = name === "picker" ? metrics[name] : Math.max(0, metrics[name] - gap);
+      pane.style.setProperty(property, `${value}px`);
+    }
+  }
 }
 
 interface NativeComposerOptions {
@@ -178,23 +202,13 @@ export function useNativeComposer(options: NativeComposerOptions): {
     if (!shown || !capability) {
       return;
     }
-    // The page clears the composer through these, set on its pane.
-    const pane = options.host.current?.closest<HTMLElement>("[data-panel]") ?? null;
+    const host = options.host.current;
     const listening = capability.subscribe((event) => {
       if (event.key !== key) {
         return;
       }
       if (event.kind === "metrics") {
-        // Native measures from the window's bottom; the page's end may sit
-        // above it (a frame's padding).
-        const host = options.host.current;
-        const gap = host
-          ? Math.max(0, window.innerHeight - host.getBoundingClientRect().bottom)
-          : 0;
-        for (const name of METRICS) {
-          const value = name === "picker" ? event[name] : Math.max(0, event[name] - gap);
-          pane?.style.setProperty(`--native-composer-${name}`, `${value}px`);
-        }
+        writeMetrics(host, event);
       } else if (event.kind === "change") {
         shownText.current = event.text;
         latest.current.onChange(event.text, event.caret, event.composing);
@@ -218,9 +232,7 @@ export function useNativeComposer(options: NativeComposerOptions): {
     });
     return () => {
       void listening.then((remove) => remove());
-      for (const name of METRICS) {
-        pane?.style.removeProperty(`--native-composer-${name}`);
-      }
+      writeMetrics(host, null);
       shownText.current = null;
       void capability.remove(key).catch(() => {});
     };

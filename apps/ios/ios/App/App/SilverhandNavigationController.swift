@@ -623,15 +623,20 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
         composers[key] = nil
       }
     }
-    let composer = composers[state.key] ?? ComposerView()
+    let composer = composers[state.key] ?? makeComposer()
     composers[state.key] = composer
-    composer.onEvent = { [weak self] event in self?.onComposerEvent?(event) }
-    composer.presenter = self
-    composer.topLimit = composerTopLimit
     composer.install(in: view)
     composer.setBlocked(blocked)
     composer.setSteppedAside(selectionBar.state != nil)
     composer.apply(state)
+  }
+
+  private func makeComposer() -> ComposerView {
+    let composer = ComposerView()
+    composer.onEvent = { [weak self] event in self?.onComposerEvent?(event) }
+    composer.presenter = self
+    composer.topLimit = composerTopLimit
+    return composer
   }
 
   /// Removes the composer for draft `key`; without a key, every one.

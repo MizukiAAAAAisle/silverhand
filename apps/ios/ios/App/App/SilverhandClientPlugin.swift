@@ -195,8 +195,9 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     return nil
   }
 
-  @MainActor private func bindNavigationIntent(to host: SilverhandNavigationController) {
+  @MainActor private func bindNavigationEvents(to host: SilverhandNavigationController) {
     host.onIntent = { [weak self] intent in self?.notifyListeners("navigation", data: intent) }
+    host.onComposerEvent = { [weak self] event in self?.notifyListeners("composer", data: event) }
   }
 
   @objc public func setLocale(_ call: CAPPluginCall) {
@@ -219,7 +220,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         call.reject("Native navigation host unavailable")
         return
       }
-      bindNavigationIntent(to: host)
+      bindNavigationEvents(to: host)
       call.resolve(["tabBarHeight": host.sync(call)])
     }
   }
@@ -363,10 +364,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
           bottom: CGFloat($0["bottom"] as? Double ?? 0))
       })
     Task { @MainActor [self] in
-      if let host = navigationHost {
-        host.onComposerEvent = { [weak self] event in self?.notifyListeners("composer", data: event) }
-        host.showComposer(next)
-      }
+      navigationHost?.showComposer(next)
       call.resolve()
     }
   }
