@@ -252,12 +252,6 @@
   pointer-events: none;
 }
 
-[data-theme="iris"] aside[data-sidebar="members"],
-[data-theme="iris"] aside[data-sidebar="computers"],
-[data-theme="iris"] aside[data-sidebar="settings"] {
-  border-right: 1px solid var(--border);
-}
-
 /* Hooks: Floating surfaces and actions */
 
 [data-theme="iris"] [data-modal-shell] {
