@@ -63,7 +63,10 @@ export function NativeTitlebar({
   }, [titlebar]);
 
   return (
-    <div className="h-(--native-bar-bottom,env(safe-area-inset-top,0px)) shrink-0">
+    <div
+      data-native-titlebar
+      className="h-(--native-bar-bottom,env(safe-area-inset-top,0px)) shrink-0"
+    >
       <NativeTitlebarSearch nav={searchNav} titlebar={titlebar} />
     </div>
   );

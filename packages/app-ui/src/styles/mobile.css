@@ -18,7 +18,7 @@
 /* Without a titlebar row the panes meet the display's own rounded corners,
    which a desktop frame of inset cards cannot follow. The open Duo takes one
    canvas instead, as the compact layout does: no frame, no card corners or
-   borders, a hairline between panes, and the home indicator's inset below. */
+   borders, iris's hairline between panes, and the home indicator's inset below. */
 :root[data-vertical-bar] .app-shell {
   --frame-padding: 0px;
   --pane-radius: 0px;
@@ -27,8 +27,28 @@
   --frame-corner-radius: 0px;
   padding-bottom: env(safe-area-inset-bottom, 0px);
 }
-:root[data-vertical-bar] [data-panel="sidebar"] {
-  border-right: 1px solid var(--border-subtle);
+/* The bar's clearance moves into the panes, so their surfaces and the dividers
+   between them run to the display's top edge. */
+:root[data-vertical-bar] [data-native-titlebar] {
+  height: 0;
+}
+:root[data-vertical-bar] [data-section-sheet] [data-panel]:not([data-panel] [data-panel]) {
+  padding-top: var(--native-bar-bottom, 0px);
+}
+:root[data-vertical-bar] [data-section-sheet] [data-panel="sidebar"] {
+  padding-top: calc(var(--native-bar-bottom, 0px) + 6px);
+}
+/* Panes meet at iris's divider in every theme: a hairline down the splitter's
+   middle, which darkens with the track on hover and drag. */
+:root[data-vertical-bar] [role="separator"][aria-orientation="vertical"]::after {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 50%;
+  width: 1px;
+  transform: translateX(-50%);
+  background-color: var(--border);
+  pointer-events: none;
 }
 /* On touch devices the frame takes the page paper in every theme, iris's
    gradient included, so the chrome around the panes meets the system bars
