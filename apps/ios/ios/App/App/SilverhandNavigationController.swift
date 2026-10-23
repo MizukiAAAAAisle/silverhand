@@ -17,8 +17,11 @@ enum NavigationItemStyle {
 //   header gets the navigation bar and a tab strip under it (`PageBar`);
 // - compact on iPhone Duo: the tab bar stands on a side edge as the vertical
 //   bar, and takes the page's Back and header actions (`PageBar`);
-// - wide (iPad, open iPhone Duo): no tab bar or vertical bar; the navigation
-//   bar is the window titlebar (`Titlebar`) and the page shows its own rail.
+// - wide on iPad: no tab bar; the navigation bar is the window titlebar
+//   (`Titlebar`) and the page shows its own rail;
+// - wide on an open iPhone Duo: the vertical bar stays in place of the rail,
+//   and takes the titlebar's search and sidebar toggle above its tabs; there
+//   is no titlebar row.
 //
 // When the page on screen changes, its bars cross-fade as the page beneath
 // them slides.
@@ -90,21 +93,9 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     if let first = page(0) { attachContent(to: first) }
     hideBar(true, animated: false)
-    if #available(iOS 27.1, *) {
-      registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
-        self.setNeedsUpdateOfVerticalBarConfiguration()
-      }
-    }
   }
 
   // MARK: Bars
-
-  // A wide window shows the wide layout, whose titlebar and navigation rail
-  // stand in for the vertical bar, as Safari does on an open iPhone Duo.
-  @available(iOS 27.1, *)
-  override var preferredVerticalBarBehavior: UIVerticalBarBehavior {
-    traitCollection.horizontalSizeClass == .regular ? .disabled : .automatic
-  }
 
   @available(iOS 27.1, *)
   override var childForPreferredVerticalBarBehavior: UIViewController? { nil }
@@ -273,7 +264,11 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   private func publishBarMetrics(in stack: UINavigationController) {
     let top = view.safeAreaInsets.top
     let bottom: CGFloat
-    if verticalBarEdge != nil {
+    var search: CGFloat?
+    if verticalBarEdge != nil, titlebar.state != nil {
+      bottom = verticalBarTop
+      search = verticalBarTop + Titlebar.fieldHeight
+    } else if verticalBarEdge != nil {
       bottom = verticalBarTop + PageAccessory.titleHeight
     } else if !stack.isNavigationBarHidden {
       bottom = stack.navigationBar.frame.maxY
@@ -281,7 +276,9 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     } else {
       bottom = top + navigationBarHeight
     }
-    content.publishBarMetrics(bottom: bottom, tabs: PageAccessory.tabsHeight)
+    content.publishBarMetrics(
+      bottom: bottom, search: search ?? bottom, tabs: PageAccessory.tabsHeight,
+      vertical: verticalBarEdge != nil)
     composer.topLimit = bottom + (pageBar.accessory.window == nil ? 0 : pageBar.accessory.height)
   }
 
@@ -302,7 +299,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     if #available(iOS 26.0, *) { item.subtitle = nil }
     item.largeTitleDisplayMode = .never
     if case .titlebar = bars {
-      titlebar.apply(to: item, width: view.bounds.width, enabled: !blocked)
+      titlebar.apply(
+        to: item, width: view.bounds.width, vertical: verticalBarEdge != nil, enabled: !blocked)
     }
   }
 
@@ -311,6 +309,11 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// bar the navigation bar is empty, so the accessory starts at the top of
   /// the screen.
   private func place(_ bars: Bars, in page: UIViewController, stack: UINavigationController) {
+    if case .titlebar = bars {
+      titlebar.placeFloating(in: view, below: tabBar, top: verticalBarTop, shown: !blocked)
+    } else {
+      titlebar.placeFloating(in: view, below: tabBar, top: 0, shown: false)
+    }
     let accessory = pageBar.accessory
     guard case .page = bars, accessory.height > 0, !blocked else {
       accessory.removeFromSuperview()

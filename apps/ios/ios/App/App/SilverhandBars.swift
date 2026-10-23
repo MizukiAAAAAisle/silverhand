@@ -687,15 +687,37 @@ struct TitlebarState: Equatable {
 /// The wide layout's window titlebar: the sidebar toggle, the archive status
 /// and the global search field. The web page draws the search results below
 /// it and receives the field's text and keys.
+///
+/// On an open iPhone Duo the vertical bar stands in for the titlebar row:
+/// search and the sidebar toggle sit above its tabs, and the field floats over
+/// the top of the page only while a search is in use.
 @MainActor
 final class Titlebar: NSObject, UITextFieldDelegate {
   var state: TitlebarState?
   var onEvent: (([String: Any]) -> Void)?
+  static let fieldHeight: CGFloat = 44
   private let field = TitlebarSearchField()
   private lazy var fieldWidth = field.widthAnchor.constraint(equalToConstant: 420)
   private lazy var sidebar = UIBarButtonItem(
     image: nil,
     primaryAction: UIAction { [weak self] _ in self?.onEvent?(["kind": "toggleSidebar"]) })
+  private lazy var search = UIBarButtonItem(
+    image: UIImage(systemName: "magnifyingglass"),
+    primaryAction: UIAction { [weak self] _ in self?.focusSearch() })
+  /// The floating field's glass, beside the vertical bar.
+  private let floating: UIVisualEffectView = {
+    if #available(iOS 26.0, *) {
+      let view = UIVisualEffectView(effect: UIGlassEffect(style: .regular))
+      view.cornerConfiguration = .capsule()
+      return view
+    }
+    let view = UIVisualEffectView(effect: UIBlurEffect(style: .systemChromeMaterial))
+    view.layer.cornerRadius = Titlebar.fieldHeight / 2
+    view.clipsToBounds = true
+    return view
+  }()
+  private var vertical = false
+  private var searching = false
   private let status: UIBarButtonItem = {
     let item = UIBarButtonItem(title: nil)
     item.isEnabled = false
@@ -708,36 +730,83 @@ final class Titlebar: NSObject, UITextFieldDelegate {
     field.translatesAutoresizingMaskIntoConstraints = false
     fieldWidth.isActive = true
     // As tall as the glass bar buttons beside it.
-    field.heightAnchor.constraint(equalToConstant: 44).isActive = true
+    field.heightAnchor.constraint(equalToConstant: Self.fieldHeight).isActive = true
     field.addTarget(self, action: #selector(began), for: .editingDidBegin)
     field.addTarget(self, action: #selector(changed), for: .editingChanged)
     field.onKey = { [weak self] key in self?.onEvent?(["kind": "searchKey", "key": key]) }
     sidebar.tintColor = .label
+    search.tintColor = .label
+    floating.isHidden = true
   }
 
   /// `width` is the window's; the field follows the desktop pill's
   /// `clamp(420px, 52vw, 720px)`.
-  func apply(to item: UINavigationItem, width: CGFloat, enabled: Bool) {
+  func apply(to item: UINavigationItem, width: CGFloat, vertical: Bool, enabled: Bool) {
     guard let state else { return }
-    fieldWidth.constant = min(720, max(420, width * 0.52))
+    fieldWidth.constant = Self.searchWidth(in: width)
     field.isEnabled = enabled
     sidebar.isEnabled = enabled
+    search.isEnabled = enabled
     field.placeholder = state.searchPlaceholder
+    search.accessibilityLabel = state.searchShortcut
     // The desktop glyphs: the chevron points at what a tap does.
     if let toggle = state.sidebar {
       sidebar.image = UIImage(named: toggle.shown ? "TitlebarSidebarClose" : "TitlebarSidebarOpen")
       sidebar.accessibilityLabel = toggle.label
     }
     status.title = state.status
+    self.vertical = vertical
+
+    if vertical, #available(iOS 27.1, *) {
+      let groups = [[search]] + (state.sidebar == nil ? [] : [[sidebar]])
+      for item in groups.joined() { item.axisBehavior = .verticalPreferred }
+      item.verticalBarCompressionBehavior = .prefersTabBar
+      item.trailingItemGroups = BarGlyphs.groups(groups)
+      if field.superview !== floating.contentView {
+        floating.contentView.addSubview(field)
+        NSLayoutConstraint.activate([
+          field.leadingAnchor.constraint(equalTo: floating.contentView.leadingAnchor, constant: 6),
+          field.centerYAnchor.constraint(equalTo: floating.contentView.centerYAnchor),
+        ])
+      }
+      return
+    }
+
+    searching = false
+    floating.isHidden = true
     if item.titleView !== field { item.titleView = field }
     item.leftBarButtonItems =
       (state.sidebar == nil ? [] : [sidebar]) + (state.status == nil ? [] : [status])
   }
 
-  func focusSearch() { field.becomeFirstResponder() }
+  static func searchWidth(in width: CGFloat) -> CGFloat { min(720, max(420, width * 0.52)) }
+
+  /// Lays the floating field over the top of `view`, centred on the window
+  /// as the results under it are. It shows only while a search is in use.
+  func placeFloating(in view: UIView, below bar: UIView, top: CGFloat, shown: Bool) {
+    guard vertical, shown else {
+      floating.removeFromSuperview()
+      return
+    }
+    if floating.superview !== view { view.insertSubview(floating, belowSubview: bar) }
+    let width = Self.searchWidth(in: view.bounds.width) + 12
+    floating.frame = CGRect(
+      x: (view.bounds.width - width) / 2, y: top, width: width, height: Self.fieldHeight)
+    floating.isHidden = !searching
+  }
+
+  func focusSearch() {
+    if vertical {
+      searching = true
+      floating.isHidden = floating.superview == nil
+    }
+    field.becomeFirstResponder()
+  }
 
   func endSearch(clear: Bool) {
     if clear { field.text = "" }
+    searching = false
+    if vertical { floating.isHidden = true }
     field.resignFirstResponder()
   }
 

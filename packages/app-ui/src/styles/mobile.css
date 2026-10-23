@@ -8,6 +8,13 @@
 [data-app-frame] {
   background: var(--bg-app, transparent);
 }
+/* On an open iPhone Duo the native vertical bar takes the rail's place. */
+:root[data-vertical-bar] {
+  --nav-rail-width: 0px;
+}
+:root[data-vertical-bar] .nav-rail {
+  display: none;
+}
 /* On touch devices the frame takes the page paper in every theme, iris's
    gradient included, so the chrome around the panes meets the system bars
    instead of a desktop window frame. Outranks the theme blocks' own values. */

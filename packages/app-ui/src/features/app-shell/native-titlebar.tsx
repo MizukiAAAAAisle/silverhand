@@ -7,7 +7,9 @@ import { t, useLocale } from "@/lib/i18n";
  * The wide layout's titlebar when the platform draws it natively (iOS). The
  * page keeps the state and the search results; the system bar shows the
  * sidebar toggle, the archive status and the search field above the page's
- * top safe area, and this spacer clears it (`--native-bar-bottom`).
+ * top safe area, and this spacer clears it (`--native-bar-bottom`). On an
+ * open iPhone Duo the vertical bar carries them instead and the spacer only
+ * clears the display's rounded corner.
  */
 export function NativeTitlebar({
   titlebar,
