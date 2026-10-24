@@ -5,6 +5,8 @@ import type {
   BannerNotice,
   ComposerEvent,
   ComposerState,
+  ContextMenu,
+  ContextMenuChoice,
   TitlebarEvent,
   TitlebarState,
   PageBarEvent,
@@ -98,6 +100,8 @@ export interface NativeBridge {
     shareLabel: string;
     closeLabel: string;
   }): Promise<{ shared: boolean }>;
+  /** The system context menu; `choice` is absent when it was dismissed. */
+  contextMenuShow(input: { menu: ContextMenu }): Promise<{ choice?: ContextMenuChoice }>;
   /** The native avatar editor; both fields are absent when it was dismissed. */
   avatarMakerEdit(input: {
     config: { parts: Record<string, number>; bg: number };

@@ -13,7 +13,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "selectionBarSync", "selectionBarRemove", "bannerShow", "sharePng", "previewPng", "saveAttachment", "avatarMakerEdit",
+    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "selectionBarSync", "selectionBarRemove", "bannerShow", "sharePng", "previewPng", "saveAttachment", "avatarMakerEdit", "contextMenuShow",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -86,6 +86,38 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         }
         host.present(picker, animated: true)
       } catch { call.reject(error.localizedDescription) }
+    }
+  }
+
+  @objc func contextMenuShow(_ call: CAPPluginCall) {
+    let menu = call.getObject("menu") ?? [:]
+    let point = menu["point"] as? JSObject ?? [:]
+    let request = ContextMenuRequest(
+      point: CGPoint(x: point["x"] as? Double ?? 0, y: point["y"] as? Double ?? 0),
+      reactions: (menu["reactions"] as? JSArray ?? []).compactMap { value in
+        guard let item = value as? JSObject, let emoji = item["emoji"] as? String else { return nil }
+        return (emoji, item["label"] as? String ?? emoji)
+      },
+      sections: (menu["sections"] as? JSArray ?? []).map { section in
+        (section as? JSArray ?? []).compactMap { value in
+          guard let item = value as? JSObject, let id = item["id"] as? String else { return nil }
+          return ContextMenuItem(
+            id: id, label: item["label"] as? String ?? "", icon: item["icon"] as? String ?? "")
+        }
+      })
+    Task { @MainActor in
+      guard let web = self.bridge?.webView else {
+        call.reject("Unable to present the menu")
+        return
+      }
+      let shown = SilverhandContextMenu.present(request, over: web) { choice in
+        switch choice {
+        case .item(let id): call.resolve(["choice": ["kind": "item", "id": id]])
+        case .react(let emoji): call.resolve(["choice": ["kind": "react", "emoji": emoji]])
+        case nil: call.resolve([:])
+        }
+      }
+      if !shown { call.reject("Unable to present the menu") }
     }
   }
 

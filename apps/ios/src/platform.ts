@@ -17,6 +17,7 @@ import { createIOSComposer } from "./composer";
 import { createIOSSelectionBar } from "./selection-bar";
 import { createIOSFiles, encodeBytes } from "./files";
 import { createIOSAvatarMaker } from "./avatar-maker";
+import { createIOSContextMenu } from "./context-menu";
 
 function parse(text?: string): unknown {
   try {
@@ -66,6 +67,7 @@ export function createIOSPlatform(
     selectionBar: createIOSSelectionBar(bridge),
     banner: createIOSBanner(bridge),
     avatarMaker: createIOSAvatarMaker(bridge),
+    contextMenu: createIOSContextMenu(bridge),
     client: {
       getConnectionPolicy: async () => ({ allow_insecure_remote: false }),
       getConnectionInfo: async () => {

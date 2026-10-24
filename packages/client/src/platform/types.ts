@@ -133,6 +133,28 @@ export interface AppUpdateCapability {
   onShowDialog(handler: () => void): () => void;
 }
 
+/** One action in a native context menu; `icon` is SVG markup on a 24px grid. */
+export interface ContextMenuItem {
+  id: string;
+  label: string;
+  icon: string;
+}
+export interface ContextMenu {
+  /** Where it was asked for, in viewport points; the menu opens beside it. */
+  point: { x: number; y: number };
+  /** A row of emoji above the actions. */
+  reactions: { emoji: string; label: string }[];
+  /** Groups of actions, divided from each other. */
+  sections: ContextMenuItem[][];
+}
+export type ContextMenuChoice = { kind: "item"; id: string } | { kind: "react"; emoji: string };
+/** A context menu the platform draws above everything on screen, native
+ * overlays included. The UI owns the actions and every string. */
+export interface ContextMenuCapability {
+  /** Null when it was dismissed without a choice. */
+  show(menu: ContextMenu): Promise<ContextMenuChoice | null>;
+}
+
 /** A native avatar editor over the shared part library. The UI owns storage: it
  *  passes the starting config and uploads what comes back. */
 export interface AvatarMakerCapability {
@@ -157,6 +179,7 @@ export interface ClientPlatform {
   selectionBar?: SelectionBarCapability;
   banner?: BannerCapability;
   avatarMaker?: AvatarMakerCapability;
+  contextMenu?: ContextMenuCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
   /** Native chrome (menus, tabs, sheets) follows the language the page resolved. */

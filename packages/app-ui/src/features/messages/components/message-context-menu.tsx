@@ -1,4 +1,6 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactElement } from "react";
+import { Slot } from "@radix-ui/react-slot";
+import type { ContextMenuCapability } from "@silverhand/client";
 import { useCoarsePointer } from "@/navigation/layout";
 import "./message-context-menu.css";
 import {
@@ -9,7 +11,10 @@ import {
   SelectTextIcon,
   ShareLinkIcon,
   ThreadIcon,
+  type IconComponent,
 } from "@/icons";
+import { iconMarkup } from "@/components/layout/native-page-bar";
+import { getPlatform } from "@/platform";
 import {
   AppContextMenu,
   AppContextMenuItem,
@@ -71,6 +76,7 @@ export function MessageContextMenu({
   onReplyInThread?: () => void;
 }): JSX.Element {
   const touch = useCoarsePointer();
+  const nativeMenu = getPlatform().contextMenu;
   const [selecting, setSelecting] = useState(false);
   const triggerRef = useRef<HTMLSpanElement>(null);
   const openingSelection = useRef(false);
@@ -107,102 +113,233 @@ export function MessageContextMenu({
   }, [selecting]);
   const canSelectText = touch && !!text?.trim();
   const react = touch ? onReact : undefined;
-  const replyInThread = touch ? onReplyInThread : undefined;
-  const hasAnyAction =
-    canSelectText ||
-    !!(react || replyInThread || onCopyMarkdown || onToggleSave || onShare || onUnfollowThread);
-  if (!hasAnyAction) return trigger;
+  const sections = menuSections({
+    replyInThread: touch ? onReplyInThread : undefined,
+    selectText: canSelectText
+      ? () => {
+          openingSelection.current = true;
+          setSelecting(true);
+        }
+      : undefined,
+    saved,
+    onCopyMarkdown,
+    onToggleSave,
+    onShare,
+    onUnfollowThread,
+  });
+  if (!react && sections.length === 0) return trigger;
+
+  // The system menu fits four emoji to its row.
+  const reactions = react ? QUICK_REACTIONS.slice(0, nativeMenu ? 4 : 6) : [];
+  const selectBody = () => {
+    const body = triggerRef.current?.querySelector("[data-message-body]");
+    const selection = window.getSelection();
+    if (body && selection) {
+      const range = document.createRange();
+      range.selectNodeContents(body);
+      selection.removeAllRanges();
+      selection.addRange(range);
+    } else {
+      setSelecting(false);
+    }
+    openingSelection.current = false;
+  };
+  const triggerClassName = "message-context-trigger" + (selecting ? " message-text-selecting" : "");
+
+  if (nativeMenu) {
+    return (
+      <NativeContextMenuTrigger
+        trigger={trigger}
+        className={triggerClassName}
+        triggerRef={triggerRef}
+        disabled={selecting}
+        menu={nativeMenu}
+        reactions={reactions}
+        sections={sections}
+        onReact={(emoji) => react?.(emoji)}
+        onSelected={() => {
+          // The body is selectable only once the class above applies.
+          if (openingSelection.current) requestAnimationFrame(selectBody);
+        }}
+      />
+    );
+  }
 
   return (
     <AppContextMenu
       trigger={trigger}
-      triggerClassName={"message-context-trigger" + (selecting ? " message-text-selecting" : "")}
+      triggerClassName={triggerClassName}
       triggerRef={triggerRef}
       disabled={selecting}
       onCloseAutoFocus={(event) => {
         if (openingSelection.current) {
           event.preventDefault();
-          const body = triggerRef.current?.querySelector("[data-message-body]");
-          const selection = window.getSelection();
-          if (body && selection) {
-            const range = document.createRange();
-            range.selectNodeContents(body);
-            selection.removeAllRanges();
-            selection.addRange(range);
-          } else {
-            setSelecting(false);
-          }
-          openingSelection.current = false;
+          selectBody();
         }
       }}
     >
       {react ? (
         <>
           <AppContextMenuReactions
-            emojis={QUICK_REACTIONS.slice(0, 6)}
+            emojis={reactions}
             labelFor={(emoji) => t("messages.reactWith", { emoji })}
             onPick={react}
           />
           <AppContextMenuSeparator />
         </>
       ) : null}
-      {replyInThread ? (
-        <AppContextMenuItem icon={<ThreadIcon className="size-3.5" />} onSelect={replyInThread}>
-          {t("messages.replyInThread")}
-        </AppContextMenuItem>
-      ) : null}
-      {canSelectText ? (
-        <AppContextMenuItem
-          icon={<SelectTextIcon className="size-3.5" />}
-          onSelect={() => {
-            openingSelection.current = true;
-            setSelecting(true);
-          }}
-        >
-          {t("messages.selectText")}
-        </AppContextMenuItem>
-      ) : null}
-      {onCopyMarkdown ? (
-        <AppContextMenuItem
-          icon={<CopyMarkdownIcon className="size-3.5" />}
-          onSelect={onCopyMarkdown}
-        >
-          {t("messages.copyMarkdown")}
-        </AppContextMenuItem>
-      ) : null}
-      {onToggleSave ? (
-        <AppContextMenuItem
-          icon={
-            saved ? (
-              <BookmarkRemoveIcon className="size-3.5" />
-            ) : (
-              <BookmarkIcon className="size-3.5" />
-            )
-          }
-          onSelect={onToggleSave}
-        >
-          {saved ? t("messages.unsave") : t("messages.saveMessage")}
-        </AppContextMenuItem>
-      ) : null}
-      {onShare ? (
-        <>
-          <AppContextMenuSeparator />
-          <AppContextMenuItem icon={<ShareLinkIcon className="size-3.5" />} onSelect={onShare}>
-            {t("messages.share")}
-          </AppContextMenuItem>
-        </>
-      ) : null}
-      {onUnfollowThread ? (
-        <>
-          <AppContextMenuSeparator />
-          <AppContextMenuItem
-            icon={<BellOffIcon className="size-3.5" />}
-            onSelect={onUnfollowThread}
-          >
-            {t("messages.unfollowThread")}
-          </AppContextMenuItem>
-        </>
-      ) : null}
+      {sections.map((section, index) => (
+        <Fragment key={section[0]?.id}>
+          {index > 0 ? <AppContextMenuSeparator /> : null}
+          {section.map(({ id, label, Icon, run }) => (
+            <AppContextMenuItem key={id} icon={<Icon className="size-3.5" />} onSelect={run}>
+              {label}
+            </AppContextMenuItem>
+          ))}
+        </Fragment>
+      ))}
     </AppContextMenu>
+  );
+}
+
+type MenuAction = { id: string; label: string; Icon: IconComponent; run: () => void };
+
+/** The message's actions, grouped as the menu divides them; one list for the
+ * web menu and the native one. */
+function menuSections({
+  replyInThread,
+  selectText,
+  saved,
+  onCopyMarkdown,
+  onToggleSave,
+  onShare,
+  onUnfollowThread,
+}: {
+  replyInThread?: () => void;
+  selectText?: () => void;
+  saved: boolean;
+  onCopyMarkdown?: () => void;
+  onToggleSave?: () => void;
+  onShare?: () => void;
+  onUnfollowThread?: () => void;
+}): MenuAction[][] {
+  const action = (
+    id: string,
+    label: string,
+    Icon: IconComponent,
+    run: (() => void) | undefined,
+  ): MenuAction[] => (run ? [{ id, label, Icon, run }] : []);
+
+  return [
+    [
+      ...action("reply", t("messages.replyInThread"), ThreadIcon, replyInThread),
+      ...action("select", t("messages.selectText"), SelectTextIcon, selectText),
+      ...action("copy", t("messages.copyMarkdown"), CopyMarkdownIcon, onCopyMarkdown),
+      ...action(
+        "save",
+        saved ? t("messages.unsave") : t("messages.saveMessage"),
+        saved ? BookmarkRemoveIcon : BookmarkIcon,
+        onToggleSave,
+      ),
+    ],
+    action("share", t("messages.share"), ShareLinkIcon, onShare),
+    action("unfollow", t("messages.unfollowThread"), BellOffIcon, onUnfollowThread),
+  ].filter((section) => section.length > 0);
+}
+
+const LONG_PRESS_MS = 700;
+
+/**
+ * The row as the trigger of the platform's own context menu (iOS), which
+ * draws above the native composer and bars. A touch held still opens it, as
+ * Radix's web menu does; a secondary click opens it at once.
+ */
+function NativeContextMenuTrigger({
+  trigger,
+  className,
+  triggerRef,
+  disabled,
+  menu,
+  reactions,
+  sections,
+  onReact,
+  onSelected,
+}: {
+  trigger: ReactElement;
+  className: string;
+  triggerRef: React.Ref<HTMLSpanElement>;
+  disabled: boolean;
+  menu: ContextMenuCapability;
+  reactions: readonly string[];
+  sections: MenuAction[][];
+  onReact: (emoji: string) => void;
+  onSelected: () => void;
+}): JSX.Element {
+  const timer = useRef<number | undefined>(undefined);
+  const latest = useRef({ sections, onReact, onSelected });
+  latest.current = { sections, onReact, onSelected };
+  const clear = () => window.clearTimeout(timer.current);
+  useEffect(() => clear, []);
+
+  const open = (x: number, y: number) => {
+    void menu
+      .show({
+        point: { x, y },
+        reactions: reactions.map((emoji) => ({
+          emoji,
+          label: t("messages.reactWith", { emoji }),
+        })),
+        sections: sections.map((section) =>
+          section.map(({ id, label, Icon }) => ({ id, label, icon: iconMarkup(Icon) })),
+        ),
+      })
+      .then((choice) => {
+        if (!choice) {
+          return;
+        }
+        if (choice.kind === "react") {
+          latest.current.onReact(choice.emoji);
+        } else {
+          latest.current.sections
+            .flat()
+            .find((action) => action.id === choice.id)
+            ?.run();
+          latest.current.onSelected();
+        }
+      })
+      .catch(() => {});
+  };
+
+  if (disabled) {
+    return (
+      <Slot className={className} ref={triggerRef} style={{ WebkitTouchCallout: "default" }}>
+        {trigger}
+      </Slot>
+    );
+  }
+
+  return (
+    <Slot
+      className={className}
+      ref={triggerRef}
+      onContextMenu={(event) => {
+        clear();
+        event.preventDefault();
+        open(event.clientX, event.clientY);
+      }}
+      onPointerDown={(event) => {
+        if (event.pointerType === "mouse") {
+          return;
+        }
+        clear();
+        const { clientX, clientY } = event;
+        timer.current = window.setTimeout(() => open(clientX, clientY), LONG_PRESS_MS);
+      }}
+      onPointerMove={clear}
+      onPointerUp={clear}
+      onPointerCancel={clear}
+    >
+      {trigger}
+    </Slot>
   );
 }
