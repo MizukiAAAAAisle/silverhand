@@ -232,8 +232,9 @@ export interface MessageItemProps {
  *   earns persistent space.
  *
  * Layout: respects `useMessageLayoutMode`. In `'user-right'` mode the
- * current user's messages flush right; in `'all-left'` everything is
- * left-aligned.
+ * current user's messages flush right with no avatar or byline (the bubble
+ * already says who wrote them; their time is hover-revealed); in `'all-left'`
+ * everything is left-aligned.
  */
 /**
  * The message row's HOOKS-FREE classifier boundary (#task:1792, Cindy). It runs
@@ -723,6 +724,37 @@ function ActorMessageItem({
     />
   ) : null;
 
+  /* Continuation rail — occupies the avatar column's exact WIDTH (`w-8`)
+     so the body lands on the same text baseline as the group head's, but
+     only ONE body line of HEIGHT: a taller rail would pad the row back out
+     and undo the tightening that makes a run read as one block. The line box
+     is taken off the same Appearance token `.markdown-body` uses (see
+     `[data-message-continuation-rail]` in chrome.css), so it still matches the
+     body's first line at any font-size slider value.
+
+     It carries THIS row's own clock time, revealed on row hover. An own
+     right-aligned message shows it too, beside the bubble: alignment and the
+     bubble already say who wrote it, so it has no avatar or byline. Driven by
+     the row's `hover` state rather than a `group-hover:` variant — Tailwind's
+     variant ties with the base opacity class and loses in the compiled sheet.
+     Only opacity animates, so the time stays in the a11y tree throughout. */
+  const hoverTime = (
+    <time
+      data-message-continuation-rail
+      dateTime={new Date(message.created_at).toISOString()}
+      title={timeTooltip}
+      className={
+        // Either side, the time hugs the text it labels; beside a bubble it
+        // drops by the bubble's padding to sit on its first line.
+        "w-8 shrink-0 select-none text-right text-(length:--text-badge) text-text-muted transition-opacity " +
+        (alignRight && bodyNode ? "pt-2 " : "") +
+        (hover ? "opacity-100" : "opacity-0")
+      }
+    >
+      {continuationTimeLabel}
+    </time>
+  );
+
   const row = (
     <div
       id={`msg-${message.id}`}
@@ -784,35 +816,8 @@ function ActorMessageItem({
       {selectionMode && committed ? (
         <SelectionCheckbox checked={selected} onChange={() => onToggleSelected?.(message)} />
       ) : null}
-      {continuesPrevious ? (
-        /* Continuation rail — occupies the avatar column's exact WIDTH (`w-8`)
-           so the body lands on the same text baseline as the group head's, but
-           only ONE body line of HEIGHT: a taller rail would pad the row back
-           out and undo the tightening that makes a run read as one block. The
-           line box is taken off the same Appearance token `.markdown-body`
-           uses (see `[data-message-continuation-rail]` in chrome.css), so it
-           still matches the body's first line at any font-size slider value.
-
-           It carries THIS row's own clock time, revealed on row hover: the
-           time is never lost to grouping, it just stops competing for
-           attention on every line. Driven by the row's `hover` state rather
-           than a `group-hover:` variant — same reason as the action controls
-           below, Tailwind's variant ties with the base opacity class and loses
-           in the compiled sheet. Only opacity animates, so the time stays in
-           the a11y tree throughout rather than being `aria-hidden` while
-           invisible. */
-        <time
-          data-message-continuation-rail
-          dateTime={new Date(message.created_at).toISOString()}
-          title={timeTooltip}
-          className={
-            "w-8 shrink-0 select-none text-(length:--text-badge) text-text-muted transition-opacity " +
-            (alignRight ? "text-left " : "text-right ") +
-            (hover ? "opacity-100" : "opacity-0")
-          }
-        >
-          {continuationTimeLabel}
-        </time>
+      {alignRight ? null : continuesPrevious ? (
+        hoverTime
       ) : (
         <Avatar
           presentation={presentation}
@@ -860,8 +865,8 @@ function ActorMessageItem({
            column: the group head already named the author, and this row's own
            time sits in the hover rail beside it. Both null ⇒ MessageRowContent
            drops the whole header element (#task:1737). */
-        author={continuesPrevious ? null : authorNode}
-        timestamp={continuesPrevious ? null : timestampNode}
+        author={continuesPrevious || alignRight ? null : authorNode}
+        timestamp={continuesPrevious || alignRight ? null : timestampNode}
         taskTag={taskTag}
         body={bodyNode}
         attachments={attachmentsNode}
@@ -869,6 +874,9 @@ function ActorMessageItem({
         trailing={trailingNode}
         threadPreview={threadPreviewNode}
       />
+      {/* Own messages sit on the right edge; their time shows on the bubble's
+          leading side, where a reversed row puts what follows the column. */}
+      {alignRight ? hoverTime : null}
 
       {/* Frame-corner action controls (Save + Thread) — absolutely
           pinned to the top-right of the framed message row (mirrored
