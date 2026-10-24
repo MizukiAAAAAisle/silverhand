@@ -24,6 +24,12 @@ enum ContextMenuChoice {
 enum SilverhandContextMenu {
   private static var showing: AnchorButton?
 
+  /// Where it is not, the page keeps its own menu.
+  nonisolated static var isAvailable: Bool {
+    if #available(iOS 17.4, *) { return true }
+    return false
+  }
+
   static func present(
     _ request: ContextMenuRequest, over web: UIView,
     completion: @escaping (ContextMenuChoice?) -> Void

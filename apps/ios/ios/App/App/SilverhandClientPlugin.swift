@@ -13,7 +13,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "selectionBarSync", "selectionBarRemove", "bannerShow", "sharePng", "previewPng", "saveAttachment", "avatarMakerEdit", "contextMenuShow",
+    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "selectionBarSync", "selectionBarRemove", "bannerShow", "sharePng", "previewPng", "saveAttachment", "avatarMakerEdit", "contextMenuAvailable", "contextMenuShow",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -87,6 +87,10 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         host.present(picker, animated: true)
       } catch { call.reject(error.localizedDescription) }
     }
+  }
+
+  @objc func contextMenuAvailable(_ call: CAPPluginCall) {
+    call.resolve(["available": SilverhandContextMenu.isAvailable])
   }
 
   @objc func contextMenuShow(_ call: CAPPluginCall) {

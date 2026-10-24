@@ -51,7 +51,8 @@ async function start(): Promise<void> {
     nativeBridge.pageBar({ state: null }),
     nativeBridge.composerRemove({}),
   ]);
-  configurePlatform(createIOSPlatform(nativeBridge, resetApplication));
+  const { available: contextMenu } = await nativeBridge.contextMenuAvailable();
+  configurePlatform(createIOSPlatform(nativeBridge, resetApplication, { contextMenu }));
   await nativeBridge.getProfile();
   mountApp(root, { loginFirst: true, showServerAddress: true });
 }

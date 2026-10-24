@@ -24,6 +24,7 @@ vi.mock("./bridge", () => ({
     titlebar: vi.fn(async () => {}),
     pageBar: vi.fn(async () => {}),
     composerRemove: vi.fn(async () => {}),
+    contextMenuAvailable: vi.fn(async () => ({ available: true })),
   },
 }));
 

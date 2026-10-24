@@ -30,6 +30,8 @@ function parse(text?: string): unknown {
 export function createIOSPlatform(
   bridge: NativeBridge,
   resetApplication: () => void,
+  /** Whether this iOS draws the system context menu; without it the page keeps its own. */
+  { contextMenu = false }: { contextMenu?: boolean } = {},
 ): ClientPlatform {
   const epochHandlers = new Set<() => void>();
   let upgrade: ClientAuthState | undefined;
@@ -67,7 +69,7 @@ export function createIOSPlatform(
     selectionBar: createIOSSelectionBar(bridge),
     banner: createIOSBanner(bridge),
     avatarMaker: createIOSAvatarMaker(bridge),
-    contextMenu: createIOSContextMenu(bridge),
+    contextMenu: contextMenu ? createIOSContextMenu(bridge) : undefined,
     client: {
       getConnectionPolicy: async () => ({ allow_insecure_remote: false }),
       getConnectionInfo: async () => {

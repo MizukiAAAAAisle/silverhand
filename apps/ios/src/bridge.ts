@@ -100,6 +100,8 @@ export interface NativeBridge {
     shareLabel: string;
     closeLabel: string;
   }): Promise<{ shared: boolean }>;
+  /** Whether this iOS draws `contextMenuShow`. */
+  contextMenuAvailable(): Promise<{ available: boolean }>;
   /** The system context menu; `choice` is absent when it was dismissed. */
   contextMenuShow(input: { menu: ContextMenu }): Promise<{ choice?: ContextMenuChoice }>;
   /** The native avatar editor; both fields are absent when it was dismissed. */
