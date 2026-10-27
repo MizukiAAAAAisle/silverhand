@@ -124,6 +124,7 @@ const THEME_META: Record<
 export function SettingsShell(): JSX.Element {
   const {
     appearance,
+    themeStatus,
     setTheme,
     setMarkdownFont,
     setMarkdownFontSize,
@@ -159,6 +160,7 @@ export function SettingsShell(): JSX.Element {
           {section === "appearance" ? (
             <AppearancePane
               appearance={appearance}
+              themeStatus={themeStatus}
               setTheme={setTheme}
               setMarkdownFont={setMarkdownFont}
               setMarkdownFontSize={setMarkdownFontSize}
@@ -259,11 +261,11 @@ function SettingsRailNav({
   );
 }
 
-/** Appearance pane — theme picker + Markdown Text controls. Settings
- *  here auto-persist to localStorage via {@link useAppearance}; no Save
- *  button needed, so this pane has no footer. */
+/** Theme selection saves through the platform's appearance store. Markdown
+ * settings retain their localStorage contract; no separate Save button. */
 function AppearancePane({
   appearance,
+  themeStatus,
   setTheme,
   setMarkdownFont,
   setMarkdownFontSize,
@@ -271,12 +273,19 @@ function AppearancePane({
   resetMarkdownFontSize,
 }: {
   appearance: ReturnType<typeof useAppearance>["appearance"];
+  themeStatus: ReturnType<typeof useAppearance>["themeStatus"];
   setTheme: ReturnType<typeof useAppearance>["setTheme"];
   setMarkdownFont: ReturnType<typeof useAppearance>["setMarkdownFont"];
   setMarkdownFontSize: ReturnType<typeof useAppearance>["setMarkdownFontSize"];
   resetMarkdownText: ReturnType<typeof useAppearance>["resetMarkdownText"];
   resetMarkdownFontSize: ReturnType<typeof useAppearance>["resetMarkdownFontSize"];
 }): JSX.Element {
+  const [themeError, setThemeError] = useState(false);
+  // Store promises settle in write order, including after a failed choice.
+  const chooseTheme = async (id: ThemeId) => {
+    try { await setTheme(id); setThemeError(false); }
+    catch { setThemeError(true); }
+  };
   return (
     <section
       data-appearance-pane
@@ -289,6 +298,11 @@ function AppearancePane({
             icon={<AppearanceIcon className="size-4" />}
             title="Appearance"
           >
+            {themeError || themeStatus?.confirmed === false ? (
+              <p role="status" className="mb-3 text-xs text-text-muted">
+                {themeStatus?.pending ? "主题正在保存…" : "主题保存未确认，请点选主题重试。"}
+              </p>
+            ) : null}
             <div className="grid min-w-0 grid-cols-1 gap-4">
               <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
                 {THEME_IDS.map((id) => {
@@ -298,7 +312,7 @@ function AppearancePane({
                     <button
                       key={id}
                       type="button"
-                      onClick={() => setTheme(id)}
+                      onClick={() => void chooseTheme(id)}
                       className={cn(
                         "group relative flex min-h-23 min-w-0 flex-col items-start justify-between overflow-hidden rounded-[10px] p-3 text-left focus-outline",
                         CONTROL_HOVER_LIFT,

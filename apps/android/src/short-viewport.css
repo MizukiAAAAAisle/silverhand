@@ -1,0 +1,123 @@
+/* In Android compact chat, selection actions precede the message scroller.
+   Move its existing floating-header clearance to the toolbar while selecting;
+   the measured chrome variable remains the only height authority. */
+:root[data-layout="compact"]
+  [data-panel="chat"]:has(> [data-pane-chrome="scroller"])
+  [role="toolbar"][aria-label="Message selection"] {
+  margin-top: calc(var(--pane-chrome-height, 0px) + 12px);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+:root[data-layout="compact"]
+  [data-panel="chat"]:has(> [data-pane-chrome="scroller"])
+  [role="toolbar"][aria-label="Message selection"] > div {
+  flex-wrap: wrap;
+}
+
+:root[data-layout="compact"]
+  [data-panel="chat"]:has(> [data-pane-chrome="scroller"])
+  [role="toolbar"][aria-label="Message selection"] + div [data-pane-chrome-spacer] {
+  height: 0;
+}
+
+/* Keep the bounded history and editor in normal flow. Compact pages are
+   absolute inside PageStack, so their content cannot grow the app frame.
+   The chat column owns this local scroll; other surfaces retain shell scroll. */
+@media (max-height: 320px) {
+  :root[data-layout="compact"] .app-shell:has(
+    [data-panel="chat"] > [data-pane-chrome="scroller"] ~ div
+      [role="toolbar"][aria-label="Message selection"]
+  ):not(:has([data-chat-column] > [data-message-area] > [data-message-list] >
+    [role="toolbar"][aria-label="Message selection"])) {
+    overflow-y: auto;
+  }
+
+  :root[data-layout="compact"] .app-shell:has(
+    [data-panel="chat"] > [data-pane-chrome="scroller"] ~ div
+      [role="toolbar"][aria-label="Message selection"]
+  ):not(:has([data-chat-column] > [data-message-area] > [data-message-list] >
+    [role="toolbar"][aria-label="Message selection"])) > [data-app-frame] {
+    flex-shrink: 0;
+    min-height: min-content;
+  }
+
+  :root[data-layout="compact"]
+    [data-panel="chat"]:has(> [data-pane-chrome="scroller"])
+    [data-chat-column]:has(> [data-message-area] > [data-message-list] >
+      [role="toolbar"][aria-label="Message selection"]) {
+    overflow-y: auto;
+  }
+
+  :root[data-layout="compact"]
+    [data-panel="chat"]:has(> [data-pane-chrome="scroller"])
+    [data-chat-column] > [data-message-area]:has(> [data-message-list] >
+      [role="toolbar"][aria-label="Message selection"]),
+  :root[data-layout="compact"]
+    [data-panel="chat"]:has(> [data-pane-chrome="scroller"])
+    [data-chat-column] > [data-message-area] > [data-message-list]:has(>
+      [role="toolbar"][aria-label="Message selection"]) {
+    flex: none;
+    min-height: min-content;
+  }
+
+  :root[data-layout="compact"]
+    [data-panel="chat"]:has(> [data-pane-chrome="scroller"])
+    [role="toolbar"][aria-label="Message selection"] + div {
+    /* A bounded author + two body lines keeps the virtualized history a
+       real scroll viewport while the shell reveals the surrounding controls. */
+    flex: none;
+    height: 3lh;
+    min-height: 3lh;
+  }
+}
+
+/* Android already resizes the WebView for the IME. Spend a very short,
+   focused viewport on editing, without adding another inset/padding owner. */
+@media (max-height: 320px) {
+  /* All navigation/header controls remain rendered and reachable by scrolling.
+     The focused editor is revealed in this shell rather than clipped below it. */
+  .app-shell:has([data-composer]:focus-within) {
+    overflow-y: auto;
+  }
+
+  .app-shell:has([data-composer]:focus-within) > [data-app-frame] {
+    flex-shrink: 0;
+    min-height: calc(3rem + 2.75rem + 32px);
+  }
+
+  .app-shell [data-composer]:focus-within {
+    padding: 4px 8px;
+  }
+
+  .app-shell [data-composer]:focus-within [data-composer-shell] {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: end;
+    gap: 8px;
+  }
+
+  .app-shell [data-composer]:focus-within [data-composer-editor] {
+    display: block;
+    min-width: 0;
+  }
+
+  .app-shell [data-composer]:focus-within [data-composer-input] {
+    /* Override the auto-grow inline height only while space is constrained.
+       Text/selection remain intact and longer drafts scroll inside the field. */
+    height: 2.75rem !important;
+    min-height: 0;
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto !important;
+  }
+
+  .app-shell [data-composer]:focus-within [data-composer-toolbar] {
+    min-height: 44px;
+    padding: 0;
+  }
+
+  .app-shell [data-composer]:focus-within [data-composer-toolbar] button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}

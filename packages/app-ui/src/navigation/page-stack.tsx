@@ -208,7 +208,7 @@ export function PageStack({ children }: { children: ReactNode }) {
         last = { x: t.clientX, t: now };
         place(Math.min(1, Math.max(0, dx / width)));
       };
-      const end = () => {
+      const end = (event?: TouchEvent) => {
         window.removeEventListener("touchmove", move);
         window.removeEventListener("touchend", end);
         window.removeEventListener("touchcancel", end);
@@ -216,7 +216,7 @@ export function PageStack({ children }: { children: ReactNode }) {
         const share = progress.current;
         // A finger that stopped before letting go is not flicking.
         const flick = performance.now() - last.t < 100 && velocity > 0.3;
-        const commit = share > 0.5 || (flick && share > 0.05);
+        const commit = event?.type === "touchend" && (share > 0.5 || (flick && share > 0.05));
         release();
         if (commit && driver.back()) {
           barSwipe?.swipeEnd(page);

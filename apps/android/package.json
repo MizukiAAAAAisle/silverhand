@@ -1,0 +1,29 @@
+{
+  "name": "@silverhand/android",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "build:core": "python3 scripts/build-core.py"
+  },
+  "dependencies": {
+    "@capacitor/core": "8.5.2",
+    "@silverhand/app-ui": "workspace:*",
+    "@silverhand/client": "workspace:*",
+    "@silverhand/shared": "workspace:*",
+    "@capacitor/android": "8.5.2"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.2",
+    "@tailwindcss/vite": "^4.2.4",
+    "@vitejs/plugin-react": "^6.0.4",
+    "@types/node": "^22.19.17",
+    "typescript": "^5.6.3",
+    "vite": "^8.1.5",
+    "vitest": "^4.1.10"
+  },
+  "license": "Apache-2.0"
+}

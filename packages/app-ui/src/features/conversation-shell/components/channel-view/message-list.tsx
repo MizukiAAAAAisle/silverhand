@@ -81,6 +81,7 @@ export function MessageList({
   leadingSlot,
   highlightedMessageId,
   jumpToMessageId,
+  jumpAttemptId,
   jumpPrimePending = false,
   onJumped,
   isAtTail = true,
@@ -120,6 +121,8 @@ export function MessageList({
   leadingSlot?: ReactNode;
   highlightedMessageId?: string | null;
   jumpToMessageId: string | null;
+  /** Distinguishes repeated requests for the same message. */
+  jumpAttemptId?: number;
   /** When true, App is still resolving a `primeAround` for the current
    *  `jumpToMessageId`. The jump effect waits in the `idx === -1`
    *  branch instead of giving up. */
@@ -333,6 +336,15 @@ export function MessageList({
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showScrollBottom, setShowScrollBottom] = useState(false);
   const [flashedMessageId, setFlashedMessageId] = useState<string | null>(null);
+  const jumpOwner = jumpToMessageId === null ? null : JSON.stringify([channelId, jumpToMessageId, jumpAttemptId ?? 0]);
+  const activeJumpOwner = useRef(jumpOwner);
+  activeJumpOwner.current = surfaceActive ? jumpOwner : null;
+  const systemLocateBudget = useRef({ owner: jumpOwner, frames: 0 });
+  const failedSystemOwner = useRef<string | null>(null);
+  const [systemLocate, setSystemLocate] = useState<{
+    owner: string; messageId: string; status: "locating" | "located" | "failed";
+    firstError?: string; secondaryErrors?: string[];
+  } | null>(null);
   // Last find match we locally scrolled to (see the in-window find effect
   // below). Guards against re-scrolling on every unrelated `items` change.
   const lastScrolledSearchIdRef = useRef<string | null>(null);
@@ -395,7 +407,9 @@ export function MessageList({
   // Returns -1 while App is still priming the around-window.
   const jumpTargetIdx = useMemo(() => {
     if (!jumpToMessageId) return -1;
-    return items.findIndex((it) => it.kind === "message" && it.message.id === jumpToMessageId);
+    return items.findIndex((it) => it.kind === "cluster"
+      ? it.messages.some((m) => m.id === jumpToMessageId)
+      : it.message.id === jumpToMessageId);
   }, [items, jumpToMessageId]);
 
   // Reset Virtuoso bookkeeping whenever the channel changes — the user is
@@ -434,7 +448,7 @@ export function MessageList({
     // centers on the target.
     dispatchBottomAnchor({ type: "cancel" });
     setFlashedMessageId(null);
-  }, [jumpToMessageId, channelId]);
+  }, [jumpToMessageId, channelId, jumpAttemptId]);
 
   // Keep `firstItemIndex` and the Virtuoso mount in sync with how the loaded
   // window's HEAD moved between renders. Three shapes, told apart by old/new
@@ -506,11 +520,11 @@ export function MessageList({
     }
     const target = items[jumpTargetIdx];
     if (!target) return;
-    const key = `${channelId}:${jumpToMessageId}:${itemKey(target)}`;
+    const key = `${jumpOwner}:${itemKey(target)}`;
     if (lastJumpRemountKeyRef.current === key) return;
     lastJumpRemountKeyRef.current = key;
     setWindowResetVersion((v) => v + 1);
-  }, [channelId, items, itemKey, jumpTargetIdx, jumpToMessageId]);
+  }, [channelId, items, itemKey, jumpTargetIdx, jumpToMessageId, jumpOwner]);
 
   // ── Back-to-bottom one-shot consumption ──────────────────────────────────
   //
@@ -598,23 +612,85 @@ export function MessageList({
   // 404; for any other miss, signal `onJumped` so the parent doesn't
   // sit on a stuck target).
   useEffect(() => {
-    if (!jumpToMessageId) return;
-    if (items.length === 0) {
-      // Empty cache. If App is priming, wait; otherwise let the next
-      // data update re-trigger this effect — clearing the target now
-      // would lose the user's visual hint.
-      return;
-    }
+    if (!jumpToMessageId || !jumpOwner || !surfaceActive) return;
+    const owner = jumpOwner;
+    if (failedSystemOwner.current === owner) return;
+    if (systemLocateBudget.current.owner !== owner) systemLocateBudget.current = { owner, frames: 0 };
+    if (items.length === 0) return; // Preserve the existing empty-cache/prime boundary.
     if (jumpTargetIdx === -1) {
-      if (jumpPrimePending) return; // wait for prime
-      onJumped?.();
-      return;
+      if (!jumpPrimePending && activeJumpOwner.current === owner) onJumped?.();
+      return; // A released miss is never a located event.
     }
     if (isFetchingEarlier) return;
-
-    setShowScrollBottom(true);
-    setFlashedMessageId(jumpToMessageId);
-  }, [jumpToMessageId, jumpPrimePending, jumpTargetIdx, items.length, isFetchingEarlier, onJumped]);
+    const target = items[jumpTargetIdx];
+    const system = target?.kind === "cluster" ||
+      (target?.kind === "message" && isCommittedMessage(target.message) && target.message.from_kind === "system");
+    if (!system) {
+      setShowScrollBottom(true);
+      setFlashedMessageId(jumpToMessageId);
+      return; // Ordinary messages retain their declarative positioning path.
+    }
+    if (isLoading) return;
+    setSystemLocate({ owner, messageId: jumpToMessageId, status: "locating" });
+    let frame = 0;
+    let cancelled = false;
+    let positioned: Element | null = null;
+    const fail = (error: unknown): void => {
+      if (activeJumpOwner.current !== owner) return;
+      failedSystemOwner.current = owner;
+      setFlashedMessageId(null);
+      setSystemLocate((previous) => ({ owner, messageId: jumpToMessageId, status: "failed",
+        firstError: previous?.owner === owner && previous.firstError ? previous.firstError : String(error) }));
+      // Release control, not a successful locate. No flash is published.
+      try { onJumped?.(); }
+      catch (secondary) {
+        setSystemLocate((previous) => previous?.owner === owner ? { ...previous,
+          secondaryErrors: [...(previous.secondaryErrors ?? []), String(secondary)] } : previous);
+      }
+    };
+    const locate = (): void => {
+      if (cancelled || activeJumpOwner.current !== owner || failedSystemOwner.current === owner) return;
+      try {
+        const root = viewportRef.current;
+        const nodes = root ? [...root.querySelectorAll<HTMLElement>("[data-system-message-id]")]
+          .filter((node) => node.dataset.systemMessageId === jumpToMessageId && node.dataset.messageConversationId === channelId) : [];
+        if (nodes.length > 1) throw new Error("Ambiguous system message jump target");
+        const node = nodes[0];
+        if (root && node && !node.closest('[inert], [aria-hidden="true"]')) {
+          if (positioned !== node) {
+            node.scrollIntoView({ block: "center" });
+            positioned = node;
+          }
+          const rect = node.getBoundingClientRect(), viewport = root.getBoundingClientRect();
+          const style = getComputedStyle(node);
+          const left = Math.max(rect.left, viewport.left, 0), right = Math.min(rect.right, viewport.right, innerWidth);
+          const top = Math.max(rect.top, viewport.top, 0), bottom = Math.min(rect.bottom, viewport.bottom, innerHeight);
+          if (rect.width > 0 && rect.height > 0 && right > left && bottom > top && style.display !== "none" && style.visibility !== "hidden") {
+            setSystemLocate({ owner, messageId: jumpToMessageId, status: "located" });
+            setShowScrollBottom(true);
+            setFlashedMessageId(jumpToMessageId);
+            return;
+          }
+        }
+        // Same finite 60-frame locate budget as the existing reply pane;
+        // retained across regroup/rerenders for this attempt, not restarted.
+        if (++systemLocateBudget.current.frames >= 60) throw new Error("System message member did not become visible");
+        frame = requestAnimationFrame(locate);
+      } catch (error) { fail(error); }
+    };
+    frame = requestAnimationFrame(locate);
+    return () => {
+      cancelled = true; // Invalid before cancellation, even if it invokes/throws.
+      try { cancelAnimationFrame(frame); }
+      catch (error) {
+        failedSystemOwner.current = owner;
+        setFlashedMessageId(null);
+        setSystemLocate((previous) => previous?.owner === owner ? { ...previous, status: "failed",
+          firstError: previous.firstError ?? String(error),
+          secondaryErrors: previous.firstError ? [...(previous.secondaryErrors ?? []), String(error)] : previous.secondaryErrors } : previous);
+      }
+    };
+  }, [jumpToMessageId, jumpOwner, surfaceActive, jumpPrimePending, jumpTargetIdx, items, isLoading, isFetchingEarlier, onJumped, channelId]);
 
   // One-shot flash lifecycle. The flash *visual* is declarative — the row
   // renders `.msg-jump-flash` from its `jumpFlash` prop (see `renderItem`),
@@ -631,13 +707,15 @@ export function MessageList({
   // present in `items` (completion gate above), so there is no "never
   // materialised" branch to guard.
   useEffect(() => {
-    if (!flashedMessageId) return;
+    if (!flashedMessageId || !jumpOwner || !surfaceActive) return;
+    const owner = jumpOwner;
     const timer = setTimeout(() => {
+      if (activeJumpOwner.current !== owner) return;
       setFlashedMessageId(null);
       onJumped?.();
     }, 3000);
     return () => clearTimeout(timer);
-  }, [flashedMessageId, onJumped]);
+  }, [flashedMessageId, onJumped, jumpOwner, surfaceActive]);
 
   // In-window find navigation (#task:1335) — the LOCAL half of "ensure the
   // match is visible" (Cindy). When the active find match is a row already in
@@ -673,6 +751,7 @@ export function MessageList({
         return (
           <SystemActivityCluster
             messages={item.messages}
+            jumpMessageId={surfaceActive ? flashedMessageId : null}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
             channelsByName={channelsByName}
@@ -689,6 +768,7 @@ export function MessageList({
         return (
           <SystemMessage
             message={m}
+            jumpFlash={surfaceActive && flashedMessageId === m.id}
             conversationRefsById={conversationRefsById}
             onOpenConversationRef={onOpenConversationRef}
             channelsByName={channelsByName}
@@ -760,6 +840,7 @@ export function MessageList({
       agentAvatarUrls,
       highlightedMessageId,
       flashedMessageId,
+      surfaceActive,
       authorContinuations,
       userResolver,
       searchQuery,
@@ -768,7 +849,13 @@ export function MessageList({
   );
 
   return (
-    <div className="relative min-h-0 min-w-0 flex-1 flex flex-col">
+    <div data-message-list className="relative min-h-0 min-w-0 flex-1 flex flex-col"
+      data-system-jump-state={systemLocate?.status}
+      data-system-jump-message-id={systemLocate?.messageId}
+      data-system-jump-owner={systemLocate?.owner}
+      data-system-jump-error={systemLocate?.firstError}
+      data-system-jump-secondary={systemLocate?.secondaryErrors ? JSON.stringify(systemLocate.secondaryErrors) : undefined}
+    >
       <MessageActionChrome
         surface={actions}
         renderCtx={{

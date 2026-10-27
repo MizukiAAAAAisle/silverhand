@@ -133,6 +133,9 @@ export interface AvatarMakerCapability {
 
 /** Installed once by an application entry point, before mounting the UI. */
 export interface ClientPlatform {
+  /** A committed system Back request. True consumes exactly this request;
+   * false leaves the platform's root behaviour in control. */
+  systemBack?: { subscribe(handler: () => boolean): () => void };
   eventHooks?: EventHooksCapability;
   notificationSounds?: import("./notification-sounds.js").NotificationSoundsCapability;
   client: ClientAdapter;

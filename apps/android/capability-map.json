@@ -1,0 +1,57 @@
+{
+  "phase": 1,
+  "plugin": "SilverhandClient",
+  "nativeMethods": [
+    "getProfile",
+    "saveProfile",
+    "clearProfile",
+    "authState",
+    "authenticate",
+    "logout",
+    "request",
+    "upload",
+    "openSocket",
+    "sendSocket",
+    "closeSocket",
+    "appVersion",
+    "openExternal",
+    "saveAttachment",
+    "sharePng",
+    "getTheme",
+    "saveTheme"
+  ],
+  "webPresentationInsteadOfIOSNative": [
+    "navigationSync",
+    "navigationReset",
+    "navigationBadges",
+    "navigationAvatar",
+    "titlebar",
+    "titlebarEndSearch",
+    "pageBar",
+    "pageBarBackProgress",
+    "composerSync",
+    "composerRemove",
+    "composerSetText",
+    "bannerShow",
+    "avatarMakerEdit"
+  ],
+  "deferredSystemMethods": [],
+  "nativeEvents": [
+    "socket",
+    "sessionInvalidated",
+    "foreground"
+  ],
+  "note": "No empty success stubs. Shared React still owns navigation/composer/avatar. File upload/download/save are real. Android sharePng is implemented with a narrow private-cache FileProvider; B2 merged-manifest, actual image/chooser/URI and device verification are still pending.",
+  "themePersistence": {
+    "callers": [
+      "apps/android/src/main.ts",
+      "packages/app-ui/src/features/appearance/use-appearance.ts",
+      "packages/app-ui/src/pages/settings/settings-shell.tsx"
+    ],
+    "authority": "Private silverhand-appearance-v1 SharedPreferences, theme key; five existing ThemeIds only",
+    "confirmation": "IO-thread commit true before bridge resolve and visible publication; false/exception rejects and cached get cannot clear process-local unconfirmed marker",
+    "startup": "Before mount; valid native theme wins; read failure/missing/invalid value uses unconfirmed mirror/default display and continues mount. No automatic migration or native overwrite.",
+    "compatibility": "First explicit choice including the displayed theme must save; localStorage theme is only a compatibility mirror. Other appearance fields and iOS/desktop retain existing storage.",
+    "failure": "Visible unconfirmed state; serialized saves continue after a rejected choice. No arbitrary-termination/power-loss zero-window promise."
+  }
+}

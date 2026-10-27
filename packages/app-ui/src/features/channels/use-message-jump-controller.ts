@@ -12,6 +12,8 @@ export interface MessageJumpTarget {
    *  conversation: a cluster message is a channel message. */
   threadRootId?: string | null;
   messageId: string;
+  /** Controller-owned generation; incoming values are ignored by requestJump. */
+  attemptId?: number;
   /** In-pane "ensure this message is visible" jump (channel inline find,
    *  #task:1335): the channel is ALREADY the open one, so the caller wants only
    *  the main-stream prime + scroll-locate — NOT the route navigation that
@@ -50,16 +52,17 @@ export function useMessageJumpController() {
       // in the parent channel.
       const conversationId = target.channelId;
 
+      attemptIdRef.current += 1;
+      const attemptId = attemptIdRef.current;
       setJumpTarget({
         workspaceId: target.workspaceId,
         channelId: target.channelId,
         threadRootId: target.threadRootId ?? null,
         messageId: target.messageId,
+        attemptId,
       });
       markRead(conversationId);
 
-      attemptIdRef.current += 1;
-      const attemptId = attemptIdRef.current;
       setPrime({ conversationId, messageId: target.messageId, phase: "priming" });
 
       void primeAround(conversationId, target.messageId, {

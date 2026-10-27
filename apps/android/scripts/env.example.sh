@@ -1,0 +1,20 @@
+# Copy outside the repository, customize paths, then set SILVERHAND_ANDROID_ENV.
+export SILVERHAND_ANDROID_HOME="${SILVERHAND_ANDROID_HOME:-$HOME/Library/Developer/SilverhandAndroid}"
+export ANDROID_HOME="$SILVERHAND_ANDROID_HOME/sdk"
+export ANDROID_SDK_ROOT="$ANDROID_HOME"
+export ANDROID_NDK_HOME="$SILVERHAND_ANDROID_HOME/ndk/android-ndk-r30"
+export ANDROID_AVD_HOME="$SILVERHAND_ANDROID_HOME/avd"
+export SWIFT_ANDROID_TOOLCHAIN="$HOME/Library/Developer/Toolchains/swift-6.4.1-RELEASE.xctoolchain"
+export SWIFT_ANDROID_SDK_BUNDLE="$SILVERHAND_ANDROID_HOME/swift-sdks/swift-6.4.1-RELEASE_android.artifactbundle"
+export JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+export GRADLE_BIN="/opt/homebrew/Cellar/gradle/9.8.2/bin/gradle"
+export GRADLE_USER_HOME="$SILVERHAND_ANDROID_HOME/caches/gradle"
+export NODE_BIN="$HOME/.nvm/versions/node/v22.22.1/bin/node"
+export PNPM_BIN="$HOME/Library/pnpm/.tools/pnpm/10.32.1/node_modules/pnpm/bin/pnpm.cjs"
+export CARGO_BIN="$HOME/.cargo/bin/cargo"
+export OPENSSL_BIN="/opt/homebrew/bin/openssl"
+export ANDROID_SERIAL="emulator-5584"
+export PATH="$(dirname "$NODE_BIN"):$(dirname "$PNPM_BIN"):$JAVA_HOME/bin:$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
+export npm_config_manage_package_manager_versions=false
+export SKIP_BRIDGE_ANDROID_BUILD_DISABLED=1
+export SKIP_BRIDGE_ROBOLECTRIC_BUILD_DISABLED=1

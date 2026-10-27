@@ -37,6 +37,7 @@ import type { WorkspaceChannelReference } from "./conversation-ref";
  */
 export interface SystemActivityClusterProps {
   messages: MessageDto[];
+  jumpMessageId?: string | null;
   conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
@@ -46,6 +47,7 @@ export interface SystemActivityClusterProps {
 
 export function SystemActivityCluster({
   messages,
+  jumpMessageId,
   conversationRefsById,
   onOpenConversationRef,
   channelsByName,
@@ -58,6 +60,7 @@ export function SystemActivityCluster({
         <SystemMessage
           key={m.id}
           message={m}
+          jumpFlash={m.id === jumpMessageId}
           conversationRefsById={conversationRefsById}
           onOpenConversationRef={onOpenConversationRef}
           channelsByName={channelsByName}

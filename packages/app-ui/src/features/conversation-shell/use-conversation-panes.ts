@@ -168,7 +168,7 @@ export function useConversationPanes(
   const parentJumpTarget = useMemo(
     () =>
       jumpTarget && !jumpTarget.threadRootId && jumpTarget.channelId === deferredChannelId
-        ? { channelId: jumpTarget.channelId, messageId: jumpTarget.messageId }
+        ? { channelId: jumpTarget.channelId, messageId: jumpTarget.messageId, attemptId: jumpTarget.attemptId }
         : null,
     [jumpTarget, deferredChannelId],
   );

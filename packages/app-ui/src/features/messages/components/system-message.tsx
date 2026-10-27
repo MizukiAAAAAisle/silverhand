@@ -24,6 +24,8 @@ import {
 
 interface SystemMessageProps {
   message: MessageDto;
+  /** Highlight this exact persisted event, not its entire activity cluster. */
+  jumpFlash?: boolean;
   conversationRefsById?: Map<string, WorkspaceChannelReference>;
   onOpenConversationRef?: (id: string) => void;
   channelsByName?: Map<string, ChannelReference | null>;
@@ -78,7 +80,13 @@ export function SystemMessage(props: SystemMessageProps): JSX.Element {
       ? "info"
       : undefined;
   return (
-    <div className="system-message-row" data-system-event-row="1" data-system-layout={layout}>
+    <div
+      className={"system-message-row" + (props.jumpFlash ? " msg-jump-flash" : "")}
+      data-system-event-row="1"
+      data-system-message-id={props.message.id}
+      data-message-conversation-id={props.message.conversation_id}
+      data-system-layout={layout}
+    >
       <Renderer {...props} />
     </div>
   );

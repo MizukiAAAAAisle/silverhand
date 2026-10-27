@@ -490,13 +490,13 @@ export function Lightbox({
             </div>
             <div className="flex items-center gap-2">
               <SelectionActionButton
-                rank={onDownload && !shareImage ? "secondary" : "primary"}
+                rank={onDownload ? "secondary" : "primary"}
                 label={shareImage ? "Share" : "Copy"}
                 icon={shareImage ? <ShareIcon className="size-3.5" /> : undefined}
                 disabled={busy}
                 onClick={onExport}
               />
-              {onDownload && !shareImage ? (
+              {onDownload ? (
                 <SelectionActionButton
                   rank="primary"
                   icon={<DownloadIcon className="size-3.5" />}

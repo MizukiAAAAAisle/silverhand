@@ -58,7 +58,7 @@ function seededTask(overrides: Partial<TaskSummaryDto> = {}): TaskSummaryDto {
   };
 }
 
-function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = []): string {
+function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = [], jumpMessageId?: string): string {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   for (const t of seededTasks) {
     if (t.place.kind !== "workspace") throw new Error("workspace fixture expected");
@@ -82,6 +82,7 @@ function renderCluster(messages: MessageDto[], seededTasks: TaskSummaryDto[] = [
           { value: { workspaceId: "ws-1", conversationId: "conv-1", onOpenTask: () => undefined } },
           React.createElement(SystemActivityCluster, {
             messages,
+            jumpMessageId,
             channelsByName: new Map(),
             onOpenChannelRef: () => undefined,
           }),
@@ -180,5 +181,21 @@ describe("SystemActivityCluster (PR-10)", () => {
     const html = renderCluster([only], [seededTask()]);
     expect(html).toMatch(/^<div[^>]*\bdata-system-activity-cluster="1"/);
     expect(html).toContain('data-system-event-row="1"');
+  });
+});
+
+ describe("exact activity member identity", () => {
+  it("retains actual persisted IDs and highlights only one of two events for the same task", () => {
+    const a=makeSystemMessage("task_create",fullTaskMeta(),{id:"create-E"});
+    const b=makeSystemMessage("task_status",fullTaskMeta({subtype:"task_status"}),{id:"status-E"});
+    const html=renderCluster([a,b],[seededTask()],"status-E");
+    expect(html).toContain('class="system-message-row" data-system-event-row="1" data-system-message-id="create-E"');
+    expect(html).toContain('class="system-message-row msg-jump-flash" data-system-event-row="1" data-system-message-id="status-E"');
+    expect(html.match(/data-message-conversation-id="conv-1"/g)).toHaveLength(2);
+    expect(html.match(/msg-jump-flash/g)).toHaveLength(1);
+  });
+  it("does not flash a task-number/text alias or absent event", () => {
+    const html=renderCluster([makeSystemMessage("task_create",fullTaskMeta(),{id:"create-E"})],[seededTask()],"42");
+    expect(html).not.toContain("msg-jump-flash"); expect(html).toContain('data-system-message-id="create-E"');
   });
 });

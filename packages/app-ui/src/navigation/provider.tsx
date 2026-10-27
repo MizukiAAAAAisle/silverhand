@@ -14,6 +14,8 @@ import { Router, createPath, type To } from "react-router-dom";
 import { connectAddress } from "./address";
 import type { NavigationLaunch } from "./launch";
 import { NavigationStore } from "./store";
+import { bindSystemBack } from "./system-back";
+import { getPlatform } from "@/platform";
 import type { MainTab } from "./history";
 
 export type Driver = {
@@ -84,6 +86,11 @@ export function NavigationProvider({
   useEffect(() => {
     launch.consume();
     store.activate();
+    const removeSystemBack = bindSystemBack(getPlatform().systemBack, {
+      active: () => store.active,
+      canBack: () => store.getSnapshot().canBack,
+      back: () => { run(store.back); },
+    });
     const disconnect = connectAddress(
       store,
       {
@@ -97,11 +104,12 @@ export function NavigationProvider({
       allowed,
     );
     return () => {
+      removeSystemBack();
       disconnect();
       store.dispose();
       window.history.replaceState(null, "", "#/chat");
     };
-  }, [store, allowed, launch]);
+  }, [store, allowed, launch, run]);
 
   const navigator = useMemo(
     () => ({

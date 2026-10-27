@@ -1,7 +1,7 @@
 import type { ClientAuthState, ClientAuthResult } from "@silverhand/client";
 import { getPlatform } from "@/platform";
 import { agentStreamCache } from "@/features/agents/model/agent-stream-cache";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import {
   AVATAR_DESIGN_FIELD,
@@ -14,7 +14,11 @@ import {
   type UserDto,
 } from "@silverhand/shared";
 import { ApiError, api, apiUpload } from "@/lib/api";
-import { clearCurrentUser, setCurrentUserId } from "@/features/session/current-user";
+import {
+  clearCurrentUser,
+  getCurrentUserId,
+  setCurrentUserId,
+} from "@/features/session/current-user";
 import { eventWsClient } from "@/lib/ws-client";
 import { clearPlaceMemory } from "@/features/app-shell/place-memory";
 import { avatarDesignKey } from "@/features/avatar-maker/hooks/use-avatar-design";
@@ -329,18 +333,55 @@ export interface UploadAvatarVars {
  *  full updated user dto. */
 export function useUploadAvatar() {
   const qc = useQueryClient();
+  const lifetime = useRef({ alive: true, request: 0, viewerId: getHydratedViewer(qc)?.id ?? null });
+  useEffect(() => {
+    lifetime.current.alive = true;
+    lifetime.current.viewerId = getHydratedViewer(qc)?.id ?? null;
+    // Observe identity boundaries locally to this mutation. A normal refresh
+    // of the same viewer is not logout; removal/reset/switch invalidates the
+    // pending request even if that same id signs in again before it finishes.
+    const unsubscribe = qc.getQueryCache().subscribe((event) => {
+      if (event.query.queryKey.length !== 1 || event.query.queryKey[0] !== meKey[0]) return;
+      const viewerId = event.type === "removed" ? null : (getHydratedViewer(qc)?.id ?? null);
+      if (viewerId !== lifetime.current.viewerId) {
+        lifetime.current.viewerId = viewerId;
+        lifetime.current.request++;
+      }
+    });
+    return () => {
+      unsubscribe();
+      lifetime.current.alive = false;
+      lifetime.current.request++;
+    };
+  }, [qc]);
   return useMutation({
     mutationFn: async ({ file, design }: UploadAvatarVars) => {
+      const owner = getCurrentUserId();
+      const request = ++lifetime.current.request;
       const form = new FormData();
       if (design) {
         form.set(AVATAR_DESIGN_FIELD, design);
       }
       form.set("file", file);
-      return apiUpload<{ avatar_url: string; user: UserDto }>(apiPaths.meAvatar, form);
-    },
-    onSuccess: (result) => {
-      cacheViewer(qc, result.user);
-      qc.removeQueries({ queryKey: avatarDesignKey("me") });
+      const result = await apiUpload<{ avatar_url: string; user: UserDto }>(
+        apiPaths.meAvatar,
+        form,
+      );
+      // An upload can outlive its editor, identity, or a newer upload. Only
+      // its still-current owner may reseat the viewer cache. Same-viewer
+      // profile refreshes keep that identity and must accept the new avatar.
+      if (
+        lifetime.current.alive &&
+        request === lifetime.current.request &&
+        owner !== null &&
+        getCurrentUserId() === owner &&
+        result.user.id === owner &&
+        getHydratedViewer(qc)?.id === owner
+      ) {
+        cacheViewer(qc, result.user);
+        qc.removeQueries({ queryKey: avatarDesignKey("me") });
+      }
+      return result;
     },
   });
 }

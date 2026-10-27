@@ -42,7 +42,7 @@ export interface PaneContentState {
   paneAttachmentRequest: PaneAttachmentRequest | null;
   secondaryViewInputs: SecondaryViewInputs;
   secondaryConversationDescriptor: ConversationPaneDescriptor | null;
-  parentJumpTarget: { channelId: string; messageId: string } | null;
+  parentJumpTarget: { channelId: string; messageId: string; attemptId?: number } | null;
   secondaryJumpTarget: null;
   secondaryJumpPrimePending: boolean;
   threadJumpMessageId: string | null;

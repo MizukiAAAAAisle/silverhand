@@ -1,0 +1,119 @@
+--- a/Package.swift
++++ b/Package.swift
+@@ -1,12 +1,3 @@
+ // swift-tools-version: 5.9
+ import PackageDescription
+-
+-let package = Package(
+-    name: "SilverhandNative",
+-    platforms: [.iOS(.v15), .macOS(.v12)],
+-    products: [.library(name: "SilverhandNative", targets: ["SilverhandNative"])],
+-    targets: [
+-        .target(name: "SilverhandNative", resources: [.process("Resources")]),
+-        .testTarget(name: "SilverhandNativeTests", dependencies: ["SilverhandNative"])
+-    ]
+-)
++let package = Package(name: "SilverhandNative", platforms: [.macOS(.v12)], products: [.library(name: "SilverhandNative", targets: ["SilverhandNative"])], targets: [.target(name: "SilverhandNative", exclude: ["AvatarLibrary.swift", "Resources/AvatarLibrary.json"], resources: [.process("Resources/Protocol.json")]), .testTarget(name: "SilverhandNativeTests", dependencies: ["SilverhandNative"], exclude: ["AvatarLibraryTests.swift", "NetworkAcceptanceTests.swift"])])
+--- a/Sources/SilverhandNative/ClientSession.swift
++++ b/Sources/SilverhandNative/ClientSession.swift
+@@ -1,3 +1,6 @@
++#if canImport(FoundationNetworking)
++import FoundationNetworking
++#endif
+ import CoreFoundation
+ import Foundation
+ 
+@@ -22,7 +25,7 @@
+   public var onInvalidated: (() -> Void)?
+ 
+   public init(
+-    store: SessionStore = KeychainSessionStore(), contract: WireContract? = nil,
++    store: SessionStore, contract: WireContract? = nil,
+     transport: NativeTransport = NativeTransport(), fetch: Fetch? = nil,
+     defaultServerURL: String? = nil
+   ) throws {
+--- a/Sources/SilverhandNative/SessionStore.swift
++++ b/Sources/SilverhandNative/SessionStore.swift
+@@ -1,5 +1,4 @@
+ import Foundation
+-import Security
+ 
+ public struct SessionRecord: Codable, Equatable {
+   public var serverURL: String
+@@ -18,57 +17,9 @@
+   func write(_ record: SessionRecord?) throws
+ }
+ 
+-public struct KeychainSessionStore: SessionStore {
+-  private let service: String
+-  public init(service: String = "com.silverhand.ios.session") { self.service = service }
+-
+-  private var query: [String: Any] {
+-    [
+-      kSecClass as String: kSecClassGenericPassword,
+-      kSecAttrService as String: service,
+-      kSecAttrAccount as String: "active-session",
+-    ]
+-  }
+-
+-  public func read() throws -> SessionRecord? {
+-    var query = query
+-    query[kSecReturnData as String] = true
+-    query[kSecMatchLimit as String] = kSecMatchLimitOne
+-    var item: CFTypeRef?
+-    let status = SecItemCopyMatching(query as CFDictionary, &item)
+-    if status == errSecItemNotFound { return nil }
+-    guard status == errSecSuccess, let data = item as? Data else {
+-      throw ClientError.storage(status)
+-    }
+-    return try JSONDecoder().decode(SessionRecord.self, from: data)
+-  }
+-
+-  public func write(_ record: SessionRecord?) throws {
+-    guard let record else {
+-      let status = SecItemDelete(query as CFDictionary)
+-      guard status == errSecSuccess || status == errSecItemNotFound else {
+-        throw ClientError.storage(status)
+-      }
+-      return
+-    }
+-    let data = try JSONEncoder().encode(record)
+-    let attributes: [String: Any] = [
+-      kSecValueData as String: data,
+-      kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+-    ]
+-    let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+-    if status == errSecItemNotFound {
+-      let inserted = SecItemAdd(query.merging(attributes) { _, new in new } as CFDictionary, nil)
+-      guard inserted == errSecSuccess else { throw ClientError.storage(inserted) }
+-    } else if status != errSecSuccess {
+-      throw ClientError.storage(status)
+-    }
+-  }
+-}
+-
+ public enum ClientError: Error, LocalizedError {
+   case invalidURL, invalidPath, noServer, unauthorized, staleSession, invalidResponse
+-  case storage(OSStatus)
++  case storage(Int32)
+   case suspended
+   public var errorDescription: String? {
+     switch self {
+--- a/Sources/SilverhandNative/Transport.swift
++++ b/Sources/SilverhandNative/Transport.swift
+@@ -1,3 +1,6 @@
++#if canImport(FoundationNetworking)
++import FoundationNetworking
++#endif
+ import Foundation
+ 
+ public struct HTTPResult {
+--- a/Tests/SilverhandNativeTests/ClientSessionTests.swift
++++ b/Tests/SilverhandNativeTests/ClientSessionTests.swift
+@@ -1,3 +1,6 @@
++#if canImport(FoundationNetworking)
++import FoundationNetworking
++#endif
+ import XCTest
+ 
+ @testable import SilverhandNative

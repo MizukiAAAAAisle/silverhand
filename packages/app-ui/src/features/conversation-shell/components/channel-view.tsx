@@ -140,7 +140,7 @@ interface ChannelViewProps {
    *  the current channel, MessageList scrolls + flashes it, then calls
    *  `onJumped` so the parent can clear the target (otherwise switching
    *  workspaces and back would re-trigger the scroll). */
-  jumpTarget?: { channelId: string; messageId: string } | null;
+  jumpTarget?: { channelId: string; messageId: string; attemptId?: number } | null;
   /** When true, App is still fetching an `around_message_id` window
    *  for the current `jumpTarget` and the message may not yet be in
    *  cache. MessageList's jump effect uses this to distinguish
@@ -1244,12 +1244,16 @@ function ActiveChannelView({
             </div>
           ) : null}
 
-          <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+          <div data-chat-column className="relative flex min-h-0 min-w-0 flex-1 flex-col">
             {/* Message area + activity dock share a relative box so the dock
             can float out-of-flow at the bottom (above the composer). The
             scroller's viewport height never changes when the dock shows /
             hides / grows — no content judder. */}
-            <div ref={messageAreaRef} className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+            <div
+              ref={messageAreaRef}
+              data-message-area
+              className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+            >
               <MessageList
                 channelId={conversation.id}
                 workspaceId={conversation.workspace_id}
@@ -1277,6 +1281,7 @@ function ActiveChannelView({
                 }
                 highlightedMessageId={highlightedMessageId ?? null}
                 jumpToMessageId={effectiveJumpMessageId}
+                jumpAttemptId={jumpTarget?.channelId === conversation.id ? jumpTarget.attemptId : undefined}
                 jumpPrimePending={
                   // Only pass `true` when this pane's prop-driven jump
                   // (the App-orchestrated saved/task jump) is the one

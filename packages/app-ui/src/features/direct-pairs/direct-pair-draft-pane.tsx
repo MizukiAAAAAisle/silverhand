@@ -1,3 +1,4 @@
+import { isImeKey } from "@/lib/ime";
 import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
 import { useNativeBar } from "@/components/layout/native-page-bar";
 import { DirectDraftSkeleton } from "./direct-draft-skeleton";
@@ -273,7 +274,7 @@ export function DirectPairDraftPane({ target, onOpenPair }: DirectPairDraftPaneP
   const onKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key !== "Enter") return;
     if (e.shiftKey) return;
-    if (composing || e.nativeEvent.isComposing) return;
+    if (isImeKey(e.nativeEvent, composing)) return;
     e.preventDefault();
     submit();
   };

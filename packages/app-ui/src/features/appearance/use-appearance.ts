@@ -5,6 +5,7 @@ import {
   DEFAULT_APPEARANCE,
   FONT_SIZE_MAX,
   FONT_SIZE_MIN,
+  THEME_IDS,
   type AppearanceSettings,
   type MarkdownTextSettings,
   type ThemeId,
@@ -46,7 +47,9 @@ function clampSize(n: number | undefined): number | undefined {
 
 export interface UseAppearance {
   appearance: AppearanceSettings;
-  setTheme: (theme: ThemeId) => void;
+  /** Absent on platforms that retain the localStorage-only contract. */
+  themeStatus: ThemeStatus | undefined;
+  setTheme: (theme: ThemeId) => void | Promise<void>;
   /** Set or clear the font family for `prose` or `code`. Pass
    *  `undefined` to clear; the slot is pruned when its only field
    *  goes empty. */
@@ -67,6 +70,54 @@ export interface UseAppearance {
 let current: AppearanceSettings | undefined;
 const listeners = new Set<() => void>();
 
+export interface ThemePersistence {
+  getTheme(): Promise<unknown>;
+  saveTheme(theme: ThemeId): Promise<void>;
+}
+interface ThemeStatus {
+  confirmed: boolean;
+  pending?: boolean;
+  error?: string;
+}
+let themePersistence: ThemePersistence | undefined;
+let themeStatus: ThemeStatus | undefined;
+let themeWrites = Promise.resolve();
+let queuedThemeWrites = 0;
+const themeSnapshot = () => themeStatus;
+const notify = () => { for (const listener of listeners) listener(); };
+
+function publishThemeStatus(status: ThemeStatus): void {
+  themeStatus = status;
+  // Only native initialization/save outcomes establish confirmation. A theme
+  // matching the old mirror or the visible dataset is insufficient.
+  document.documentElement.dataset["themePersistence"] = status.pending
+    ? "pending" : status.confirmed ? "confirmed" : "unconfirmed";
+  notify();
+}
+
+/** Android installs this before mount. A mirror/default is only a display
+ * fallback: no startup write can mistake a failed read for a missing record. */
+export async function initializeThemePersistence(persistence: ThemePersistence): Promise<void> {
+  themePersistence = persistence;
+  publishThemeStatus({ confirmed: false, pending: true });
+  let fallback: AppearanceSettings;
+  try { fallback = read(); }
+  catch { fallback = DEFAULT_APPEARANCE; }
+  try {
+    const theme = await persistence.getTheme();
+    if (!THEME_IDS.includes(theme as ThemeId)) throw new Error("No confirmed native theme");
+    current = { ...fallback, theme: theme as ThemeId };
+    publishThemeStatus({ confirmed: true });
+  } catch (error) {
+    current = fallback;
+    publishThemeStatus({ confirmed: false, error: String(error) });
+    console.warn("Theme persistence not confirmed", error);
+  }
+  applyTheme(current.theme);
+  applyAppearanceOverrides(document.documentElement.style, current);
+  notify();
+}
+
 function snapshot(): AppearanceSettings {
   current ??= read();
   return current;
@@ -79,21 +130,57 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-function setAppearance(update: (prev: AppearanceSettings) => AppearanceSettings): void {
+function setAppearance(
+  update: (prev: AppearanceSettings) => AppearanceSettings,
+  nativeThemeConfirmed = false,
+): void {
   const next = update(snapshot());
   current = next;
   applyTheme(next.theme);
   applyAppearanceOverrides(document.documentElement.style, next);
-  if (typeof localStorage !== "undefined") {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(pruneOverrides(next)));
+  try {
+    if (typeof localStorage !== "undefined") {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(pruneOverrides(next)));
+    }
+  } catch (error) {
+    if (!nativeThemeConfirmed) throw error;
+    // A failed compatibility mirror cannot undo an acknowledged native save.
+    console.warn("Unable to mirror the confirmed theme", error);
   }
-  for (const listener of listeners) {
-    listener();
-  }
+  notify();
+}
+
+function setTheme(theme: ThemeId): void | Promise<void> {
+  const persistence = themePersistence;
+  if (!persistence) return setAppearance((prev) => ({ ...prev, theme }));
+  // Do not skip an equal id: a fallback display has not been saved yet.
+  queuedThemeWrites++;
+  publishThemeStatus({ confirmed: false, pending: true });
+  const write = themeWrites.then(async () => {
+    let confirmed = false;
+    let failure: string | undefined;
+    try {
+      await persistence.saveTheme(theme);
+      // Read the latest snapshot after the ack, preserving intervening font edits.
+      setAppearance((prev) => ({ ...prev, theme }), true);
+      confirmed = true;
+    } catch (error) {
+      failure = String(error);
+      throw error;
+    } finally {
+      queuedThemeWrites--;
+      publishThemeStatus(queuedThemeWrites > 0
+        ? { confirmed: false, pending: true, error: failure }
+        : { confirmed, ...(failure ? { error: failure } : {}) });
+    }
+  });
+  themeWrites = write.catch(() => {});
+  return write;
 }
 
 export function useAppearance(): UseAppearance {
   const appearance = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const status = useSyncExternalStore(subscribe, themeSnapshot, themeSnapshot);
 
   useEffect(() => {
     const stored = snapshot();
@@ -103,7 +190,8 @@ export function useAppearance(): UseAppearance {
 
   return {
     appearance,
-    setTheme: (theme) => setAppearance((prev) => ({ ...prev, theme })),
+    themeStatus: status,
+    setTheme,
     setMarkdownFont: (slot, value) =>
       setAppearance((prev) => {
         const trimmed = typeof value === "string" ? value.trim() : "";

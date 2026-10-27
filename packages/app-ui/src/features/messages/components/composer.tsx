@@ -1,3 +1,4 @@
+import { isImeKey } from "@/lib/ime";
 import { AnimatePresence } from "motion/react";
 import {
   useEffect,
@@ -340,7 +341,7 @@ export function Composer({
           return;
         }
         if (e.key === "Enter" || e.key === "Tab") {
-          if (composing || e.nativeEvent.isComposing) {
+          if (isImeKey(e.nativeEvent, composing)) {
             return;
           }
           e.preventDefault();
@@ -356,7 +357,7 @@ export function Composer({
     if (e.key !== "Enter" || e.shiftKey) {
       return;
     }
-    if (composing || e.nativeEvent.isComposing) {
+    if (isImeKey(e.nativeEvent, composing)) {
       return;
     }
     e.preventDefault();

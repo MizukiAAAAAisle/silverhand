@@ -5,6 +5,7 @@ const h = vi.hoisted(() => ({
   effects: [] as Array<() => void | (() => void)>,
   share: vi.fn(),
   error: vi.fn(),
+  nativeShare: true,
 }));
 vi.mock("react", async (importOriginal) => ({
   ...(await importOriginal<typeof import("react")>()),
@@ -17,7 +18,9 @@ vi.mock("react", async (importOriginal) => ({
   useLayoutEffect: () => {},
 }));
 vi.mock("@/platform", () => ({
-  getPlatform: () => ({ files: { sharePngExport: h.share } }),
+  getPlatform: () => ({
+    files: { sharePngExport: h.nativeShare ? h.share : undefined, copyPngExport: h.share },
+  }),
 }));
 vi.mock("@/lib/pinch-zoom-lease", () => ({ usePinchZoomLease: () => {} }));
 vi.mock("sonner", () => ({ toast: { error: h.error, success: vi.fn() } }));
@@ -89,4 +92,37 @@ it("retains URL reading for local composer previews without an attachment reader
   await exportAction().run();
   expect(fetch).toHaveBeenCalledExactlyOnceWith("blob:expired-preview");
   expect(h.share).toHaveBeenCalledWith({ pngBytes: bytes });
+});
+
+function actions(node: unknown): Array<Record<string, unknown>> {
+  if (!node || typeof node !== "object") return [];
+  if (Array.isArray(node)) return node.flatMap(actions);
+  const props = (node as { props?: Record<string, unknown> }).props;
+  if (!props) return [];
+  return [...(props.label ? [props] : []), ...actions(props.children)];
+}
+
+it.each([true, false])(
+  "retains an actual Download beside mobile Share or desktop Copy (share=%s)",
+  async (share) => {
+    h.nativeShare = share;
+    const download = vi.fn();
+    const tree = Lightbox({
+      open: true,
+      onOpenChange: vi.fn(),
+      src: "blob:preview",
+      alt: "image",
+      onDownload: download,
+    });
+    const buttons = actions(tree);
+    expect(buttons.map((button) => button.label)).toEqual([share ? "Share" : "Copy", "Download"]);
+    await (buttons[1]!.onClick as () => Promise<void>)();
+    expect(download).toHaveBeenCalledOnce();
+    h.nativeShare = true;
+  },
+);
+
+it("does not invent a Download for an unsent local preview", () => {
+  const tree = Lightbox({ open: true, onOpenChange: vi.fn(), src: "blob:preview", alt: "image" });
+  expect(actions(tree).map((button) => button.label)).toEqual(["Share"]);
 });

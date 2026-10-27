@@ -1,0 +1,4 @@
+-keep class silverhand.core.** { *; }
+-keep class skip.bridge.** { *; }
+-keepclasseswithmembers,includedescriptorclasses class * { native <methods>; }
+-keep @com.getcapacitor.annotation.CapacitorPlugin class * { *; }

@@ -1,0 +1,14 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <application>
+    <activity android:name="com.silverhand.android.B2ShareReceiver" android:label="B2 Share Check" android:exported="true">
+      <intent-filter>
+        <action android:name="android.intent.action.SEND"/>
+        <category android:name="android.intent.category.DEFAULT"/>
+        <data android:mimeType="image/png"/>
+      </intent-filter>
+    </activity>
+    <provider android:name="com.silverhand.android.B2DocumentsProvider" android:authorities="com.silverhand.android.stage1.test.b2-documents" android:exported="true" android:grantUriPermissions="true" android:permission="android.permission.MANAGE_DOCUMENTS">
+      <intent-filter><action android:name="android.content.action.DOCUMENTS_PROVIDER"/></intent-filter>
+    </provider>
+  </application>
+</manifest>

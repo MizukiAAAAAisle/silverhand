@@ -1,0 +1,408 @@
+{
+  "original12": [
+    "real-page-login",
+    "message-send",
+    "message-receive",
+    "attachment-ui-send",
+    "attachment-byte-roundtrip",
+    "system-file-save",
+    "system-file-cancel",
+    "background-resume",
+    "credential-boundary",
+    "tls-hostname-negative",
+    "process-restart",
+    "logout"
+  ],
+  "B1": [
+    "actual-activity-identity",
+    "native-chinese-composition-selection-send",
+    "legacy-ime229-no-send",
+    "visible-ime-and-back-priority",
+    "modal-back-once",
+    "panel-page-back-once",
+    "page-touchcancel-no-navigation",
+    "system-back-gesture-cancel",
+    "system-back-gesture-commit",
+    "rotation-font-ime-layout",
+    "actual-recreate-session-events",
+    "root-background-session"
+  ],
+  "B1_affected": [
+    4,
+    5,
+    6,
+    9,
+    10,
+    11,
+    12
+  ],
+  "B2": [
+    {
+      "id": "files.choose-upload-bytes",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "files.choose-cancel",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "files.save-normal",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "files.save-cancel",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "files.target-denied",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "files.target-missing",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "share.preview-selected",
+      "scope": "device",
+      "parameters": {
+        "surfaces": [
+          "ImagePreviewModal",
+          "Lightbox"
+        ],
+        "images": [
+          "PNG",
+          "JPEG-to-PNG"
+        ],
+        "shortSelection": "real WM 1080x900; actual CSS height<=320/media; visible message+wheel, action hits, exit+window restore"
+      }
+    },
+    {
+      "id": "share.cancel",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "share.invalid-and-late",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "share.uri-grant-lifecycle",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "theme.named-and-restart",
+      "scope": "device",
+      "parameters": {
+        "themes": [
+          "glass",
+          "studio-light",
+          "poster",
+          "iris",
+          "slack-dark"
+        ]
+      }
+    },
+    {
+      "id": "theme.os-and-bars",
+      "scope": "device",
+      "parameters": {
+        "OS_modes": [
+          "day",
+          "night"
+        ],
+        "Web_themes": [
+          "studio-light",
+          "slack-dark"
+        ]
+      }
+    },
+    {
+      "id": "avatar.web-save-cancel",
+      "scope": "device",
+      "parameters": {}
+    },
+    {
+      "id": "avatar.error-recovery",
+      "scope": "device",
+      "parameters": {
+        "validation": "frontend-size",
+        "filename": "b2-avatar-oversize.png",
+        "mime": "image/png",
+        "maxBytes": 5242880,
+        "bytes": 5242881,
+        "expectedError": "Avatar must be 5 MB or smaller."
+      }
+    },
+    {
+      "id": "avatar.late-owner",
+      "scope": "unit",
+      "parameters": {}
+    }
+  ],
+  "diagnostics": {
+    "appearance-startup": [
+      "DIAG.real-page-login",
+      "DIAG.theme-startup"
+    ],
+    "appearance-short": [
+      "DIAG.real-page-login",
+      "DIAG.theme-short-path"
+    ],
+    "photo-picker-menu": [
+      "DIAG.real-page-login",
+      "DIAG.photo-picker-menu"
+    ],
+    "coverage-short": [
+      "DIAG.real-page-login",
+      "DIAG.short-selection"
+    ],
+    "coverage-bars": [
+      "DIAG.real-page-login",
+      "B2.theme.os-and-bars"
+    ],
+    "coverage-b1": [
+      "DIAG.real-page-login",
+      "DIAG.logout-before-b1",
+      "DIAG.b1-preconditions",
+      "B1.visible-ime-and-back-priority",
+      "B1.modal-back-once",
+      "B1.panel-page-back-once",
+      "B1.system-back-gesture-commit",
+      "B1.rotation-font-ime-layout",
+      "B1.actual-recreate-session-events",
+      "B1.root-background-session"
+    ]
+  },
+  "coverage_partial": {
+    "coverage-short": "B2.share.preview-selected.shortSelection"
+  },
+  "B3": {
+    "search-normal": {
+      "preconditions": [
+        "PRE.S1.fixture-login"
+      ],
+      "cases": [
+        "B3.S1.mobile-entry",
+        "B3.S1.query-results",
+        "B3.S1.empty-clear",
+        "B3.S1.message-navigation",
+        "B3.S1.back-and-ime"
+      ],
+      "not_selected": [
+        "S2",
+        "T1",
+        "T2",
+        "A1",
+        "A2",
+        "C1",
+        "R1",
+        "original12",
+        "B1",
+        "B2"
+      ],
+      "credit": "five S1 business cases only; fixture/login readiness separate; no historical pass credit"
+    },
+    "search-isolation": {
+      "preconditions": [
+        "PRE.S2.fixture-login"
+      ],
+      "cases": [
+        "B3.S2.loading-error-retry",
+        "B3.S2.query-switch",
+        "B3.S2.page-lifecycles",
+        "B3.S2.filters",
+        "B3.S2.logout-login-isolation"
+      ],
+      "not_selected": [
+        "S1",
+        "T1",
+        "T2",
+        "A1",
+        "A2",
+        "C1",
+        "R1",
+        "original12",
+        "B1",
+        "B2"
+      ],
+      "credit": "five narrow S2 observations only; no device client-consumption/cancellation/same-tree account credit",
+      "bounds": {
+        "unitMs": 240000,
+        "conditionMs": 10000,
+        "conditionReads": 100,
+        "inputOperations": 100,
+        "proxyReceiveBudgetMs": 20000,
+        "proxyBodyBytes": 1048576
+      },
+      "uncovered": [
+        "device complete late client consumption",
+        "query transport cancellation",
+        "same-tree account switch",
+        "all time lower bounds/time zones",
+        "agent sender",
+        "Search direct Tab retention: root-only Tab bar; not executed; no push substitute"
+      ]
+    },
+    "task-read": {
+      "preconditions": [
+        "PRE.T1.fixture-login"
+      ],
+      "cases": [
+        "B3.T1.mobile-board",
+        "B3.T1.filters-empty",
+        "B3.T1.detail-back",
+        "B3.T1.conversation-anchor",
+        "B3.T1.board-column-error",
+        "B3.T1.detail-error-retry"
+      ],
+      "not_selected": [
+        "S1",
+        "S2",
+        "T2",
+        "A1",
+        "A2",
+        "C1",
+        "R1",
+        "original12",
+        "B1",
+        "B2"
+      ],
+      "credit": "six selected T1 narrow read/navigation cases only; fixture/API setup is not UI write coverage; host is separate",
+      "bounds": {
+        "unitMs": 240000,
+        "conditionMs": 10000,
+        "conditionReads": 100,
+        "inputOperations": 100,
+        "proxyReceiveBudgetMs": 20000,
+        "proxyBodyBytes": 1048576
+      },
+      "uncovered": [
+        "full five columns/paging/touch",
+        "UI writes",
+        "source/thread/DM/permission404",
+        "warm stale/offline",
+        "document reload",
+        "WS/cancel/client consumption",
+        "all filters",
+        "iOS device"
+      ]
+    },
+    "task-read-faults": {
+      "unit": "task-read",
+      "selector": "faults",
+      "preconditions": [
+        "PRE.T1.fixture-login"
+      ],
+      "cases": [
+        "B3.T1.mobile-board",
+        "B3.T1.board-column-error",
+        "B3.T1.detail-error-retry"
+      ],
+      "not_selected": [
+        "S1",
+        "S2",
+        "T2",
+        "A1",
+        "A2",
+        "C1",
+        "R1",
+        "original12",
+        "B1",
+        "B2",
+        "B3.T1.filters-empty",
+        "B3.T1.detail-back",
+        "B3.T1.conversation-anchor"
+      ],
+      "credit": "fixed independent task-read faults selection only: full fresh PRE, current mobile entry and two cold fault contracts; original exact conversation-anchor remains unaccepted; no historical credit",
+      "bounds": {
+        "unitMs": 240000,
+        "conditionMs": 10000,
+        "conditionReads": 100,
+        "inputOperations": 100,
+        "proxyReceiveBudgetMs": 20000,
+        "proxyBodyBytes": 1048576
+      },
+      "uncovered": [
+        "full five columns/paging/touch",
+        "UI writes",
+        "source/thread/DM/permission404",
+        "warm stale/offline",
+        "document reload",
+        "WS/cancel/client consumption",
+        "all filters",
+        "iOS device",
+        "exact created-event identity/position/highlight/return",
+        "filters-empty and detail-back not selected in this attempt"
+      ]
+    },
+    "task-write": {
+      "unit": "task-write",
+      "preconditions": [
+        "PRE.T2.fixture-login"
+      ],
+      "cases": [
+        "B3.T2.create",
+        "B3.T2.edit-cancel-save",
+        "B3.T2.status",
+        "B3.T2.restore"
+      ],
+      "not_selected": [
+        "T1",
+        "S1",
+        "S2",
+        "A1",
+        "A2",
+        "C1",
+        "R1",
+        "original12",
+        "B1",
+        "B2"
+      ],
+      "credit": "normal workspace human UI writes only; ACK/UI/independent reads separate; no permission/agent capability/claim credit",
+      "bounds": {
+        "unitMs": 240000,
+        "conditionMs": 10000,
+        "conditionReads": 100,
+        "inputOperations": 80,
+        "observerEvents": 512,
+        "observerRequestBytes": 16384,
+        "observerResponseBytes": 1048576
+      },
+      "uncovered": [
+        "closed/archive/permission refusal",
+        "claim/unclaim",
+        "direct_pair",
+        "second-session realtime",
+        "IME composition matrix",
+        "desktop/iOS",
+        "source/build provenance"
+      ]
+    }
+  },
+  "images": [
+    {
+      "name": "b2-image.png",
+      "mime": "image/png",
+      "base64": "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAPElEQVR4nO3RQREAMAjEwKMOaqEW8O+tEsKHX1bAMRPqvs6ms7oeDwz4A2QiZCJkImQiZCJkImQiZKKQD2RMAKYj9IPJAAAAAElFTkSuQmCC",
+      "width": 32,
+      "height": 32,
+      "pixelsSha256": "681f52e2ae96a2cd078d86851e6fa215c7eff50fa16b7f8498abf8d8c7b7e8f4"
+    },
+    {
+      "name": "b2-image.jpg",
+      "mime": "image/jpeg",
+      "base64": "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAgACADASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwDx6iiiuo5gooooAKKKKACiiigD/9k=",
+      "width": 32,
+      "height": 32,
+      "pixelsSha256": "43689ea6b097dee23d06b823d1014dadab80027f97de693bde607b295c1d48e5"
+    }
+  ]
+}
