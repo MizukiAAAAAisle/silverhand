@@ -1,4 +1,4 @@
-import type { AppUpdateInstallMode, AppUpdateState } from '@silverhand/client';
+import type { AppUpdateInstallMode, AppUpdateState } from "@silverhand/client";
 
 /** The install mechanism; supplied once a release channel exists. */
 export interface AppUpdateEngine {
@@ -28,7 +28,7 @@ export class AppUpdateController {
     private readonly currentVersion: string,
     private readonly now: () => number = Date.now,
   ) {
-    this.state = { status: 'idle', currentVersion, lastCheckedAt: null };
+    this.state = { status: "idle", currentVersion, lastCheckedAt: null };
   }
 
   getState(): AppUpdateState {
@@ -56,25 +56,25 @@ export class AppUpdateController {
   check(): Promise<void> {
     // A found or downloaded update is not displaced by a later check.
     const s = this.state.status;
-    if (s === 'downloading' || s === 'downloaded' || s === 'installing' || s === 'scheduled')
+    if (s === "downloading" || s === "downloaded" || s === "installing" || s === "scheduled")
       return Promise.resolve();
     if (this.inflightCheck) return this.inflightCheck;
     const previous = this.state;
-    this.set({ status: 'checking' });
+    this.set({ status: "checking" });
     this.inflightCheck = this.engine
       .check()
       .then(
         (found) =>
           this.set(
             found
-              ? { status: 'available', version: found.version }
-              : { status: 'idle', currentVersion: this.currentVersion, lastCheckedAt: this.now() },
+              ? { status: "available", version: found.version }
+              : { status: "idle", currentVersion: this.currentVersion, lastCheckedAt: this.now() },
           ),
         (err: unknown) =>
           this.set(
-            previous.status === 'available'
+            previous.status === "available"
               ? previous
-              : { status: 'error', message: errorMessage(err), version: null },
+              : { status: "error", message: errorMessage(err), version: null },
           ),
       )
       .finally(() => {
@@ -87,16 +87,16 @@ export class AppUpdateController {
     if (this.inflightDownload) return this.inflightDownload;
     const version = downloadableVersion(this.state);
     if (version === null) return Promise.resolve();
-    this.set({ status: 'downloading', version, transferred: 0, total: null });
+    this.set({ status: "downloading", version, transferred: 0, total: null });
     this.inflightDownload = this.engine
       .download((transferred, total) => {
-        if (this.state.status === 'downloading') {
-          this.set({ status: 'downloading', version, transferred, total });
+        if (this.state.status === "downloading") {
+          this.set({ status: "downloading", version, transferred, total });
         }
       })
       .then(
-        () => this.set({ status: 'downloaded', version }),
-        (err: unknown) => this.set({ status: 'error', message: errorMessage(err), version }),
+        () => this.set({ status: "downloaded", version }),
+        (err: unknown) => this.set({ status: "error", message: errorMessage(err), version }),
       )
       .finally(() => {
         this.inflightDownload = null;
@@ -109,23 +109,23 @@ export class AppUpdateController {
    * quit; "now" also quits immediately. While staging, the first choice wins.
    */
   install(mode: AppUpdateInstallMode): Promise<void> {
-    if (this.state.status === 'scheduled') {
-      if (mode === 'now') this.quitAndInstallOnce();
+    if (this.state.status === "scheduled") {
+      if (mode === "now") this.quitAndInstallOnce();
       return Promise.resolve();
     }
     if (this.inflightStage) return this.inflightStage;
-    if (this.state.status !== 'downloaded') return Promise.resolve();
+    if (this.state.status !== "downloaded") return Promise.resolve();
     const version = this.state.version;
-    this.set({ status: 'installing', version });
+    this.set({ status: "installing", version });
     this.inflightStage = this.engine
       .stage()
       .then(
         () => {
-          this.set({ status: 'scheduled', version });
-          if (mode === 'now') this.quitAndInstallOnce();
+          this.set({ status: "scheduled", version });
+          if (mode === "now") this.quitAndInstallOnce();
         },
         // Retrying downloads again, which reuses electron-updater's verified cache.
-        (err: unknown) => this.set({ status: 'error', message: errorMessage(err), version }),
+        (err: unknown) => this.set({ status: "error", message: errorMessage(err), version }),
       )
       .finally(() => {
         this.inflightStage = null;
@@ -147,11 +147,11 @@ export class AppUpdateController {
 }
 
 function downloadableVersion(state: AppUpdateState): string | null {
-  if (state.status === 'available') return state.version;
-  if (state.status === 'error') return state.version;
+  if (state.status === "available") return state.version;
+  if (state.status === "error") return state.version;
   return null;
 }
 
 function errorMessage(err: unknown): string {
-  return (err instanceof Error ? err.message : String(err)).slice(0, 500) || 'Update failed.';
+  return (err instanceof Error ? err.message : String(err)).slice(0, 500) || "Update failed.";
 }

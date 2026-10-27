@@ -113,8 +113,7 @@ interface ConversationSessionContextCommon {
   members: MemberDto[];
 }
 
-export interface WorkspaceConversationSessionContextInput
-  extends ConversationSessionContextCommon {
+export interface WorkspaceConversationSessionContextInput extends ConversationSessionContextCommon {
   /** Workspace display name. Server-controlled text — rendered JSON-quoted
    *  (see `quotePromptValue`) so it cannot break the Context bullet list. */
   workspaceName: string;
@@ -162,8 +161,7 @@ export interface WorkspaceConversationSessionContextInput
 
 /** ConversationSlot for a workspace-less placement. It has no workspace memory
  * or workspace coordinate to inject. */
-export interface WorkspaceLessConversationSessionContextInput
-  extends ConversationSessionContextCommon {
+export interface WorkspaceLessConversationSessionContextInput extends ConversationSessionContextCommon {
   workspaceName?: never;
   workspacePath?: never;
   workspaceId?: never;
@@ -182,9 +180,7 @@ export interface AgentSessionContextInput {
   memoryRootPath: string;
 }
 
-export type SessionContextInput =
-  | ConversationSessionContextInput
-  | AgentSessionContextInput;
+export type SessionContextInput = ConversationSessionContextInput | AgentSessionContextInput;
 
 export interface DriverPromptContext {
   agentId: string;
@@ -218,17 +214,13 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
   const addMember = t('add_member');
   const listTasks = t('list_tasks');
   const unclaimTask = t('unclaim_task');
-  const sessionContextBlock = renderSessionContext(
-    input.sessionContext,
-    input.agentId,
-  );
+  const sessionContextBlock = renderSessionContext(input.sessionContext, input.agentId);
   const profileDir = normalizeProfileDir(input.activeProfileDir);
   const memoryPath = profilePath(profileDir, 'MEMORY.md');
   const notesDir = profilePath(profileDir, 'notes');
   const agentScoped = input.sessionContext.kind === 'agent';
   const workspaceLess =
-    input.sessionContext.kind === 'conversation'
-    && !('workspaceName' in input.sessionContext);
+    input.sessionContext.kind === 'conversation' && !('workspaceName' in input.sessionContext);
   /**
    * REACH, taught from the ruling itself (#task:2021 P4-4).
    *
@@ -241,37 +233,35 @@ export function buildPlatformPrompt(input: PlatformPromptInput): string {
    */
   const reach = reachTaughtCommands(agentScoped ? 'agent_slot' : 'conversation_slot');
   const reachCommands = (commands: readonly string[]): string =>
-    commands.map(command => inlineCode(`silverhand ${command}`)).join(', ');
-  const reachContract = reach.confined.length === 0
-    ? `- **Command reach.** ${reachCommands(reach.participation)} may target any
+    commands.map((command) => inlineCode(`silverhand ${command}`)).join(', ');
+  const reachContract =
+    reach.confined.length === 0
+      ? `- **Command reach.** ${reachCommands(reach.participation)} may target any
   conversation you participate in.`
-    : `- **Command reach.** ${reachCommands(reach.confined)} are limited to this
+      : `- **Command reach.** ${reachCommands(reach.confined)} are limited to this
   conversation (\`slot_out_of_scope\` elsewhere). ${reachCommands(reach.participation)}
   may target any conversation you participate in.`;
   const memoryBlock = workspaceLess
     ? ''
     : renderInjectedFile({
-      title: agentScoped ? 'Active Memory' : 'Active Workspace Memory',
-      relPath: memoryPath,
-      description: agentScoped
-        ? 'Persistent memory loaded for this agent.'
-        : 'Persistent memory for the current workspace.',
-      content: input.currentMemory,
-      missingHint: agentScoped
-        ? 'No MEMORY.md exists yet. Create one only when durable cross-conversation knowledge needs to be recorded.'
-        : 'No MEMORY.md exists yet. Create one only when this workspace has durable knowledge to record.',
-    });
+        title: agentScoped ? 'Active Memory' : 'Active Workspace Memory',
+        relPath: memoryPath,
+        description: agentScoped
+          ? 'Persistent memory loaded for this agent.'
+          : 'Persistent memory for the current workspace.',
+        content: input.currentMemory,
+        missingHint: agentScoped
+          ? 'No MEMORY.md exists yet. Create one only when durable cross-conversation knowledge needs to be recorded.'
+          : 'No MEMORY.md exists yet. Create one only when this workspace has durable knowledge to record.',
+      });
   const memoryNotesCatalogBlock = workspaceLess
     ? ''
     : renderMemoryNotesCatalog(input.memoryNotesCatalog, profileDir);
-  const memoryIndexBlock = agentScoped || workspaceLess
-    ? ''
-    : renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
-  const injectedMemoryTail = [
-    memoryBlock,
-    memoryNotesCatalogBlock,
-    memoryIndexBlock,
-  ].filter(Boolean).join('\n\n');
+  const memoryIndexBlock =
+    agentScoped || workspaceLess ? '' : renderWorkspaceMemoryIndex(input.workspaceMemoryIndex);
+  const injectedMemoryTail = [memoryBlock, memoryNotesCatalogBlock, memoryIndexBlock]
+    .filter(Boolean)
+    .join('\n\n');
   const turnOrientation = agentScoped
     ? '1. Read the message header and the injected role and memory. Do not reopen them solely to recover context.'
     : workspaceLess
@@ -328,10 +318,7 @@ metadata:
 
 Names must be unique and stable. The catalog is generated automatically; do not
 edit it. Invalid frontmatter is not indexed.`;
-  const memorySection = [
-    memoryManual,
-    durableMemoryManual,
-  ].filter(Boolean).join('\n\n');
+  const memorySection = [memoryManual, durableMemoryManual].filter(Boolean).join('\n\n');
 
   return `# Who you are in silverhand
 
@@ -510,10 +497,7 @@ ${input.roleSystemPrompt.trim() || '_(role not defined; await user instruction)_
 `;
 }
 
-export function buildSystemPromptFor(
-  kind: RuntimeKind,
-  ctx: DriverPromptContext,
-): string {
+export function buildSystemPromptFor(kind: RuntimeKind, ctx: DriverPromptContext): string {
   return buildPlatformPrompt({
     agentId: ctx.agentId,
     agentName: ctx.agentName,
@@ -611,7 +595,7 @@ function renderWorkspaceMemoryIndex(entries: WorkspaceMemoryIndexEntry[]): strin
     return `${header}\n\n_No member workspaces._`;
   }
   const body = entries
-    .map(e =>
+    .map((e) =>
       e.memoryPath === null
         ? `- ${e.label} — _unavailable on this computer_`
         : `- ${e.label} — \`${e.memoryPath}\``,
@@ -620,24 +604,20 @@ function renderWorkspaceMemoryIndex(entries: WorkspaceMemoryIndexEntry[]): strin
   return `${header}\n\n${body}`;
 }
 
-function renderMemoryNotesCatalog(
-  catalog: MemoryNotesCatalog,
-  profileDir: string,
-): string {
+function renderMemoryNotesCatalog(catalog: MemoryNotesCatalog, profileDir: string): string {
   const header =
     '## Memory Notes Catalog\n\n' +
     'Indexed notes for progressive disclosure. Read a note only when its ' +
     'description matches the work.';
   if (catalog.entries.length === 0) return header;
 
-  const entryLines = catalog.entries.map(entry => {
+  const entryLines = catalog.entries.map((entry) => {
     const path = profilePath(profileDir, entry.path);
     return `- [${escapeCatalogText(entry.name)}](${escapeCatalogLink(path)}) — ${escapeCatalogText(entry.description)} \`[${entry.category}]\``;
   });
 
   for (let visibleCount = entryLines.length; visibleCount >= 0; visibleCount -= 1) {
-    const omittedCount =
-      catalog.omittedCount + entryLines.length - visibleCount;
+    const omittedCount = catalog.omittedCount + entryLines.length - visibleCount;
     const lines = entryLines.slice(0, visibleCount);
     if (omittedCount > 0) {
       lines.push(`- … ${omittedCount} additional indexed note(s) omitted`);
@@ -679,16 +659,12 @@ function escapeCatalogLink(value: string): string {
 function renderSilverhandCliManual(): string {
   const domainIndex = SILVERHAND_COMMAND_DOMAINS.map((domain, index) => {
     const commands = domain.nouns.flatMap((noun) => {
-      const nounCommands = noun.verbs.map(
-        (verb) => `\`silverhand ${noun.noun} ${verb}\``,
-      );
+      const nounCommands = noun.verbs.map((verb) => `\`silverhand ${noun.noun} ${verb}\``);
       if (!('facets' in noun)) return nounCommands;
       return [
         ...nounCommands,
         ...noun.facets.flatMap((facet) =>
-          facet.verbs.map(
-            (verb) => `\`silverhand ${noun.noun} ${facet.facet} ${verb}\``,
-          ),
+          facet.verbs.map((verb) => `\`silverhand ${noun.noun} ${facet.facet} ${verb}\``),
         ),
       ];
     });
@@ -762,9 +738,7 @@ function renderSessionContext(sc: SessionContextInput, agentId: string): string 
       `- Workspace: ${workspaceValue} (${workspacePath}) — regular workspace; persistent memory and files belong here.`,
     );
   }
-  lines.push(
-    `- Channel: ${quotePromptValue(sc.sessionTitle)} (${inlineCode(sc.conversationId)})`,
-  );
+  lines.push(`- Channel: ${quotePromptValue(sc.sessionTitle)} (${inlineCode(sc.conversationId)})`);
   renderSessionMembers(lines, sc, agentId);
   return lines.join('\n');
 }
@@ -773,9 +747,7 @@ function hasWorkspaceSessionContext(
   sc: ConversationSessionContextInput,
 ): sc is WorkspaceConversationSessionContextInput {
   return (
-    sc.workspaceName !== undefined
-    && sc.workspacePath !== undefined
-    && sc.workspaceId !== undefined
+    sc.workspaceName !== undefined && sc.workspacePath !== undefined && sc.workspaceId !== undefined
   );
 }
 
@@ -809,7 +781,8 @@ function renderSessionMembers(
  * U+2028 (LINE SEPARATOR), U+2029 (PARAGRAPH SEPARATOR), and U+0085
  * (NEXT LINE) all survive `JSON.stringify` unchanged. Some renderers
  * and language models treat these as line breaks, so a `display_name`
- * value of `"Alice - Mention rule: …"` would still split the
+ * value of `"Alice
+- Mention rule: …"` would still split the
  * Members block visually even though the wrapping `"…"` is intact.
  *
  * The post-processing replaces those three characters with their

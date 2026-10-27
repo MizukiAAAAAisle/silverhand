@@ -1,5 +1,6 @@
 import type { JSX, ReactNode } from "react";
 import { Button } from "@/components/ui/button";
+import { t } from "@/lib/i18n";
 
 /** Empty state of a permissions panel: a bare icon and one line, no frame. */
 export function PanelEmpty({
@@ -21,9 +22,9 @@ export function PanelEmpty({
 export function PanelError({ onRetry }: { onRetry: () => void }): JSX.Element {
   return (
     <div className="flex items-center justify-center gap-2 py-12 text-sm text-error">
-      Failed to load members.
+      {t("workspaces.failedToLoadMembers")}
       <Button variant="ghost" size="sm" onClick={onRetry}>
-        Retry
+        {t("common.retry")}
       </Button>
     </div>
   );

@@ -8,7 +8,7 @@ import { projectPresence } from "@/features/agents/model/presence-projection";
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { CreateAgentDialog } from "@/pages/agent/components/create-agent-dialog";
 import { useHostsQuery } from "@/features/computers/hooks/hooks";
-import { hostDisplayName, UNKNOWN_COMPUTER_LABEL } from "@/features/computers/model/host-display";
+import { hostDisplayName, unknownComputerLabel } from "@/features/computers/model/host-display";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -23,8 +23,9 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
-import { CURRENT_USER_SUBTITLE } from "@/features/session/current-user";
+import { currentUserSubtitle } from "@/features/session/current-user";
 import { SidebarRow, SidebarSection } from "@/components/layout/sidebar-shared";
+import { t } from "@/lib/i18n";
 
 /** HUMANS caps its list here (not counting the pinned viewer row) before the
  *  "Show all" toggle takes over. Above this the roster buries AGENTS; at or
@@ -80,7 +81,7 @@ export function AgentSidebarShell({
       .map((g) => ({ key: g.host.id, name: hostDisplayName(g.host), agents: g.agents }))
       .sort((a, b) => a.name.localeCompare(b.name));
     if (unknown.length > 0) {
-      groups.push({ key: "__unknown__", name: UNKNOWN_COMPUTER_LABEL, agents: unknown });
+      groups.push({ key: "__unknown__", name: unknownComputerLabel(), agents: unknown });
     }
     return groups;
   }, [agents, hostsById]);
@@ -126,7 +127,7 @@ export function AgentSidebarShell({
   return (
     <DirectorySidebar>
       <SidebarSection
-        label="AGENTS"
+        label={t("agentPage.agents")}
         icon={<MembersIcon className="size-3.5" />}
         count={agents.length}
         collapsible
@@ -139,7 +140,7 @@ export function AgentSidebarShell({
             size="icon"
             className="h-6 w-6"
             onClick={() => setOpen(true)}
-            aria-label="New agent"
+            aria-label={t("agentPage.newAgent")}
           >
             <PlusIcon className="size-3.5" />
           </Button>
@@ -147,10 +148,10 @@ export function AgentSidebarShell({
       >
         {agentsLoading && agents.length === 0 ? (
           <li>
-            <SidebarRowsSkeleton label="Loading agents" members />
+            <SidebarRowsSkeleton label={t("agentPage.loadingAgents")} members />
           </li>
         ) : agents.length === 0 ? (
-          <li className="px-2 py-2 text-xs text-text-muted">No agents</li>
+          <li className="px-2 py-2 text-xs text-text-muted">{t("agentPage.noAgents")}</li>
         ) : showGroups ? (
           agentGroups.map((group) => (
             <Fragment key={group.key}>
@@ -170,7 +171,7 @@ export function AgentSidebarShell({
       </SidebarSection>
 
       <SidebarSection
-        label="HUMANS"
+        label={t("agentPage.humans")}
         icon={<UserIcon className="size-3.5" />}
         count={humansCount}
         collapsible
@@ -188,7 +189,7 @@ export function AgentSidebarShell({
               />
             }
             title={viewer.display_name || viewer.name}
-            subtitle={CURRENT_USER_SUBTITLE}
+            subtitle={currentUserSubtitle()}
             status={presenceDotStatus(presenceById.get(viewer.id)?.presence)}
             selected={selectedUserId === viewer.id}
             onClick={onSelectUser ? () => onSelectUser(viewer.id) : undefined}
@@ -196,7 +197,7 @@ export function AgentSidebarShell({
         ) : null}
         {(viewerQuery.isLoading || humansLoading) && otherHumans.length === 0 ? (
           <li>
-            <SidebarRowsSkeleton label="Loading humans" members />
+            <SidebarRowsSkeleton label={t("agentPage.loadingHumans")} members />
           </li>
         ) : null}
         {visibleOtherHumans.map((u) => {
@@ -223,12 +224,14 @@ export function AgentSidebarShell({
               onClick={() => setShowAllHumans((prev) => !prev)}
               className="flex w-full items-center px-2 py-1 text-xs font-medium text-text-muted transition-colors hover:text-text-primary"
             >
-              {showAllHumans ? "Show fewer" : `Show all ${humansCount}`}
+              {showAllHumans
+                ? t("agentPage.showFewer")
+                : t("agentPage.showAll", { count: humansCount })}
             </button>
           </li>
         ) : null}
         {!viewerQuery.isLoading && !humansLoading && !viewer && otherHumans.length === 0 ? (
-          <li className="px-2 py-2 text-xs text-text-muted">No humans</li>
+          <li className="px-2 py-2 text-xs text-text-muted">{t("agentPage.noHumans")}</li>
         ) : null}
       </SidebarSection>
 

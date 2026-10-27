@@ -10,6 +10,7 @@ import {
 } from "@silverhand/shared";
 import { api } from "@/lib/api";
 import { onWsFrame, subscribeWsScope } from "@/lib/ws-client";
+import { t } from "@/lib/i18n";
 
 const presenceKey = ["presence"] as const;
 const STALE_MS = 30 * 1000;
@@ -139,7 +140,7 @@ export function humanPresenceText(
   lastSeenAt: number | null,
   relativeLastSeen: string,
 ): string {
-  if (presence === "online") return "Online";
-  if (lastSeenAt != null) return `Last seen ${relativeLastSeen}`;
-  return "Offline";
+  if (presence === "online") return t("common.online");
+  if (lastSeenAt != null) return t("common.lastSeen", { time: relativeLastSeen });
+  return t("common.offline");
 }

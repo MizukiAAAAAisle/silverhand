@@ -31,13 +31,14 @@ import {
   canRenameWorkspace,
 } from "./workspace-permissions";
 import type { WorkspaceCapabilities } from "./workspace-capabilities";
+import { t } from "@/lib/i18n";
 
 type SettingsSection = "general" | "members" | "agents";
 type PermissionTab = "agents" | "human";
 
-const PERMISSION_TABS: { id: PermissionTab; label: string }[] = [
-  { id: "agents", label: "Agents" },
-  { id: "human", label: "Humans" },
+const permissionTabs = (): { id: PermissionTab; label: string }[] => [
+  { id: "agents", label: t("workspaces.agents2") },
+  { id: "human", label: t("workspaces.humans2") },
 ];
 
 interface WorkspaceSettingsDialogProps {
@@ -61,10 +62,10 @@ interface WorkspaceSettingsDialogProps {
   highlightCapability?: AgentCapability | null;
 }
 
-const NAV_ITEMS: { id: SettingsSection; label: string; icon: typeof GeneralSettingsIcon }[] = [
-  { id: "general", label: "General", icon: GeneralSettingsIcon },
-  { id: "members", label: "Members", icon: MembersIcon },
-  { id: "agents", label: "Permission", icon: ShieldCheckIcon },
+const navItems = (): { id: SettingsSection; label: string; icon: typeof GeneralSettingsIcon }[] => [
+  { id: "general", label: t("workspaces.general"), icon: GeneralSettingsIcon },
+  { id: "members", label: t("workspaces.members"), icon: MembersIcon },
+  { id: "agents", label: t("workspaces.permission"), icon: ShieldCheckIcon },
 ];
 
 export function WorkspaceSettingsDialog({
@@ -110,8 +111,8 @@ export function WorkspaceSettingsDialog({
   // Permission section is not offered — and a deep-link that asks for it lands
   // on General rather than an empty panel.
   const visibleNavItems = hasMembers
-    ? NAV_ITEMS
-    : NAV_ITEMS.filter((item) => item.id === "general");
+    ? navItems()
+    : navItems().filter((item) => item.id === "general");
   const activeSection = !hasMembers && section !== "general" ? "general" : section;
 
   // Reset every time the dialog reopens for a (potentially different)
@@ -131,7 +132,7 @@ export function WorkspaceSettingsDialog({
     if (!workspaceId) return;
     const trimmed = name.trim();
     if (!trimmed) {
-      setRenameError("Please enter a project name");
+      setRenameError(t("workspaces.pleaseEnterAProject"));
       return;
     }
     // ONE format rule for both doors (#task:1827): the shared
@@ -196,7 +197,7 @@ export function WorkspaceSettingsDialog({
       <DialogContent className="max-w-4xl">
         <DialogHeader>
           <DialogTitle className="flex items-baseline gap-2">
-            Project Settings
+            {t("workspaces.projectSettings")}
             {workspaceName ? (
               <span className="min-w-0 truncate text-sm font-normal text-text-muted">
                 {workspaceName}
@@ -214,8 +215,8 @@ export function WorkspaceSettingsDialog({
             15vh above plus ~92px of chrome, so 65 keeps the footer on screen
             down to a ~460px-tall window — below that nothing in this app is
             usable anyway. */}
-        <div className="flex h-[min(32rem,65vh)] gap-5">
-          <nav className="w-40 shrink-0">
+        <div data-project-settings-body className="flex h-[min(32rem,65vh)] gap-5">
+          <nav data-project-settings-nav className="w-40 shrink-0">
             <ul className="flex flex-col gap-0.5">
               {visibleNavItems.map((item) => {
                 const active = activeSection === item.id;
@@ -271,10 +272,10 @@ export function WorkspaceSettingsDialog({
                     panel. */}
                 <div
                   role="tablist"
-                  aria-label="Permission target"
+                  aria-label={t("workspaces.permissionTarget")}
                   className="flex items-center gap-1 border-b-(length:--control-border-width) border-border-subtle"
                 >
-                  {PERMISSION_TABS.map((tab) => {
+                  {permissionTabs().map((tab) => {
                     const active = permTab === tab.id;
                     return (
                       <button
@@ -376,35 +377,33 @@ function GeneralSection({
            * this says WHY it is fixed: the name IS its agent's handle, which the
            * agent cannot change either (#task:2044 — the space reads as its
            * agent's name). A second producer must carry its own reason. */}
-          An agent space takes its name from its agent and cannot be renamed.
+          {t("workspaces.anAgentSpaceTakes")}
         </p>
       ) : canRename ? (
-        <p className="text-xs text-text-muted">
-          Renaming notifies online agents to update old name references in MEMORY.
-        </p>
+        <p className="text-xs text-text-muted">{t("workspaces.renamingNotifiesOnlineAgents")}</p>
       ) : null}
 
       {nameEditable ? (
         <form onSubmit={onRename} className="flex flex-col gap-1.5">
-          <Label htmlFor="workspace-settings-name">Name</Label>
+          <Label htmlFor="workspace-settings-name">{t("workspaces.name")}</Label>
           <div className="flex gap-2">
             <Input
               id="workspace-settings-name"
               value={name}
               onChange={(e) => onNameChange(e.target.value)}
-              placeholder="my-frontend"
+              placeholder={t("workspaces.myFrontend")}
               autoFocus
               className="transition-colors hover:border-(--border-control-hover)"
             />
             <Button type="submit" variant="primary" disabled={renameDisabled}>
-              {renamePending ? "Saving…" : "Save"}
+              {renamePending ? t("workspaces.saving") : t("common.save")}
             </Button>
           </div>
           {renameError ? <div className="text-xs text-error">{renameError}</div> : null}
         </form>
       ) : (
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="workspace-settings-name">Name</Label>
+          <Label htmlFor="workspace-settings-name">{t("workspaces.name")}</Label>
           <Input
             id="workspace-settings-name"
             value={name}
@@ -429,15 +428,18 @@ function GeneralSection({
               frame on a whole panel promises a click the panel does not
               honour, and the Delete block's `border-error/30` is identity
               (danger tint) that hover must not recolour anyway. */}
-          <div className="flex items-center justify-between gap-3 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3">
+          <div
+            data-project-settings-panel
+            className="flex items-center justify-between gap-3 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3"
+          >
             <div className="flex flex-col gap-0.5">
               <span className="text-sm font-medium text-text-primary">
-                {isArchived ? "Archived" : "Archive project"}
+                {isArchived ? t("common.archived") : t("workspaces.archiveProject")}
               </span>
               <span className="text-xs text-text-muted">
                 {isArchived
-                  ? "Collapsed into the sidebar Archived group; still accessible."
-                  : "Collapse into the sidebar Archived group, keep all content, restore anytime."}
+                  ? t("workspaces.collapsedIntoTheSidebar")
+                  : t("workspaces.collapseIntoTheSidebar")}
               </span>
             </div>
             <Button
@@ -449,12 +451,12 @@ function GeneralSection({
               {isArchived ? (
                 <>
                   <UnarchiveIcon className="mr-1.5 size-3.5" />
-                  {archivePending ? "Working…" : "Unarchive"}
+                  {archivePending ? t("workspaces.working") : t("workspaces.unarchive")}
                 </>
               ) : (
                 <>
                   <ArchiveIcon className="mr-1.5 size-3.5" />
-                  {archivePending ? "Working…" : "Archive"}
+                  {archivePending ? t("workspaces.working") : t("workspaces.archive")}
                 </>
               )}
             </Button>
@@ -462,18 +464,20 @@ function GeneralSection({
 
           <div className="flex flex-col gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-error/30 bg-error/5 p-3">
             <div className="flex flex-col gap-0.5">
-              <span className="text-sm font-medium text-text-primary">Delete project</span>
+              <span className="text-sm font-medium text-text-primary">
+                {t("workspaces.deleteProject")}
+              </span>
               <span className="text-xs text-text-muted">
-                All channels, threads, and messages are removed permanently and cannot be recovered.
+                {t("workspaces.allChannelsThreadsAnd")}
               </span>
             </div>
             <div className="flex justify-end">
               <DeleteButton
                 onConfirm={onDelete}
                 disabled={!workspaceId || deletePending}
-                confirmLabel="Confirm delete project"
+                confirmLabel={t("workspaces.confirmDeleteProject")}
               >
-                {deletePending ? "Deleting…" : "Delete project"}
+                {deletePending ? t("workspaces.deleting") : t("workspaces.deleteProject")}
               </DeleteButton>
             </div>
           </div>
@@ -492,20 +496,20 @@ function GeneralSection({
       {hasLifecycle && canLeave ? (
         <div className="flex flex-col gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-elevated/40 p-3">
           <div className="flex flex-col gap-0.5">
-            <span className="text-sm font-medium text-text-primary">Leave project</span>
-            <span className="text-xs text-text-muted">
-              You leave this project and all its channels.
+            <span className="text-sm font-medium text-text-primary">
+              {t("workspaces.leaveProject")}
             </span>
+            <span className="text-xs text-text-muted">{t("workspaces.youLeaveThisProject")}</span>
           </div>
           <div className="flex justify-end">
             <DeleteButton
               onConfirm={onLeave}
               variant="neutral"
               disabled={!workspaceId || leavePending}
-              confirmLabel="Confirm leave project"
+              confirmLabel={t("workspaces.confirmLeaveProject")}
             >
               <LeaveIcon className="size-3.5" />
-              {leavePending ? "Leaving…" : "Leave project"}
+              {leavePending ? t("workspaces.leaving") : t("workspaces.leaveProject")}
             </DeleteButton>
           </div>
         </div>

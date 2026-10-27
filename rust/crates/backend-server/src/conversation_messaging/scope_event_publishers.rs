@@ -472,8 +472,8 @@ impl CopyNotification for HubMessagingEvents {
             EventScope::Viewer(author.clone()),
             ProductEvent::Notification(NotificationEvent {
                 kind: NotificationKind::MentionExternal,
-                conversation_id: meta.source_conversation_id.as_str().to_owned(),
-                message_id: meta.source_message_id.as_str().to_owned(),
+                conversation_id: Some(meta.source_conversation_id.as_str().to_owned()),
+                message_id: Some(meta.source_message_id.as_str().to_owned()),
             }),
         )
         .map_err(EffectFailure::from_source)
@@ -490,8 +490,8 @@ impl ViewerNotification for HubMessagingEvents {
             EventScope::Viewer(mention.viewer().clone()),
             ProductEvent::Notification(NotificationEvent {
                 kind: NotificationKind::MentionSelf,
-                conversation_id: intent.source_conversation().as_str().to_owned(),
-                message_id: intent.source_message().as_str().to_owned(),
+                conversation_id: Some(intent.source_conversation().as_str().to_owned()),
+                message_id: Some(intent.source_message().as_str().to_owned()),
             }),
         )
         .map_err(EffectFailure::from_source)

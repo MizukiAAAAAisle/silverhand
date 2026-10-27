@@ -1,5 +1,6 @@
 import { CopyMarkdownIcon, DownloadIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
+import { t } from "@/lib/i18n";
 
 /**
  * Top bar shown while MessageList is in multi-select mode — the "share messages
@@ -40,23 +41,25 @@ export function SelectionToolbar({
   return (
     <div
       role="toolbar"
-      aria-label="Message selection"
+      aria-label={t("messages.messageSelection")}
       className="flex items-center justify-between gap-3 border-b border-border-subtle bg-bg-floating px-3 py-2 text-xs text-text-primary"
     >
-      <span className="font-medium">{count === 0 ? "None selected" : `${count} selected`}</span>
+      <span className="font-medium">
+        {count === 0 ? t("messages.noneSelected") : t("messages.selectedCount", { count })}
+      </span>
       <div className="flex items-center gap-2">
-        <SelectionActionButton rank="cancel" label="Cancel" onClick={onCancel} />
+        <SelectionActionButton rank="cancel" label={t("common.cancel")} onClick={onCancel} />
         <SelectionActionButton
           rank="secondary"
           icon={<CopyMarkdownIcon className="size-3.5" />}
-          label="Copy markdown"
+          label={t("messages.copyMarkdown")}
           disabled={!hasSelection || !onCopyMarkdown}
           onClick={onCopyMarkdown}
         />
         <SelectionActionButton
           rank="primary"
           icon={<DownloadIcon className="size-3.5" />}
-          label="Save image"
+          label={t("messages.saveImage")}
           disabled={!hasSelection || !onSaveImage}
           onClick={onSaveImage}
         />

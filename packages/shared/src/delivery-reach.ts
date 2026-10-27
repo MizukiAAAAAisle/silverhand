@@ -178,8 +178,8 @@ export function reachTaughtCommands(slotKind: RuntimeSlotKind): {
 } {
   const commandsWhere = (domain: DeliveryReachDomain): readonly string[] =>
     ADDRESSED_OPERATIONS.filter(
-      operation => deliveryReachDomain(operation, slotKind) === domain,
-    ).map(operation => ADDRESSED_OPERATION_COMMAND[operation]);
+      (operation) => deliveryReachDomain(operation, slotKind) === domain,
+    ).map((operation) => ADDRESSED_OPERATION_COMMAND[operation]);
   return {
     confined: commandsWhere('own_stream'),
     participation: commandsWhere('agent_participation'),

@@ -128,13 +128,28 @@
 .mobile-tab:active {
   background: var(--bg-hover);
 }
-/* Navigation chrome is not content: no text selection, no long-press callout. */
+/* Navigation chrome and the conversation lists are not content: no text selection,
+   no long-press callout (a long press opens the row menu). */
 .mobile-header,
 .mobile-tabbar,
 [data-layout="compact"] :is([data-pane-header], [data-side-panel-header]) {
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
+}
+/* The sidebar refuses selection on any touch screen, wide layouts included:
+   there a long press opens the row menu, never a text selection. */
+@media (pointer: coarse) {
+  [data-sidebar] {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  /* WebKit will not type into a field whose ancestor refuses selection. */
+  [data-sidebar] :is(input, textarea, [contenteditable="true"]) {
+    -webkit-user-select: text;
+    user-select: text;
+  }
 }
 /* Glass answers a press by swelling and brightening, never by dimming. */
 .mobile-back-icon,
@@ -435,7 +450,11 @@
 }
 /* Menus on touch read as iOS menus: glass with a large radius. */
 :root[data-layout="compact"] [data-app-menu] {
-  min-width: 200px;
+  /* A context menu always opens beside the press point; pressed mid-screen
+     neither side holds the full width, so the menu narrows to the side it
+     takes rather than running off the screen. */
+  min-width: min(200px, var(--radix-context-menu-content-available-width, 200px));
+  max-width: var(--radix-context-menu-content-available-width, none);
   padding: 6px;
   border: 0;
   border-radius: 20px;
@@ -452,6 +471,11 @@
   min-height: 44px;
   padding-inline: 12px;
   border-radius: 14px;
+}
+:root[data-layout="compact"] [data-app-menu] [data-app-menu-reactions] [role="menuitem"] {
+  min-height: 0;
+  padding: 0;
+  border-radius: 999px;
 }
 /* The title alone names the conversation; the `#` would break the bar into
    pieces. */
@@ -659,6 +683,44 @@
   max-height: max(240px, calc(100dvh - var(--fold-end) - var(--dialog-viewport-bottom, 0px)));
 }
 
+/* Project settings: the section list runs across the top and the sections take
+   the sheet's whole width. The body keeps one height across sections, so
+   switching never resizes the sheet; a section scrolls inside it. */
+:where([data-layout="compact"]) [data-project-settings-body] {
+  flex-direction: column;
+  gap: 16px;
+  height: min(36rem, 70dvh);
+}
+:where([data-layout="compact"]) [data-project-settings-nav] {
+  width: auto;
+}
+:where([data-layout="compact"]) [data-project-settings-nav] > ul {
+  flex-direction: row;
+  gap: 4px;
+}
+:where([data-layout="compact"]) [data-project-settings-nav] > ul > li {
+  flex: 1 1 0;
+  min-width: 0;
+}
+:where([data-layout="compact"]) [data-project-settings-nav] > ul > li > button {
+  justify-content: center;
+}
+:where([data-layout="compact"]) [data-project-settings-nav] > ul > li > button > span:nth-child(2) {
+  flex: 0 1 auto;
+}
+:where([data-layout="compact"]) [data-project-settings-body] > :last-child {
+  padding-right: 0;
+}
+/* A side-by-side panel would squeeze its caption into a column of single words. */
+:where([data-layout="compact"]) [data-project-settings-panel] {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+:where([data-layout="compact"]) [data-project-settings-panel] > button {
+  align-self: flex-end;
+}
+
 /* One editor and toolbar in both layouts; only the painted frame moves. */
 [data-composer-editor] {
   display: contents;
@@ -787,8 +849,8 @@
 /* The native composer (iOS) floats over the page. The message scroller ends
    in room for it at the height its text gives it; the controls that float
    above it (activity, attachments) sit on its drawn top, above any picker
-   native lists there. Both
-   are measured from the bottom of the window, where a page showing it ends. */
+   native lists there. Native reports them per composer; the page sets them on
+   the composer's pane, measured from the pane's bottom. */
 [data-native-composer-room] {
   flex-shrink: 0;
   height: var(--native-composer-reserve, 0px);
@@ -806,7 +868,8 @@
   bottom: calc(var(--native-composer-overlay, 0px) + var(--native-composer-picker, 0px) + 8px);
   z-index: var(--z-sticky);
 }
-[data-layout="compact"] [data-scroll-bottom] {
+[data-layout="compact"] [data-scroll-bottom],
+[data-panel]:has([data-native-composer]) [data-scroll-bottom] {
   bottom: max(
     16px,
     calc(var(--native-composer-overlay, 0px) + var(--native-composer-picker, 0px) + 12px)

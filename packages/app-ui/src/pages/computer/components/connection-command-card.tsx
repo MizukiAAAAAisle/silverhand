@@ -24,7 +24,7 @@ export function ConnectionCommandCard({
   daemonNpmSpec,
   connectToken,
   connectedServerUrl,
-  label = computerCopy.connectionCommandLabel,
+  label = computerCopy().connectionCommandLabel,
 }: ConnectionCommandCardProps): JSX.Element {
   const [revealed, setRevealed] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -55,7 +55,7 @@ export function ConnectionCommandCard({
     // Copy source is ALWAYS the locally-assembled verbatim command.
     await navigator.clipboard.writeText(daemonCommand);
     setCopied(true);
-    toast.success(computerCopy.copied);
+    toast.success(computerCopy().copied);
   };
 
   return (
@@ -75,20 +75,20 @@ export function ConnectionCommandCard({
               onClick={() => setRevealed((v) => !v)}
               disabled={!daemonCommand}
               className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-(length:--text-meta) text-(--text-terminal-chrome) transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
-              aria-label={revealed ? computerCopy.hide : computerCopy.reveal}
+              aria-label={revealed ? computerCopy().hide : computerCopy().reveal}
             >
               {revealed ? <ViewOffIcon className="size-3.5" /> : <ViewIcon className="size-3.5" />}
-              {revealed ? computerCopy.hide : computerCopy.reveal}
+              {revealed ? computerCopy().hide : computerCopy().reveal}
             </button>
             <button
               type="button"
               onClick={() => void handleCopy()}
               disabled={!daemonCommand}
               className="inline-flex items-center gap-1 px-1.5 py-1 font-mono text-(length:--text-meta) text-(--text-terminal-chrome) transition-colors hover:text-white disabled:cursor-not-allowed disabled:opacity-30"
-              aria-label={computerCopy.copy}
+              aria-label={computerCopy().copy}
             >
               {copied ? <CheckIcon className="size-3.5" /> : <CopyIcon className="size-3.5" />}
-              {copied ? computerCopy.copied : computerCopy.copy}
+              {copied ? computerCopy().copied : computerCopy().copy}
             </button>
           </div>
         </div>
@@ -102,7 +102,7 @@ export function ConnectionCommandCard({
         </div>
       </div>
 
-      <p className="text-xs leading-relaxed text-text-muted">{computerCopy.revealOnceNotice}</p>
+      <p className="text-xs leading-relaxed text-text-muted">{computerCopy().revealOnceNotice}</p>
     </div>
   );
 }

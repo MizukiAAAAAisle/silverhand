@@ -37,6 +37,7 @@ import {
   runtimeChipDisabled,
   runtimeSectionHint,
 } from "../../../features/agents/model/runtime-detection-ui";
+import { t } from "@/lib/i18n";
 
 // The picker lists only offerable runtimes (`selectable`) — shiki: 没支持的
 // 直接不展示 (no roadmap/"coming soon" rows in a focused create task). Which
@@ -110,7 +111,7 @@ export function CreateAgentDialog({
 }: CreateAgentDialogProps): JSX.Element {
   const [name, setName] = useState("");
   const [runtime, setRuntime] = useState<RuntimeKind>("claude");
-  const [sessionScope, setSessionScope] = useState<AgentSessionScope>("conversation");
+  const [sessionScope, setSessionScope] = useState<AgentSessionScope>("agent");
   // Model tracks the selected runtime's catalog default (qoder → `Ultimate`,
   // others → blank = the runtime's own CLI default). Switching runtime resets
   // it to that runtime's default so the field always reflects what will be
@@ -178,7 +179,7 @@ export function CreateAgentDialog({
   useEffect(() => {
     if (!open) {
       setSelectedHostId(null);
-      setSessionScope("conversation");
+      setSessionScope("agent");
       setRuntimeGate(EMPTY_RUNTIME_GATE);
       return;
     }
@@ -206,7 +207,7 @@ export function CreateAgentDialog({
     e.preventDefault();
     setError(null);
     if (!name.trim()) {
-      setError("Please enter an agent name");
+      setError(t("agentPage.pleaseEnterAnAgent"));
       return;
     }
     // Final format pass — arms the inline hint even on a field never blurred.
@@ -220,15 +221,15 @@ export function CreateAgentDialog({
         // Probes still landing — the Create button is disabled meanwhile, but
         // guard here too so a stale click can't fall through to a misleading
         // "no computer online".
-        setError("Checking which computers are online…");
+        setError(t("agentPage.checkingWhichComputersAre"));
         return;
       }
       if (availableHosts.length === 0) {
-        setError("No computer is online right now. Connect one and try again.");
+        setError(t("agentPage.noComputerIsOnline"));
         return;
       }
       if (!selectedHostId || !availableHosts.some((h) => h.id === selectedHostId)) {
-        setError("Please choose an online computer to run this agent");
+        setError(t("agentPage.pleaseChooseAnOnline"));
         return;
       }
     }
@@ -237,7 +238,7 @@ export function CreateAgentDialog({
     // normally moves selection off an absent runtime; this guards the
     // all-absent case and any race before that effect runs.
     if (runtimeGate.selectedAbsent) {
-      setError("That runtime is not installed on the selected computer.");
+      setError(t("agentPage.thatRuntimeIsNot"));
       return;
     }
     try {
@@ -253,7 +254,7 @@ export function CreateAgentDialog({
       onCreated?.(res.agent.id);
       setName("");
       setRuntime("claude");
-      setSessionScope("conversation");
+      setSessionScope("agent");
       setModel(runtimeDefaultModel("claude") ?? "");
       setSelectedHostId(null);
       setRuntimeGate(EMPTY_RUNTIME_GATE);
@@ -267,13 +268,13 @@ export function CreateAgentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent data-create-agent-dialog aria-describedby={undefined}>
         <DialogHeader>
-          <DialogTitle>New Agent</DialogTitle>
+          <DialogTitle>{t("agentPage.newAgent2")}</DialogTitle>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ag-host" required className="font-semibold">
-              Computer
+              {t("agentPage.computer")}
             </Label>
             <ComputerPicker
               id="ag-host"
@@ -284,13 +285,13 @@ export function CreateAgentDialog({
                 setSelectedHostId(id);
                 setError(null);
               }}
-              ariaLabel="Computer"
+              ariaLabel={t("agentPage.computer")}
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="ag-name" required className="font-semibold">
-              Name
+              {t("agentPage.name")}
             </Label>
             <div className="relative">
               <Input
@@ -302,7 +303,7 @@ export function CreateAgentDialog({
                 }}
                 onBlur={nameCheck.markTouched}
                 aria-invalid={nameCheck.blocking || undefined}
-                placeholder="alice"
+                placeholder={t("agentPage.alice")}
                 autoFocus
                 className="pr-8"
               />
@@ -312,19 +313,12 @@ export function CreateAgentDialog({
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <Label className="font-semibold">Session model</Label>
-            <div className="flex flex-wrap gap-1.5" role="group" aria-label="Session model">
-              <button
-                type="button"
-                className={chipClass(sessionScope === "conversation")}
-                aria-pressed={sessionScope === "conversation"}
-                onClick={() => {
-                  setSessionScope("conversation");
-                  setError(null);
-                }}
-              >
-                Per conversation
-              </button>
+            <Label className="font-semibold">{t("agentPage.sessionModel")}</Label>
+            <div
+              className="flex flex-wrap gap-1.5"
+              role="group"
+              aria-label={t("agentPage.sessionModel")}
+            >
               <button
                 type="button"
                 className={chipClass(sessionScope === "agent")}
@@ -334,13 +328,24 @@ export function CreateAgentDialog({
                   setError(null);
                 }}
               >
-                Across conversations
+                {t("agentPage.acrossConversations")}
+              </button>
+              <button
+                type="button"
+                className={chipClass(sessionScope === "conversation")}
+                aria-pressed={sessionScope === "conversation"}
+                onClick={() => {
+                  setSessionScope("conversation");
+                  setError(null);
+                }}
+              >
+                {t("agentPage.perConversation")}
               </button>
             </div>
             <p className="text-xs text-text-muted">
               {sessionScope === "agent"
-                ? "One persistent session across participating conversations."
-                : "Independent session for each conversation."}
+                ? t("agentPage.onePersistentSessionAcross")
+                : t("agentPage.independentSessionForEach")}
             </p>
           </div>
 
@@ -360,10 +365,10 @@ export function CreateAgentDialog({
                 list open (shiki 2026-07-21). The input carries its own
                 `aria-label="Model"`, so a11y naming is unaffected. Matches the
                 edit form's bare `<Label>Model</Label>` (RuntimeConfigEditor). */}
-            <Label className="font-semibold">Model</Label>
+            <Label className="font-semibold">{t("agentPage.model")}</Label>
             <Combobox
               id="ag-model"
-              ariaLabel="Model"
+              ariaLabel={t("agentPage.model")}
               value={model}
               onChange={(value) => {
                 setModel(value);
@@ -371,7 +376,7 @@ export function CreateAgentDialog({
               }}
               onCommit={setModel}
               suggestions={modelSuggestions}
-              placeholder="driver default"
+              placeholder={t("agentPage.driverDefault")}
               className="h-8"
             />
           </div>
@@ -384,7 +389,7 @@ export function CreateAgentDialog({
 
           <DialogFooter className="mt-2">
             <Button type="button" variant="cancel" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="submit"
@@ -397,7 +402,7 @@ export function CreateAgentDialog({
                 nameCheck.blocking
               }
             >
-              {createAgent.isPending ? "Creating…" : "Create"}
+              {createAgent.isPending ? t("agentPage.creating") : t("agentPage.create")}
             </Button>
           </DialogFooter>
         </form>
@@ -464,8 +469,7 @@ function RuntimePicker({
     detectionActive &&
     SELECTABLE_RUNTIMES.every((entry) => runtimeStateByKind.get(entry.kind) === "absent");
   const selectedAbsent = detectionActive && runtimeStateByKind.get(value) === "absent";
-  const runtimeHint =
-    sectionHint ?? (allAbsent ? "No supported runtime detected on this computer." : null);
+  const runtimeHint = sectionHint ?? (allAbsent ? t("agentPage.noSupportedRuntimeDetected") : null);
 
   // Report the gating facts up. Deps are the two primitives, so this fires only
   // when they actually flip — the isReprobing spinner toggling or a Recheck
@@ -494,14 +498,14 @@ function RuntimePicker({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Label required className="font-semibold">
-            Runtime
+            {t("agentPage.runtime")}
           </Label>
           {/* Light in-progress tip while a probe / Recheck runs. It lives in
               the label row so showing it never changes the section height — the
               dialog is vertically centered, so any height delta would re-center
               the whole modal and read as a jump (shiki). */}
           {checking ? (
-            <span className="text-xs font-normal text-text-muted">Detecting…</span>
+            <span className="text-xs font-normal text-text-muted">{t("agentPage.detecting")}</span>
           ) : null}
         </div>
         {hostAvailable ? (
@@ -509,8 +513,8 @@ function RuntimePicker({
             type="button"
             onClick={() => void runtimeCatalog.reprobe()}
             disabled={checking}
-            aria-label="Recheck installed runtimes"
-            title="Recheck"
+            aria-label={t("agentPage.recheckInstalledRuntimes")}
+            title={t("agentPage.recheck")}
             className="border border-transparent p-1 text-text-muted transition-colors hover:text-text-primary disabled:cursor-default disabled:opacity-60"
           >
             <RefreshIcon className={cn("size-3.5", checking && "animate-spin")} />
@@ -524,11 +528,11 @@ function RuntimePicker({
           const state = detectionActive ? runtimeStateByKind.get(entry.kind) : undefined;
           const title =
             state === "absent"
-              ? "Not detected on this computer"
+              ? t("agentPage.notDetectedOnThis")
               : state === "present_unverified"
-                ? "Installed, version unverified"
+                ? t("agentPage.installedVersionUnverified")
                 : state === "unknown"
-                  ? "Couldn't verify — you can still create"
+                  ? t("agentPage.couldntVerifyYouCan")
                   : undefined;
           return (
             <button
@@ -543,7 +547,9 @@ function RuntimePicker({
               aria-pressed={isSelected}
             >
               {entry.cliLabel}
-              {absent ? <span className="ml-1.5 text-text-muted">not installed</span> : null}
+              {absent ? (
+                <span className="ml-1.5 text-text-muted">{t("agentPage.notInstalled")}</span>
+              ) : null}
             </button>
           );
         })}
@@ -553,14 +559,14 @@ function RuntimePicker({
   );
 }
 
-const AGENT_CREATE_ERROR_MESSAGES: Record<string, string> = {
-  local_host_ambiguous: "Choose which computer should run this agent.",
-  local_host_unbound: "No connected computer can run this agent. Connect one and try again.",
-  host_attach_pending: "That computer is not connected yet. Try again in a moment.",
-  host_revoked: "That computer isn't available anymore. Pick another and try again.",
-  host_not_owned: "That computer isn't available anymore. Pick another and try again.",
-  host_missing: "That computer isn't available anymore. Pick another and try again.",
-};
+const agentCreateErrorMessages = (): Record<string, string> => ({
+  local_host_ambiguous: t("agentPage.chooseWhichComputerShould"),
+  local_host_unbound: t("agentPage.noConnectedComputerCan"),
+  host_attach_pending: t("agentPage.thatComputerIsNot"),
+  host_revoked: t("agentPage.thatComputerIsntAvailable"),
+  host_not_owned: t("agentPage.thatComputerIsntAvailable"),
+  host_missing: t("agentPage.thatComputerIsntAvailable"),
+});
 
 /** Map a create-agent failure to a calm, user-facing line. Known
  *  host-placement codes keep their tailored copy; new backend errors still
@@ -568,9 +574,9 @@ const AGENT_CREATE_ERROR_MESSAGES: Record<string, string> = {
  *  retry message. */
 function friendlyCreateError(err: unknown): string {
   return describeApiError(err, {
-    actionLabel: "Couldn't create the agent",
-    backendUnreachableMessage: "Can't reach the backend. Check your connection and try again.",
-    fallbackMessage: "Couldn't create the agent. Please try again.",
-    knownCodeMessages: AGENT_CREATE_ERROR_MESSAGES,
+    actionLabel: t("agentPage.couldntCreateTheAgent"),
+    backendUnreachableMessage: t("agentPage.cantReachTheBackend"),
+    fallbackMessage: t("agentPage.couldntCreateTheAgent2"),
+    knownCodeMessages: agentCreateErrorMessages(),
   });
 }

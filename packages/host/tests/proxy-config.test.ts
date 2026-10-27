@@ -1,17 +1,8 @@
-import {
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  readDaemonProxyConfig,
-  writeDaemonProxyConfig,
-} from '../src/daemon/proxy-config.js';
+import { readDaemonProxyConfig, writeDaemonProxyConfig } from '../src/daemon/proxy-config.js';
 
 describe('daemon proxy config', () => {
   let dir: string | null = null;
@@ -84,8 +75,6 @@ describe('daemon proxy config', () => {
 
     expect(config).toEqual({ proxy_url: null, proxy_runtimes: [] });
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]?.msg).toBe(
-      'daemon proxy config read failed; falling back to empty config',
-    );
+    expect(warnings[0]?.msg).toBe('daemon proxy config read failed; falling back to empty config');
   });
 });

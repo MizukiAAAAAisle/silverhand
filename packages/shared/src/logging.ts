@@ -22,15 +22,8 @@ export const FORBIDDEN_LOG_FIELDS = [
 
 export const FORBIDDEN_LOG_FIELD_PREFIXES = ['env_'] as const;
 
-export function parseSilverhandLogLevel(
-  value: string | undefined,
-): SilverhandLogLevel {
-  if (
-    value === 'error' ||
-    value === 'warn' ||
-    value === 'info' ||
-    value === 'debug'
-  ) return value;
+export function parseSilverhandLogLevel(value: string | undefined): SilverhandLogLevel {
+  if (value === 'error' || value === 'warn' || value === 'info' || value === 'debug') return value;
   return DEFAULT_SILVERHAND_LOG_LEVEL;
 }
 
@@ -48,7 +41,7 @@ function sanitizeLogValue(
     if (seen.has(value)) return { value: '[Circular]', redacted: 0 };
     seen.add(value);
     let redacted = 0;
-    const out = value.map(item => {
+    const out = value.map((item) => {
       const sanitized = sanitizeLogValue(item, seen);
       redacted += sanitized.redacted;
       return sanitized.value;
@@ -87,7 +80,7 @@ function sanitizeLogRecord(
 
 function isForbiddenLogField(key: string): boolean {
   if ((FORBIDDEN_LOG_FIELDS as readonly string[]).includes(key)) return true;
-  return FORBIDDEN_LOG_FIELD_PREFIXES.some(prefix => key.startsWith(prefix));
+  return FORBIDDEN_LOG_FIELD_PREFIXES.some((prefix) => key.startsWith(prefix));
 }
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {

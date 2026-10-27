@@ -3,6 +3,7 @@ import { cn } from "@/lib/cn";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import type { AuthorAvatar, AuthorPresentation } from "../model/author-presentation";
+import { t } from "@/lib/i18n";
 
 /**
  * The ONE avatar renderer for a resolved {@link AuthorAvatar} (#task:1792), so
@@ -93,9 +94,9 @@ export function DeletedActorMarker(): JSX.Element {
   return (
     <span
       className="rounded-(--chip-radius) bg-bg-elevated px-1 py-px text-(length:--text-badge) font-medium uppercase tracking-wide text-text-muted"
-      title="This account was deleted"
+      title={t("messages.thisAccountWasDeleted")}
     >
-      deleted
+      {t("messages.deleted")}
     </span>
   );
 }
@@ -144,7 +145,7 @@ function NeutralAgentAvatar({
     <span
       data-avatar-ground
       className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle text-text-muted",
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-(--avatar-radius) align-middle text-text-muted",
         className,
       )}
       style={{ width: size, height: size }}

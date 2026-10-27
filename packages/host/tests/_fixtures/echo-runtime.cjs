@@ -77,7 +77,7 @@ if (ignoreSigterm) {
 // with STDIN:. The newline boundary matches the supervisor's
 // stdin-write contract (one stream-json line per write).
 let stdinBuffer = '';
-process.stdin.on('data', chunk => {
+process.stdin.on('data', (chunk) => {
   if (!echoStdin) return;
   stdinBuffer += chunk.toString('utf-8');
   let nl = stdinBuffer.indexOf('\n');
@@ -108,4 +108,3 @@ for (const line of emitLines) {
 // `code === 0` arm) or non-zero (crashed on the projector's
 // "otherwise" arm).
 setTimeout(() => process.exit(exitCode), sleepMs);
-

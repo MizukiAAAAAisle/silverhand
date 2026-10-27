@@ -83,12 +83,7 @@
  *     these into the allowlist literals; comparing against the
  *     raw authority host blocks them at the policy gate.
  */
-const LOOPBACK_HOSTNAMES = new Set<string>([
-  'localhost',
-  '127.0.0.1',
-  '::1',
-  '[::1]',
-]);
+const LOOPBACK_HOSTNAMES = new Set<string>(['localhost', '127.0.0.1', '::1', '[::1]']);
 
 /**
  * Pure host classification. Lowercases before comparing because the
@@ -350,10 +345,7 @@ export function classifyServerUrl(
     return {
       ok: false,
       reason: 'malformed_url',
-      message:
-        err instanceof Error
-          ? `Invalid URL: ${err.message}`
-          : 'Invalid URL',
+      message: err instanceof Error ? `Invalid URL: ${err.message}` : 'Invalid URL',
     };
   }
   if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -376,13 +368,8 @@ export function classifyServerUrl(
   // concept in the V1 contract. Allowed forms: `parsed.pathname`
   // is `''` or `'/'` (both yield the same canonical origin),
   // `parsed.search` is `''`, `parsed.hash` is `''`.
-  const isPathnameOriginShaped =
-    parsed.pathname === '' || parsed.pathname === '/';
-  if (
-    !isPathnameOriginShaped ||
-    parsed.search !== '' ||
-    parsed.hash !== ''
-  ) {
+  const isPathnameOriginShaped = parsed.pathname === '' || parsed.pathname === '/';
+  if (!isPathnameOriginShaped || parsed.search !== '' || parsed.hash !== '') {
     return {
       ok: false,
       reason: 'non_origin_url',

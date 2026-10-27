@@ -2,6 +2,7 @@ import { ComputerDetailSkeleton } from "./components/computer-skeletons";
 import type { HostDto } from "@silverhand/shared";
 import { HostDetailView } from "@/pages/computer/components/host-detail-view";
 import { DirectoryPlaceholder } from "@/components/layout/directory-shell";
+import { t } from "@/lib/i18n";
 
 export function ComputerDetailPage({
   host,
@@ -15,6 +16,6 @@ export function ComputerDetailPage({
   ) : loading ? (
     <ComputerDetailSkeleton />
   ) : (
-    <DirectoryPlaceholder>Select a computer</DirectoryPlaceholder>
+    <DirectoryPlaceholder>{t("computers.selectAComputer")}</DirectoryPlaceholder>
   );
 }

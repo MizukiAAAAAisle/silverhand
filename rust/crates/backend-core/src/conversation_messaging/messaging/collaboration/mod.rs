@@ -43,7 +43,8 @@ pub use runtime_control::{
     RuntimeControlAdmissionRefusal, RuntimeControlAdmissionScope, RuntimeControlFailure,
     RuntimeControlObservedStatus, RuntimeControlPort, RuntimeControlSeatMismatch,
     RuntimeControlSeatPort, RuntimeControlSeatSnapshot, RuntimePlacementRefusal, RuntimeSeatTarget,
-    RuntimeStartTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal, StartRuntimeRefusal,
-    check_runtime_control_admission, clear_agent_session, clear_conversation_session,
-    hard_stop_runtime, seal_clear_session_commit, start_runtime,
+    RuntimeStartTarget, RuntimeUnavailable, RuntimeUnavailableReason, StartRuntimeOutcome,
+    StartRuntimeProviderRefusal, StartRuntimeRefusal, check_runtime_control_admission,
+    clear_agent_session, clear_conversation_session, hard_stop_runtime, seal_clear_session_commit,
+    start_runtime,
 };

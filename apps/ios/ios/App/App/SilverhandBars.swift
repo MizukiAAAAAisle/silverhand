@@ -414,12 +414,17 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
     }
   }
 
-  /// The page scroller whose top edge this extends.
+  /// The page scroller whose top edge this extends. The strip joins the bar's
+  /// edge effect only while it carries the Duo title, plain text that needs it;
+  /// the view tabs alone are glass capsules with their own ground.
   func observe(_ scroller: UIScrollView?) {
+    observed = scroller
     if #available(iOS 26.0, *) {
-      (edgeInteraction as? UIScrollEdgeElementContainerInteraction)?.scrollView = scroller
+      (edgeInteraction as? UIScrollEdgeElementContainerInteraction)?.scrollView =
+        showsTitle ? scroller : nil
     }
   }
+  private weak var observed: UIScrollView?
 
   override func layoutSubviews() {
     super.layoutSubviews()
@@ -450,6 +455,7 @@ final class PageAccessory: UIView, UIDragInteractionDelegate, UIDropInteractionD
   ) {
     showsTitle = title != nil || titleButton != nil
     showsTabs = tabs != nil
+    observe(observed)
     if let title {
       let text = NSMutableAttributedString(
         string: title.text,
@@ -676,11 +682,17 @@ struct TitlebarState: Equatable {
   let searchShortcut: String
   /// The window frame behind the panes is dark.
   let dark: Bool
+  /// The page header's buttons, drawn beside the vertical bar's own.
+  let actions: [BarAction]
 }
 
 /// The wide layout's window titlebar: the sidebar toggle, the archive status
 /// and the global search field. The web page draws the search results below
 /// it and receives the field's text and keys.
+///
+/// On an open iPhone Duo the vertical bar stands in for the titlebar row:
+/// search and the sidebar toggle sit above its tabs, and search opens the
+/// page's own search field.
 @MainActor
 final class Titlebar: NSObject, UITextFieldDelegate {
   var state: TitlebarState?
@@ -690,6 +702,10 @@ final class Titlebar: NSObject, UITextFieldDelegate {
   private lazy var sidebar = UIBarButtonItem(
     image: nil,
     primaryAction: UIAction { [weak self] _ in self?.onEvent?(["kind": "toggleSidebar"]) })
+  private lazy var search = UIBarButtonItem(
+    image: UIImage(systemName: "magnifyingglass"),
+    primaryAction: UIAction { [weak self] _ in self?.focusSearch() })
+  private var vertical = false
   private let status: UIBarButtonItem = {
     let item = UIBarButtonItem(title: nil)
     item.isEnabled = false
@@ -707,28 +723,55 @@ final class Titlebar: NSObject, UITextFieldDelegate {
     field.addTarget(self, action: #selector(changed), for: .editingChanged)
     field.onKey = { [weak self] key in self?.onEvent?(["kind": "searchKey", "key": key]) }
     sidebar.tintColor = .label
+    search.tintColor = .label
   }
 
   /// `width` is the window's; the field follows the desktop pill's
   /// `clamp(420px, 52vw, 720px)`.
-  func apply(to item: UINavigationItem, width: CGFloat, enabled: Bool) {
+  func apply(to item: UINavigationItem, width: CGFloat, vertical: Bool, enabled: Bool) {
     guard let state else { return }
     fieldWidth.constant = min(720, max(420, width * 0.52))
     field.isEnabled = enabled
     sidebar.isEnabled = enabled
+    search.isEnabled = enabled
     field.placeholder = state.searchPlaceholder
+    search.accessibilityLabel = state.searchShortcut
     // The desktop glyphs: the chevron points at what a tap does.
     if let toggle = state.sidebar {
       sidebar.image = UIImage(named: toggle.shown ? "TitlebarSidebarClose" : "TitlebarSidebarOpen")
       sidebar.accessibilityLabel = toggle.label
     }
     status.title = state.status
+    self.vertical = vertical
+
+    if vertical, #available(iOS 27.1, *) {
+      let page = state.actions.map { action in
+        let item = BarGlyphs.item(for: action) { [weak self] id in
+          self?.onEvent?(["kind": "action", "id": id])
+        }
+        item.isEnabled = enabled
+        return [item]
+      }
+      let groups = [[search]] + (state.sidebar == nil ? [] : [[sidebar]]) + page
+      for item in groups.joined() { item.axisBehavior = .verticalPreferred }
+      item.verticalBarCompressionBehavior = .prefersTabBar
+      item.trailingItemGroups = BarGlyphs.groups(groups)
+      return
+    }
+
     if item.titleView !== field { item.titleView = field }
     item.leftBarButtonItems =
       (state.sidebar == nil ? [] : [sidebar]) + (state.status == nil ? [] : [status])
   }
 
-  func focusSearch() { field.becomeFirstResponder() }
+  /// Beside the vertical bar the page draws the search field itself.
+  func focusSearch() {
+    if vertical {
+      onEvent?(["kind": "searchOpen"])
+    } else {
+      field.becomeFirstResponder()
+    }
+  }
 
   func endSearch(clear: Bool) {
     if clear { field.text = "" }

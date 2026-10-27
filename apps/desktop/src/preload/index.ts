@@ -7,6 +7,8 @@ import type {
 import type {
   ClientAuthState,
   ClientAuthResult,
+  PasswordRecoveryCall,
+  PasswordRecoveryResult,
   BackendProxyRequest,
   BackendProxyResponse,
   BackendUploadRequest,
@@ -94,11 +96,14 @@ const api: DesktopBridge = {
   getDesktopBuildConfig: async (): Promise<DesktopBuildConfig> => desktopBuildConfig(),
   getBackendInfo: (): Promise<DesktopBackendInfo | null> => ipcRenderer.invoke("backend:info"),
   getAuthState: (): Promise<ClientAuthState> => ipcRenderer.invoke("auth:getState"),
+  getServerInfo: () => ipcRenderer.invoke("server:info"),
   signup: (input: AuthSignupInput): Promise<ClientAuthResult> =>
     ipcRenderer.invoke("auth:signup", input),
   login: (input: AuthLoginInput): Promise<ClientAuthResult> =>
     ipcRenderer.invoke("auth:login", input),
   logout: (): Promise<{ ok: true }> => ipcRenderer.invoke("auth:logout"),
+  passwordRecovery: (input: PasswordRecoveryCall): Promise<PasswordRecoveryResult> =>
+    ipcRenderer.invoke("auth:passwordRecovery", input),
   backendRequest: (input: BackendProxyRequest): Promise<BackendProxyResponse> =>
     ipcRenderer.invoke("backend:request", input),
   backendUpload: (input: BackendUploadRequest): Promise<BackendProxyResponse> =>
@@ -186,7 +191,7 @@ const api: DesktopBridge = {
     ipcRenderer.on("window:full-screen", listener);
     return () => ipcRenderer.off("window:full-screen", listener);
   },
-  /** Fired by the App menu's "Settings…" item (Cmd+,) so the renderer
+  /** Fired by the App menu's "Settings" item (Cmd+,) so the renderer
    *  can navigate to the Settings page. The main process also focuses
    *  the window before emitting, so the handler only needs to navigate. */
   onNavigateSettings: (handler: () => void): (() => void) => {
@@ -210,14 +215,16 @@ const api: DesktopBridge = {
   respondContextualClose: (reqId: string, outcome: "closed-panel" | "background-app"): void => {
     ipcRenderer.send("shortcut:contextual-close-result", reqId, outcome);
   },
+  /** The renderer's resolved language, so native menus read the same as the page. */
+  setLocale: (locale: "en" | "zh"): void => {
+    ipcRenderer.send("app:set-locale", locale);
+  },
   showSystemNotification: (opts: {
     title: string;
     subtitle?: string;
     body?: string;
     groupId?: string;
     force?: boolean;
-    /** The target is the displayed conversation; a focused desktop window uses sound only. */
-    currentConversation?: boolean;
     /** Opaque id echoed back via `onNotificationClicked` so the renderer
      *  can route the click to the right navigation target. Fire-and-
      *  forget if omitted (the notification is just informational). */

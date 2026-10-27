@@ -1,10 +1,11 @@
 import { SkeletonBlock as Block, SkeletonRegion as Region } from "@/components/layout/skeleton";
 import { COLLECTION_CARD_CLASS } from "@/components/layout/collection-item-card";
+import { t } from "@/lib/i18n";
 export function ArchivedListSkeleton(): JSX.Element {
   return (
-    <Region label="Loading archived channels">
+    <Region label={t("chat.loadingArchivedChannels")}>
       <h2 className="px-1 pb-2 text-(length:--text-meta) font-medium uppercase tracking-wider text-text-secondary">
-        Channels
+        {t("chat.channels")}
       </h2>
       <div className="space-y-2">
         {["w-3/5", "w-2/5", "w-1/2"].map((width) => (

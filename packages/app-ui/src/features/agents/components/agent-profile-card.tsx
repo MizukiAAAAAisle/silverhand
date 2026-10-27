@@ -23,7 +23,8 @@ import { rejectDisplayName } from "@/features/identity/display-name";
 import { InlineTextarea } from "./inline-textarea";
 import { RuntimeConfigEditor } from "./runtime-config-editor";
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
-import { UNKNOWN_COMPUTER_LABEL } from "@/features/computers/model/host-display";
+import { unknownComputerLabel } from "@/features/computers/model/host-display";
+import { t } from "@/lib/i18n";
 
 interface AgentProfileCardProps {
   agent: AgentDto;
@@ -42,7 +43,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
   // Server-resolved label, not a local owned-hosts lookup: `GET /api/hosts` is
   // owner-scoped, so a non-owner viewer's lookup would miss and collapse to
   // "Unknown computer". `host_label` is null only when the host is truly gone.
-  const computerName = agent.host_label ?? UNKNOWN_COMPUTER_LABEL;
+  const computerName = agent.host_label ?? unknownComputerLabel();
   const { profileRef, compactHero } = useProfileHeroSize();
   const avatarSize = compactHero ? AVATAR_PX.profileCompact : AVATAR_PX.profile;
 
@@ -54,7 +55,11 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
     <div ref={profileRef} data-profile-layout className="mx-auto flex flex-col gap-6">
       {!canEdit ? <ReadOnlyNotice /> : null}
 
-      <section aria-label="Agent profile" data-compact={compactHero} className="agent-profile-hero">
+      <section
+        aria-label={t("agents.agentProfile")}
+        data-compact={compactHero}
+        className="agent-profile-hero"
+      >
         {canEdit ? (
           <EditableAgentAvatar
             agentId={agent.id}
@@ -79,7 +84,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
                 {canEdit ? (
                   <InlineText
                     value={agent.display_name}
-                    ariaLabel="Display name"
+                    ariaLabel={t("agents.displayName")}
                     editing={nameEditing}
                     onExitEdit={() => setNameEditing(false)}
                     validate={rejectDisplayName}
@@ -97,7 +102,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
               {canEdit ? (
                 <EditPencilButton
                   onClick={() => setNameEditing(true)}
-                  ariaLabel="Edit display name"
+                  ariaLabel={t("agents.editDisplayName")}
                   hidden={nameEditing}
                 />
               ) : null}
@@ -119,8 +124,8 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
               {canEdit ? (
                 <InlineTextarea
                   value={agent.description}
-                  placeholder="Add description"
-                  ariaLabel="Description"
+                  placeholder={t("agents.addDescription")}
+                  ariaLabel={t("agents.description")}
                   editing={descriptionEditing}
                   onExitEdit={() => setDescriptionEditing(false)}
                   onCommit={async (next) => {
@@ -128,13 +133,17 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
                   }}
                 />
               ) : (
-                <ReadOnlyValue value={agent.description} placeholder="No description." multiline />
+                <ReadOnlyValue
+                  value={agent.description}
+                  placeholder={t("agents.noDescription")}
+                  multiline
+                />
               )}
             </div>
             {canEdit ? (
               <EditPencilButton
                 onClick={() => setDescriptionEditing(true)}
-                ariaLabel="Edit description"
+                ariaLabel={t("agents.editDescription")}
                 hidden={descriptionEditing}
               />
             ) : null}
@@ -143,7 +152,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
       </section>
 
       <ProfileFactBand>
-        <ProfileFact icon={<ComputerIcon className="size-3.5" />} label="Computer">
+        <ProfileFact icon={<ComputerIcon className="size-3.5" />} label={t("agents.computer")}>
           <span className="font-medium text-text-primary">{computerName}</span>
         </ProfileFact>
         <ProfileFact
@@ -154,13 +163,15 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
               <UnlinkIcon className="size-3.5" />
             )
           }
-          label="Session"
+          label={t("agents.session")}
         >
           <span className="font-medium text-text-primary">
-            {agent.session_scope === "agent" ? "Across conversations" : "Per conversation"}
+            {agent.session_scope === "agent"
+              ? t("agents.acrossConversations")
+              : t("agents.perConversation")}
           </span>
         </ProfileFact>
-        <ProfileFact icon={<ClockIcon className="size-3.5" />} label="Created">
+        <ProfileFact icon={<ClockIcon className="size-3.5" />} label={t("agents.created")}>
           <span
             className="font-medium text-text-primary"
             title={dayjs(agent.created_at).format("YYYY-MM-DD HH:mm:ss")}
@@ -176,12 +187,12 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
       <ProfileMessageActivity subject={{ kind: "agent", id: agent.id }} />
 
       <ProfileSection
-        title="Runtime configuration"
+        title={t("agents.runtimeConfiguration")}
         titleAdornment={
           canEdit ? (
             <EditPencilButton
               onClick={() => setRuntimeEditing(true)}
-              ariaLabel="Edit runtime configuration"
+              ariaLabel={t("agents.editRuntimeConfiguration")}
               hidden={runtimeEditing}
             />
           ) : null
@@ -204,7 +215,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
 function ReadOnlyNotice(): JSX.Element {
   return (
     <p role="note" className="text-xs text-text-muted" data-testid="agent-profile-readonly-notice">
-      Only the creator can edit this agent's profile.
+      {t("agents.onlyTheCreatorCan")}
     </p>
   );
 }

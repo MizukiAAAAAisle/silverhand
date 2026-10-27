@@ -1,4 +1,4 @@
-# Silverhand iOS preview
+# Silverhand iOS
 
 Capacitor 8 hosts the bundled `@silverhand/app-ui`. Swift implements the
 `ClientPlatform` adapter; the phone never claims a computer or starts a daemon.
@@ -68,7 +68,7 @@ submitting credentials; network/TLS errors leave retry and address repair availa
 - Generation checks reject late HTTP and login results. Socket identity and
   generation checks suppress frames from retired connections. Native state
   changes commit before retargeting; Keychain errors do not commit a new server.
-- Server changes, logout and session invalidation clear the preview's browser
+- Server changes, logout and session invalidation clear the app's browser
   storage and reload the app, dropping all module/query/socket state. Background
   entry closes sockets; foreground entry revalidates the session, reconnects WS
   and refreshes snapshots in the existing React tree, preserving composer drafts

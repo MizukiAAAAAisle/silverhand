@@ -12,6 +12,7 @@ import {
   routeRuntimeConfigSave,
   type RuntimeConfigDraft,
 } from "./runtime-config-editor";
+import { t } from "@/lib/i18n";
 
 const baseAgent: AgentDto = {
   id: "a-1",
@@ -325,7 +326,7 @@ describe("modelDraftAfterCommit — unified Combobox commit mapping", () => {
   };
 
   it("picks driver default when the dropdown sentinel comes through", () => {
-    expect(modelDraftAfterCommit(seed, "Use driver default")).toEqual({
+    expect(modelDraftAfterCommit(seed, t("agents.useDriverDefault"))).toEqual({
       ...seed,
       modelChoice: "default",
       modelValue: "",

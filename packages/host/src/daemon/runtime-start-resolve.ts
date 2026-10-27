@@ -56,10 +56,7 @@ import type {
   RuntimeStartErrorCode,
   StartOptions,
 } from '../protocol.js';
-import {
-  AGENT_HOME_WORKSPACE_ID_PREFIX,
-  agentHomeWorkspaceId,
-} from '@silverhand/shared';
+import { AGENT_HOME_WORKSPACE_ID_PREFIX, agentHomeWorkspaceId } from '@silverhand/shared';
 import {
   bundleL2Present,
   resolveAgentDir,
@@ -72,9 +69,7 @@ import {
 import { join } from 'node:path';
 import { DaemonTypedError } from './typed-error.js';
 
-export function isAgentStartOptions(
-  options: StartOptions,
-): options is AgentStartOptions {
+export function isAgentStartOptions(options: StartOptions): options is AgentStartOptions {
   return options.runtime_scope.kind === 'agent';
 }
 
@@ -85,9 +80,7 @@ export function isResolvedAgentStartOptions(
 }
 
 /** A workspace ref with the daemon-resolved absolute `path` attached. */
-export type ResolvedWorkspaceRef = NonNullable<
-  ConversationStartOptions['workspace']
-> & {
+export type ResolvedWorkspaceRef = NonNullable<ConversationStartOptions['workspace']> & {
   path: string;
 };
 
@@ -104,9 +97,7 @@ export type ResolvedWorkspaceRef = NonNullable<
  * (relocation-v1 §3.3). This is a memory-path fact, NOT the cwd-usability fact
  * `list_workspaces.agent_dir` reports.
  */
-export type ResolvedWorkspaceIndexRef = NonNullable<
-  ConversationStartOptions['workspace']
-> & {
+export type ResolvedWorkspaceIndexRef = NonNullable<ConversationStartOptions['workspace']> & {
   path: string | null;
 };
 
@@ -137,12 +128,9 @@ export type ResolvedConversationStartOptions = Omit<
     workspace_memory_index: ResolvedWorkspaceIndexRef[];
   };
 
-export type ResolvedAgentStartOptions = Omit<AgentStartOptions, 'agent'> &
-  ResolvedCommon;
+export type ResolvedAgentStartOptions = Omit<AgentStartOptions, 'agent'> & ResolvedCommon;
 
-export type ResolvedStartOptions =
-  | ResolvedConversationStartOptions
-  | ResolvedAgentStartOptions;
+export type ResolvedStartOptions = ResolvedConversationStartOptions | ResolvedAgentStartOptions;
 
 /** Typed, dispatcher-projectable failure to resolve a runtime_start path. */
 export class RuntimeStartResolveError extends DaemonTypedError {
@@ -200,11 +188,7 @@ export function resolveRuntimeActionWorkdir(
   if (runtimeScope.kind === 'agent') return homeDir;
   if (target.workspace === null) {
     try {
-      return join(
-        homeDir,
-        'conversations',
-        assertSafeWorkspaceIdSegment(target.conversation_id),
-      );
+      return join(homeDir, 'conversations', assertSafeWorkspaceIdSegment(target.conversation_id));
     } catch (err) {
       if (err instanceof WorkspaceIdSegmentError) {
         throw new RuntimeStartResolveError('registry_unavailable', err.message);
@@ -243,9 +227,7 @@ export function resolveRuntimeActionWorkdir(
  * means "not attached yet" — a runtime must never spawn believing it is on
  * a placeholder computer, so this refuses rather than guessing.
  */
-export function resolveAuthenticatedComputerId(
-  binding: { host_id: string } | null,
-): string {
+export function resolveAuthenticatedComputerId(binding: { host_id: string } | null): string {
   if (binding == null) {
     throw new RuntimeStartResolveError(
       'registry_unavailable',
@@ -307,9 +289,7 @@ export async function resolveRuntimeStartPaths(
   // caller's, and differs for the active workspace vs an index entry). Throws
   // a typed `RuntimeStartResolveError` for a foreign/corrupt `agent_home` ref
   // or an unsafe regular id segment.
-  const resolvePath = (
-    workspace: NonNullable<ConversationStartOptions['workspace']>,
-  ): string => {
+  const resolvePath = (workspace: NonNullable<ConversationStartOptions['workspace']>): string => {
     // I4 / single-source guard (#task:2081): the wire no longer carries a
     // `kind`, so the id is the sole authority. The `wsah_` prefix identifies an
     // agent-home-shaped ref (WHICH alphabet); the exact match against this
@@ -322,7 +302,7 @@ export async function resolveRuntimeStartPaths(
           'workspace_not_provisioned',
           `agent_home workspace ref '${workspace.id}' does not belong to agent ` +
             `'${agentId}' (expected '${ownHomeWorkspaceId}'); refusing to ` +
-            'resolve a foreign ref onto this agent\'s L1',
+            "resolve a foreign ref onto this agent's L1",
         );
       }
       return homeDir;
@@ -370,9 +350,7 @@ export async function resolveRuntimeStartPaths(
     };
   };
 
-  const workspace = options.workspace === null
-    ? null
-    : resolveActive(options.workspace);
+  const workspace = options.workspace === null ? null : resolveActive(options.workspace);
   let cwd: string;
   if (workspace === null) {
     try {

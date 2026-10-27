@@ -2,6 +2,7 @@ import { useId, useState, type ReactNode } from "react";
 import { FiltersIcon } from "@/icons";
 import { useCompactLayout } from "@/navigation/layout";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 import { iconMarkup, type NativeBarAction } from "@/components/layout/native-page-bar";
 
 /** Presentation only: query and filter values remain owned by the page. */
@@ -28,7 +29,7 @@ export function FilterToggle({
   active: boolean;
 }): JSX.Element | null {
   if (!disclosure.compact) return null;
-  const label = `${disclosure.expanded ? "Hide" : "Show"} filters${active ? " (active)" : ""}`;
+  const label = t(`ui.filters.${disclosure.expanded ? "hide" : "show"}${active ? "Active" : ""}`);
   // Compact only: the navigation bar's glass capsule, like Back beside it.
   return (
     <button
@@ -54,9 +55,9 @@ export function filterBarAction(
   if (!disclosure.compact) return null;
   return {
     id: "filters",
-    label: `${disclosure.expanded ? "Hide" : "Show"} filters`,
+    label: t(`ui.filters.${disclosure.expanded ? "hide" : "show"}`),
     accessibilityLabel: active
-      ? `${disclosure.expanded ? "Hide" : "Show"} filters (active)`
+      ? t(`ui.filters.${disclosure.expanded ? "hide" : "show"}Active`)
       : undefined,
     icon: iconMarkup(FiltersIcon),
     selected: disclosure.expanded,
@@ -77,7 +78,7 @@ export function FilterPanel({
   return (
     <section
       id={disclosure.contentId}
-      aria-label="Filters"
+      aria-label={t("ui.filters.label")}
       hidden={!disclosure.expanded}
       className={className}
     >

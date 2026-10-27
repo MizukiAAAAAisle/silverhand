@@ -356,6 +356,10 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyC
     reason: "saved avatar-maker design per principal; no conversation axis",
   },
   "backend-info": { verdicts: ["exempt"], reason: "backend build info; no conversation axis" },
+  "server-environment": {
+    verdicts: ["exempt"],
+    reason: "connection mode and server features; no conversation axis",
+  },
   "channel-detail": { verdicts: ["swept"], reason: "['channel-detail', cid] → position 1" },
   channels: {
     verdicts: ["swept"],
@@ -413,6 +417,7 @@ export const VIEWER_LOCAL_CHANNEL_KEY_CLASSIFICATION: Record<string, ChannelKeyC
   },
   "inline-find": { verdicts: ["swept"], reason: "['inline-find', cid, …] → position 1" },
   me: { verdicts: ["exempt"], reason: "viewer identity + capabilities; no conversation axis" },
+  "me-email": { verdicts: ["exempt"], reason: "viewer's own email; no conversation axis" },
   "message-reactions": {
     verdicts: ["retained"],
     reason:

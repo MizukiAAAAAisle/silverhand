@@ -10,6 +10,7 @@ import { cn } from "@/lib/cn";
 import { sidebarRowStateClass } from "@/components/layout/sidebar-shared";
 import { ConversationGlyph } from "@/components/conversation-glyph";
 import { AgentActivityTimeline, AgentStreamActivityTimeline } from "./agent-activity-timeline";
+import { t } from "@/lib/i18n";
 
 interface AgentActivityPaneProps {
   agentId: string;
@@ -99,18 +100,19 @@ function ConversationActivityPane({ agentId, state }: AgentActivityPaneProps): J
         <div className="flex-1 overflow-y-auto px-1.5 py-2">
           {groups.active.length === 0 && groups.recent.length === 0 ? (
             <p className="px-2 py-6 text-center text-(length:--text-meta) text-text-muted">
-              Not in any channel.
+              {t("agents.notInAnyChannel")}
             </p>
           ) : (
             <>
               <RosterGroup
-                label="Active"
+                label={t("agents.active")}
+                live
                 rows={groups.active}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
               />
               <RosterGroup
-                label="Recent"
+                label={t("agents.recent")}
                 rows={groups.recent}
                 selectedId={selectedId}
                 onSelect={setSelectedId}
@@ -129,7 +131,7 @@ function ConversationActivityPane({ agentId, state }: AgentActivityPaneProps): J
         />
       ) : (
         <div className="flex flex-1 items-center justify-center text-xs text-text-muted">
-          Select a channel to see its activity.
+          {t("agents.selectAChannelTo")}
         </div>
       )}
     </div>
@@ -138,11 +140,13 @@ function ConversationActivityPane({ agentId, state }: AgentActivityPaneProps): J
 
 function RosterGroup({
   label,
+  live = false,
   rows,
   selectedId,
   onSelect,
 }: {
   label: string;
+  live?: boolean;
   rows: AgentRuntimeParticipation[];
   selectedId: string | null;
   onSelect: (id: string) => void;
@@ -160,7 +164,7 @@ function RosterGroup({
             row={row}
             selected={row.conversation_id === selectedId}
             onSelect={onSelect}
-            live={label === "Active"}
+            live={live}
           />
         ))}
       </ul>
@@ -237,7 +241,7 @@ function RosterItem({
         {live ? (
           <span
             data-status-pip
-            aria-label="active"
+            aria-label={t("agents.active2")}
             className="size-1.5 shrink-0 rounded-(--pill-radius) bg-success"
           />
         ) : null}

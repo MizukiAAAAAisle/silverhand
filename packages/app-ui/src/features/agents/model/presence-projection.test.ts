@@ -27,6 +27,7 @@ import { describe, expect, it } from "vitest";
 import type { ConversationAgentStatus } from "@silverhand/shared";
 import type { GlobalPresence } from "../hooks/hooks";
 import type { AgentSlotScopeKind, MemberRuntimeStatus } from "./member-runtime-status";
+import { t } from "@/lib/i18n";
 import { PRESENCE_TONE_DOT, projectPresence, type PresenceTone } from "./presence-projection";
 
 const SCOPES: readonly AgentSlotScopeKind[] = ["conversation", "agent"];
@@ -176,14 +177,14 @@ describe("the conversation arm — a live session, both scopes (#task:2128)", ()
   });
 
   it("never attributes an agent-scoped session to this channel", () => {
+    const sentences = (scope: AgentSlotScopeKind) =>
+      ["online", "starting", "idle", "failed"].map((state) =>
+        t(`agents.sessionState.${scope}.${state as "online"}`),
+      );
     for (const status of SESSION_STATUSES) {
-      const detail = conversation(session(status, "agent"))!.detail;
-      expect(detail).not.toContain("This channel");
-      expect(detail).toContain("shared across every channel");
-    }
-    for (const status of SESSION_STATUSES) {
-      expect(conversation(session(status, "conversation"))!.detail).toContain(
-        "This channel's session",
+      expect(sentences("agent")).toContain(conversation(session(status, "agent"))!.detail);
+      expect(sentences("conversation")).toContain(
+        conversation(session(status, "conversation"))!.detail,
       );
     }
   });

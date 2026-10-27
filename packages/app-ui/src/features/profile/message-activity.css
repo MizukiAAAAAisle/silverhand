@@ -58,6 +58,7 @@
   height: 24px;
   font-size: 11px;
   color: var(--text-muted);
+  white-space: nowrap;
 }
 
 .message-activity-matrix {

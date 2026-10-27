@@ -11,6 +11,7 @@ import {
   releaseAttachmentPreview,
   setAttachmentBlobUrl,
 } from "../attachments/attachment-blob-cache";
+import { t } from "@/lib/i18n";
 
 export const MAX_DRAFTS = 10;
 
@@ -532,7 +533,7 @@ function uploadKey(conversationId: string, attachmentKey: string): string {
  *  label even if the persisted counter were somehow lost. Parses via the shared
  *  canonical parser so a non-canonical label is ignored, not misread. */
 function maxLiveOrdinal(pending: ReadonlyArray<CachedPendingAttachment>, image: boolean): number {
-  const kind = image ? "Image" : "File";
+  const kind = image ? t("messages.image") : t("messages.file");
   let max = 0;
   for (const item of pending) {
     const parsed = parseAttachmentLabel(item.label);

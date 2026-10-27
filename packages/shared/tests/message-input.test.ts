@@ -110,9 +110,7 @@ describe('message send input schemas', () => {
     expect(noTarget.success).toBe(false);
     // The human door is unaffected: it is scoped by the conversation the person
     // is composing in, not by an address.
-    expect(SendMessageInputSchema.safeParse({ content: 'hello' }).success).toBe(
-      true,
-    );
+    expect(SendMessageInputSchema.safeParse({ content: 'hello' }).success).toBe(true);
   });
 
   it('accepts reply-cluster count sidecars on message windows', () => {

@@ -1,13 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as fs from 'node:fs';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execPath } from 'node:process';
@@ -251,7 +244,7 @@ describe('runtime pidfile orphan reconcile', () => {
 
     expect(result.unlinkedCorrupt).toBe(1);
     expect(existsSync(filePath)).toBe(false);
-    expect(warnings.some(msg => msg.includes('corrupt'))).toBe(true);
+    expect(warnings.some((msg) => msg.includes('corrupt'))).toBe(true);
   });
 
   it('preserves pidfiles when kill(0) reports EPERM', () => {

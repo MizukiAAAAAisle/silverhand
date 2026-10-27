@@ -85,7 +85,7 @@ export function AgentAvatar({
       <span
         data-avatar-ground
         className={cn(
-          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle",
+          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-(--avatar-radius) align-middle",
           className,
         )}
         style={{ width: size, height: size }}
@@ -108,7 +108,7 @@ export function AgentAvatar({
     return (
       <span
         className={cn(
-          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle",
+          "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-(--avatar-radius) align-middle",
           className,
         )}
         style={{ width: size, height: size }}
@@ -127,7 +127,7 @@ export function AgentAvatar({
   return (
     <span
       className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-none align-middle",
+        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-(--avatar-radius) align-middle",
         tint?.bg,
         tint?.fg,
         className,

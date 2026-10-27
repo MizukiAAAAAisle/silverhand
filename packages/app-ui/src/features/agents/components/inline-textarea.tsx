@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from "react";
 import { cn } from "@/lib/cn";
 import { CancelButton, SaveButton } from "@/components/common/edit-toolbar-buttons";
+import { t } from "@/lib/i18n";
 
 /**
  * Inline edit textarea for a nullable long-form string (agent description,
@@ -97,7 +98,7 @@ export function InlineTextarea({
       await onCommit(decision.next);
       onExitEdit();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save.");
+      setError(err instanceof Error ? err.message : t("agents.couldNotSave"));
     } finally {
       setPending(false);
     }

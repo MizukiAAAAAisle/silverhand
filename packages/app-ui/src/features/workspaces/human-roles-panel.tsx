@@ -20,6 +20,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { useUpdateWorkspaceHumanMemberRole, useWorkspaceMemberLists } from "./hooks";
 import { useTransferWorkspaceOwnership } from "./member-mutations";
+import { t } from "@/lib/i18n";
 
 /** Stable empty reference so the avatar batch hook doesn't re-fetch on
  *  every render while members are still loading. */
@@ -30,14 +31,14 @@ const EMPTY_HUMANS: WorkspaceHumanMemberDto[] = [];
 const ASSIGNABLE_ROLES: readonly Exclude<WorkspaceRole, "owner">[] = ["admin", "member"];
 const TRANSFER_OWNER = "transfer-owner";
 
-const ROLE_LABEL: Record<WorkspaceRole, string> = {
-  owner: "Owner",
-  admin: "Admin",
-  member: "Member",
-};
+const roleLabel = (): Record<WorkspaceRole, string> => ({
+  owner: t("workspaces.owner"),
+  admin: t("workspaces.admin"),
+  member: t("workspaces.member"),
+});
 
 function viewerRoleLabel(role: WorkspaceRole | null | undefined): string {
-  return role ? ROLE_LABEL[role].toLowerCase() : "non-member";
+  return role ? roleLabel()[role] : t("workspaces.nonMember");
 }
 
 /** Turn a PATCH failure into an operator-facing message. The backend gates
@@ -45,13 +46,13 @@ function viewerRoleLabel(role: WorkspaceRole | null | undefined): string {
  *  visible even though the front-end also gates. */
 function describeRoleSaveError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.kind === "backend_unreachable") return "Update failed: cannot reach backend";
-    if (err.status === 403) return "You don't have permission (owner required)";
-    if (err.status === 404) return "Update failed: member no longer exists";
-    if (err.status === 400) return "Update failed: that role change is not allowed";
-    return `Update failed (${err.status})`;
+    if (err.kind === "backend_unreachable") return t("workspaces.updateFailedCannotReach");
+    if (err.status === 403) return t("workspaces.youDontHavePermission");
+    if (err.status === 404) return t("workspaces.updateFailedMemberNo");
+    if (err.status === 400) return t("workspaces.updateFailedThatRole");
+    return t("workspaces.updateFailedStatus", { status: err.status });
   }
-  return "Update failed";
+  return t("workspaces.updateFailed");
 }
 
 export interface HumanRolesPanelProps {
@@ -87,7 +88,9 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
   }
   if (humans.length === 0) {
     return (
-      <PanelEmpty icon={<EmptyIcon className="size-6" />}>No people in this project</PanelEmpty>
+      <PanelEmpty icon={<EmptyIcon className="size-6" />}>
+        {t("workspaces.noPeopleInThis")}
+      </PanelEmpty>
     );
   }
 
@@ -98,7 +101,10 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
       {
         onSuccess: () =>
           toast.success(
-            `${member.display_name || member.name} is now ${ROLE_LABEL[role].toLowerCase()}`,
+            t("workspaces.roleChanged", {
+              name: member.display_name || member.name,
+              role: roleLabel()[role],
+            }),
           ),
         onError: (err) => toast.error(describeRoleSaveError(err)),
       },
@@ -110,10 +116,7 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
       {!canEdit ? (
         <div className="flex items-start gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border-subtle bg-bg-elevated/40 p-2.5 text-xs text-text-muted">
           <ErrorIcon className="mt-0.5 size-3.5 shrink-0" />
-          <span>
-            You are {viewerRoleLabel(viewerRole)} in this workspace — you can view member roles, but
-            changing them requires owner.
-          </span>
+          <span>{t("workspaces.rolesReadOnly", { role: viewerRoleLabel(viewerRole) })}</span>
         </div>
       ) : null}
 
@@ -163,7 +166,7 @@ export function HumanRolesPanel({ workspaceId }: HumanRolesPanelProps): JSX.Elem
           transfer.mutate(member.user_id, {
             onSuccess: () => {
               setTransferTarget(null);
-              toast.success(`${member.display_name || member.name} is now the owner`);
+              toast.success(t("workspaces.nowOwner", { name: member.display_name || member.name }));
             },
             onError: (err) => toast.error(describeRoleSaveError(err)),
           })
@@ -192,18 +195,17 @@ function TransferOwnershipDialog({
     >
       <DialogContent className="max-w-md">
         <DialogHeader>
-          <DialogTitle>{`Transfer ownership to ${name}?`}</DialogTitle>
+          <DialogTitle>{t("workspaces.transferTitle", { name })}</DialogTitle>
         </DialogHeader>
         <DialogDescription className="text-sm leading-relaxed text-text-muted">
-          {name} becomes the owner of this project. You stay as an admin and can no longer change
-          roles or delete the project.
+          {t("workspaces.transferDetail", { name })}
         </DialogDescription>
         <DialogFooter>
           <Button variant="cancel" onClick={onCancel} disabled={pending}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button variant="primary" onClick={() => target && onConfirm(target)} disabled={pending}>
-            {pending ? "Transferring…" : "Transfer ownership"}
+            {pending ? t("workspaces.transferring") : t("workspaces.transferOwnership")}
           </Button>
         </DialogFooter>
       </DialogContent>
@@ -223,7 +225,7 @@ function RoleBadge({ role }: { role: WorkspaceRole }): JSX.Element {
           : "border-border-subtle text-text-muted",
       )}
     >
-      {ROLE_LABEL[role]}
+      {roleLabel()[role]}
     </span>
   );
 }
@@ -248,7 +250,7 @@ function RoleSelect({
       disabled={disabled}
     >
       <Select.Trigger
-        aria-label="Member role"
+        aria-label={t("workspaces.memberRole")}
         className={cn(
           "flex h-7 shrink-0 items-center justify-between gap-1.5 rounded-(--control-radius) bg-bg-base px-2.5 text-xs",
           "border-(length:--control-border-width) border-border transition-colors",
@@ -282,7 +284,7 @@ function RoleSelect({
                   </Select.ItemIndicator>
                 </span>
                 <Select.ItemText asChild>
-                  <span className="text-xs font-medium">{ROLE_LABEL[role]}</span>
+                  <span className="text-xs font-medium">{roleLabel()[role]}</span>
                 </Select.ItemText>
               </Select.Item>
             ))}
@@ -293,7 +295,7 @@ function RoleSelect({
             >
               <span className="w-3.5 shrink-0" />
               <Select.ItemText asChild>
-                <span className="text-xs font-medium">Transfer ownership…</span>
+                <span className="text-xs font-medium">{t("workspaces.transferOwnership")}</span>
               </Select.ItemText>
             </Select.Item>
           </Select.Viewport>

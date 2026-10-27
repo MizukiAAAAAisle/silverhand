@@ -295,9 +295,11 @@ const IDENTITY_CARRIERS: readonly IdentityCarrier[] = [
     // the parent avatar/runtime fields deleted once the row led with `#`). Since
     // a STARRED row no longer appears under its parent, this invalidation is the
     // ONLY convergence path for that label — do not drop it.
+    // Starred direct pairs (#task:2874) also embed the DM counterpart — either
+    // kind, with its `deleted` arm — so the row converges like `direct-pairs`.
     id: "favorites",
-    kinds: ["agent"],
-    facets: ["presentation"],
+    kinds: ["agent", "human"],
+    facets: ["presentation", "lifecycle"],
     filter: { queryKey: favoritesKey },
   },
   {

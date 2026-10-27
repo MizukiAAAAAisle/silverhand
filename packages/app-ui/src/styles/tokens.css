@@ -140,10 +140,22 @@
   --bg-terminal-select: rgba(169, 216, 119, 0.28);
 }
 
-/* Derived from each theme's ink, so no theme declares them. */
+/* Derived from each theme's ink, or fixed across themes, so no theme declares them. */
 :root {
   --bg-avatar-ground: color-mix(in oklab, var(--text-primary) 12%, transparent);
   --bg-inset: color-mix(in oklab, var(--text-primary) 7%, transparent);
-  --bg-message-bubble: color-mix(in oklab, var(--text-primary) 9%, transparent);
+  /* Side padding of every message list. A row keeps 10px inside its own edge
+     (2px frame + 8px) for the hover frame, so text sits gutter + 10px from
+     the pane edge: 26px with a mouse, 16px (the iOS margin) on touch, which
+     has no hover. */
+  --message-list-gutter: 16px;
+  /* The own bubble is the same blue in every theme (shiki: iMessage). */
+  --bg-message-bubble: #007aff;
   --text-faint: color-mix(in oklab, var(--text-muted) 75%, transparent);
+}
+
+@media (pointer: coarse) {
+  :root {
+    --message-list-gutter: 6px;
+  }
 }

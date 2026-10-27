@@ -4,6 +4,7 @@ import { ImagePreviewModal } from "@/features/messages/components/image-preview-
 import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
 import type { MessageActionSurface } from "@/features/messages/hooks/use-message-action-surface";
 import type { MessageRenderContext } from "@/features/messages/hooks/use-message-render-context";
+import { useNativeSelectionBar } from "@/features/messages/hooks/use-native-selection-bar";
 import type { WorkspaceChannelReference } from "./conversation-ref";
 
 /** Render context the image-export modal needs: a subset of
@@ -29,6 +30,7 @@ export function MessageActionChrome({
   renderCtx,
   workspaceId,
   conversationId,
+  selectionKey,
   channelTitle,
 }: {
   surface: MessageActionSurface;
@@ -41,6 +43,9 @@ export function MessageActionChrome({
    *  chip resolved — including a DM (workspaceId null) whose board is the pair
    *  conversation. */
   conversationId: string;
+  /** Names this pane's selection apart from another pane's on the same
+   *  conversation (the channel and its open thread). */
+  selectionKey: string;
   channelTitle: string | null;
 }): ReactElement {
   // The screenshot byline resolves each selected author's avatar bytes STRICTLY
@@ -54,9 +59,19 @@ export function MessageActionChrome({
   );
   const { agentAvatarUrls: authorAgentAvatarUrls, humanAvatarUrls: authorUserAvatarUrls } =
     useAuthorAvatarObjectUrls(previewAuthors);
+  const nativeBar = useNativeSelectionBar({
+    key: selectionKey,
+    active: surface.selection.active,
+    count: surface.selection.count,
+    busy: surface.imagePreviewOpen,
+    onCancel: surface.selection.exit,
+    onCopy: () => void surface.handleCopyMarkdownTranscript(),
+    onSave: surface.handleSaveImage,
+  });
+
   return (
     <>
-      {surface.selection.active ? (
+      {surface.selection.active && !nativeBar ? (
         <SelectionToolbar
           count={surface.selection.count}
           onCancel={surface.selection.exit}

@@ -13,6 +13,7 @@ import { Lightbox } from "./lightbox";
 import { saveAttachmentToDisk } from "../model/save-attachment";
 import { openAttachmentExternally } from "../model/open-attachment";
 import { attachmentPreviewKind } from "@/features/attachments/attachment-preview";
+import { t } from "@/lib/i18n";
 
 export function AttachmentList({
   attachments,
@@ -187,7 +188,7 @@ export function AttachmentTile({
             />
           ) : (
             <div className="flex h-32 w-48 items-center justify-center text-xs text-text-muted">
-              {error ?? "Loading…"}
+              {error ?? t("messages.loading")}
             </div>
           )}
         </button>
@@ -251,8 +252,8 @@ export function AttachmentTile({
             type="button"
             onClick={() => onOpenAttachment?.(attachment)}
             className="flex shrink-0 items-center justify-center px-2 text-text-muted hover:text-text-primary focus-outline"
-            title="View"
-            aria-label={`View ${attachment.filename}`}
+            title={t("messages.view")}
+            aria-label={t("messages.viewFile", { file: attachment.filename })}
           >
             <ViewIcon className="size-3.5" />
           </button>
@@ -261,8 +262,8 @@ export function AttachmentTile({
           type="button"
           onClick={() => void saveAttachmentToDisk(attachment)}
           className="flex shrink-0 items-center justify-center px-2 text-text-muted hover:text-text-primary focus-outline"
-          title="Download"
-          aria-label={`Download ${attachment.filename}`}
+          title={t("messages.download")}
+          aria-label={t("messages.downloadFile", { file: attachment.filename })}
         >
           <DownloadIcon className="size-3.5" />
         </button>

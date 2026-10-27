@@ -4,8 +4,10 @@ import {
   ArrowDownIcon,
   ArrowRightToLineIcon,
   ArrowUpIcon,
+  ClockIcon,
   EnterIcon,
   HashIcon,
+  LockIcon,
   MembersIcon,
   MessageResultIcon,
   SearchIcon,
@@ -13,7 +15,23 @@ import {
 import type { TitlebarCapability } from "@silverhand/client";
 import type { AgentDto, SearchIdentity, SearchResultDto } from "@silverhand/shared";
 
+import { AVATAR_PX } from "@/components/avatar-scale";
 import { Button } from "@/components/ui/button";
+import { ChannelIcon } from "@/components/channel-icon";
+import { useSidebarStyle } from "@/features/conversation-shell/use-sidebar-style";
+import { CollectionItemCard } from "@/components/layout/collection-item-card";
+import { ChannelAvatar } from "@/features/conversations/components/channel-avatar";
+import { recentTimeLabel } from "@/features/conversations/latest/recent-rows";
+import {
+  useRecentConversations,
+  type RecentConversation,
+} from "@/features/conversations/latest/use-recent-conversations";
+import {
+  collectCounterpartAvatarSources,
+  presentCounterpart,
+} from "@/features/direct-pairs/counterpart-presentation";
+import { AuthorAvatarView } from "@/features/messages/components/author-avatar-view";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
 import { cn } from "@/lib/cn";
 import { useAgents } from "@/features/agents/hooks/hooks";
@@ -22,6 +40,7 @@ import { useDirectPairs } from "@/features/direct-pairs/hooks";
 import type { DirectMessageTarget } from "@/features/direct-pairs/target";
 import { useMessageSearch } from "@/features/search/hooks";
 import { SearchResultItem, type SearchItem } from "@/features/search/search-result-item";
+import { t } from "@/lib/i18n";
 
 export interface TitlebarSearchNav {
   onJumpMessage: (params: {
@@ -38,6 +57,7 @@ export interface TitlebarSearchNav {
 }
 
 type FlatRow =
+  | { kind: "recent"; key: string; conversation: RecentConversation }
   | { kind: "channel"; key: string; result: Extract<SearchResultDto, { type: "conversation" }> }
   | { kind: "workspace"; key: string; result: Extract<SearchResultDto, { type: "workspace" }> }
   | { kind: "identity"; key: string; candidate: SearchIdentity }
@@ -45,11 +65,11 @@ type FlatRow =
 
 type FilterKind = "all" | "channels" | "people" | "messages";
 
-const FILTER_TABS: Array<{ value: FilterKind; label: string }> = [
-  { value: "all", label: "All" },
-  { value: "people", label: "Human & Agents" },
-  { value: "channels", label: "Channels" },
-  { value: "messages", label: "Messages" },
+const filterTabs = (): Array<{ value: FilterKind; label: string }> => [
+  { value: "all", label: t("search.all") },
+  { value: "people", label: t("search.humanAgents") },
+  { value: "channels", label: t("search.channels") },
+  { value: "messages", label: t("search.messages") },
 ];
 
 /**
@@ -61,7 +81,6 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
   const [open, setOpen] = useState(false);
   const search = useTitlebarSearchModel(nav, () => setOpen(false));
   const inputRef = useRef<HTMLInputElement>(null);
-  const composingRef = useRef(false);
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
@@ -75,26 +94,6 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
-    // While an IME composition is active, Enter / arrows belong to the
-    // candidate window, not the result list (`keyCode === 229` covers the
-    // browsers that fire keydown before `compositionend`).
-    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
-    const key =
-      event.key === "ArrowDown"
-        ? "down"
-        : event.key === "ArrowUp"
-          ? "up"
-          : event.key === "Tab"
-            ? event.shiftKey
-              ? "backtab"
-              : "tab"
-            : event.key === "Enter"
-              ? "enter"
-              : null;
-    if (key && search.press(key)) event.preventDefault();
-  };
-
   return (
     <Popover.Root
       open={open}
@@ -106,14 +105,14 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label="Search"
+          aria-label={t("common.search")}
           className={cn(
             "no-drag flex h-6 w-full items-center gap-2 rounded-(--control-radius) px-2.5 text-left text-xs outline-none",
             "bg-text-primary/10 text-text-muted transition-colors hover:bg-text-primary/[0.14]",
           )}
         >
           <SearchIcon className="size-3.5 shrink-0" />
-          <span className="min-w-0 flex-1 truncate">Search everything</span>
+          <span className="min-w-0 flex-1 truncate">{t("search.searchEverything")}</span>
           <kbd className="shrink-0 rounded-(--chip-radius) bg-text-primary/[0.16] px-1.5 py-0.5 font-sans text-(length:--text-badge) leading-none text-text-secondary">
             ⌘K
           </kbd>
@@ -130,29 +129,7 @@ export function TitlebarSearch({ nav }: { nav: TitlebarSearchNav }): JSX.Element
           }}
           className={RESULTS_FRAME}
         >
-          <div
-            data-search-divider="b"
-            className="flex items-center gap-2 border-b border-border px-3 py-2.5"
-          >
-            <SearchIcon className="size-4 shrink-0 text-text-muted" />
-            <input
-              ref={inputRef}
-              value={search.query}
-              onChange={(e) => search.setQuery(e.target.value)}
-              onKeyDown={onInputKeyDown}
-              onCompositionStart={() => {
-                composingRef.current = true;
-              }}
-              onCompositionEnd={() => {
-                composingRef.current = false;
-              }}
-              placeholder="Search messages, channels, humans"
-              className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
-            />
-            {search.isFetching ? (
-              <span className="shrink-0 text-xs text-text-muted">Searching…</span>
-            ) : null}
-          </div>
+          <SearchInputRow search={search} inputRef={inputRef} />
           <TitlebarSearchResults search={search} />
         </Popover.Content>
       </Popover.Portal>
@@ -173,6 +150,10 @@ export function NativeTitlebarSearch({
   titlebar: TitlebarCapability;
 }): JSX.Element {
   const [open, setOpen] = useState(false);
+  // Beside iPhone Duo's vertical bar there is no native field: the bar's
+  // search button opens this one, field included.
+  const [ownField, setOwnField] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
   const close = (clear: boolean): void => {
     setOpen(false);
     void titlebar.endSearch({ clear }).catch(() => {});
@@ -184,7 +165,11 @@ export function NativeTitlebarSearch({
 
   useEffect(() => {
     const listening = titlebar.subscribe((event) => {
-      if (event.kind === "searchFocus") {
+      if (event.kind === "searchOpen") {
+        setOwnField(true);
+        setOpen(true);
+      } else if (event.kind === "searchFocus") {
+        setOwnField(false);
         setOpen(true);
       } else if (event.kind === "searchQuery") {
         setQuery(event.query);
@@ -207,7 +192,10 @@ export function NativeTitlebarSearch({
     <Popover.Root
       open={open}
       onOpenChange={(next) => {
-        if (!next) close(false);
+        if (!next) {
+          if (ownField) search.setQuery("");
+          close(false);
+        }
       }}
     >
       {/* Stands where the native field ends, so the results open beneath it. */}
@@ -217,11 +205,15 @@ export function NativeTitlebarSearch({
           align="center"
           sideOffset={6}
           data-popover-frame
-          // The native field keeps the keyboard focus.
-          onOpenAutoFocus={(event) => event.preventDefault()}
+          // A native field keeps the keyboard focus.
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            if (ownField) inputRef.current?.focus();
+          }}
           onCloseAutoFocus={(event) => event.preventDefault()}
           className={RESULTS_FRAME}
         >
+          {ownField ? <SearchInputRow search={search} inputRef={inputRef} /> : null}
           <TitlebarSearchResults search={search} />
         </Popover.Content>
       </Popover.Portal>
@@ -233,6 +225,63 @@ const RESULTS_FRAME =
   "z-(--z-popover) w-(--radix-popover-trigger-width) overflow-hidden bg-bg-floating shadow-popover outline-none";
 
 type SearchKey = "up" | "down" | "tab" | "backtab" | "enter";
+
+/** The web search field at the top of the results. */
+function SearchInputRow({
+  search,
+  inputRef,
+}: {
+  search: TitlebarSearchModel;
+  inputRef: React.RefObject<HTMLInputElement>;
+}): JSX.Element {
+  const composingRef = useRef(false);
+
+  const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>): void => {
+    // While an IME composition is active, Enter / arrows belong to the
+    // candidate window, not the result list (`keyCode === 229` covers the
+    // browsers that fire keydown before `compositionend`).
+    if (composingRef.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    const key =
+      event.key === "ArrowDown"
+        ? "down"
+        : event.key === "ArrowUp"
+          ? "up"
+          : event.key === "Tab"
+            ? event.shiftKey
+              ? "backtab"
+              : "tab"
+            : event.key === "Enter"
+              ? "enter"
+              : null;
+    if (key && search.press(key)) event.preventDefault();
+  };
+
+  return (
+    <div
+      data-search-divider="b"
+      className="flex items-center gap-2 border-b border-border px-3 py-2.5"
+    >
+      <SearchIcon className="size-4 shrink-0 text-text-muted" />
+      <input
+        ref={inputRef}
+        value={search.query}
+        onChange={(e) => search.setQuery(e.target.value)}
+        onKeyDown={onInputKeyDown}
+        onCompositionStart={() => {
+          composingRef.current = true;
+        }}
+        onCompositionEnd={() => {
+          composingRef.current = false;
+        }}
+        placeholder={t("search.searchMessagesChannelsHumans")}
+        className="min-w-0 flex-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
+      />
+      {search.isFetching ? (
+        <span className="shrink-0 text-xs text-text-muted">{t("search.searching")}</span>
+      ) : null}
+    </div>
+  );
+}
 
 type TitlebarSearchModel = ReturnType<typeof useTitlebarSearchModel>;
 
@@ -285,11 +334,28 @@ function useTitlebarSearchModel(nav: TitlebarSearchNav, onDone: () => void) {
   const messageAuthors = useMemo(() => messages.map((m) => m.message.author), [messages]);
   const { agentAvatarUrls, humanAvatarUrls } = useAuthorAvatarObjectUrls(messageAuthors);
 
+  // Before a query the field lists where the viewer was last, so a known
+  // conversation is one arrow and Enter away in every sidebar mode.
+  const allRecent = useRecentConversations();
+  const recent = useMemo(() => allRecent.slice(0, RECENT_LIMIT), [allRecent]);
+  const recentSources = useMemo(
+    () =>
+      collectCounterpartAvatarSources(
+        recent.flatMap((row) => (row.kind === "direct" ? [row] : [])),
+      ),
+    [recent],
+  );
+  const recentAgentAvatars = useAgentAvatarObjectUrls(recentSources.agents);
+  const recentHumanAvatars = useUserAvatarObjectUrls(recentSources.users);
+
   // One flat ordered list drives both the sections and the arrow-key cursor, so
   // the highlighted row and the row Enter opens can never disagree.
   const sections = useMemo(
-    () => buildSections(filter, channels, workspaces, identityRows, messages),
-    [filter, channels, workspaces, identityRows, messages],
+    () =>
+      trimmed.length === 0
+        ? recentSection(recent)
+        : buildSections(filter, channels, workspaces, identityRows, messages),
+    [trimmed.length, recent, filter, channels, workspaces, identityRows, messages],
   );
   const flatRows = useMemo(() => sections.flatMap((section) => section.rows), [sections]);
 
@@ -309,7 +375,14 @@ function useTitlebarSearchModel(nav: TitlebarSearchNav, onDone: () => void) {
   };
 
   const runRow = (row: FlatRow): void => {
-    if (row.kind === "message") {
+    if (row.kind === "recent") {
+      const conversation = row.conversation;
+      if (conversation.kind === "channel") {
+        nav.onOpenConversation(conversation.workspaceId, conversation.id);
+      } else {
+        nav.onOpenDirectPair(conversation.id);
+      }
+    } else if (row.kind === "message") {
       const place = row.result.conversation;
       if (place.placement_kind === "workspace") {
         nav.onJumpMessage({
@@ -366,9 +439,9 @@ function useTitlebarSearchModel(nav: TitlebarSearchNav, onDone: () => void) {
     }
     if (key === "tab" || key === "backtab") {
       if (trimmed.length === 0) return false;
-      const current = FILTER_TABS.findIndex((tab) => tab.value === filter);
+      const current = filterTabs().findIndex((tab) => tab.value === filter);
       const step = key === "backtab" ? -1 : 1;
-      const nextTab = FILTER_TABS[(current + step + FILTER_TABS.length) % FILTER_TABS.length];
+      const nextTab = filterTabs()[(current + step + filterTabs().length) % filterTabs().length];
       if (nextTab) setFilter(nextTab.value);
       return true;
     }
@@ -414,6 +487,8 @@ function useTitlebarSearchModel(nav: TitlebarSearchNav, onDone: () => void) {
     openAdvanced,
     press,
     avatars: {
+      recentAgentAvatars,
+      recentHumanAvatars,
       agentsById,
       ownerAgentAvatars,
       agentAvatarUrls,
@@ -438,7 +513,7 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
     <>
       {trimmed.length > 0 ? (
         <div className="flex gap-1.5 px-3 py-2">
-          {FILTER_TABS.map((tab) => (
+          {filterTabs().map((tab) => (
             <button
               key={tab.value}
               type="button"
@@ -466,25 +541,23 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
 
       {search.isError ? (
         <div role="alert" className="px-3 py-2 text-sm text-text-muted">
-          Search failed.{" "}
+          {t("search.searchFailed")}{" "}
           <button type="button" onClick={() => void search.refetch()}>
-            Retry
+            {t("common.retry")}
           </button>
         </div>
       ) : null}
       {identities && (identities.humans.truncated || identities.agents.truncated) ? (
-        <p className="px-3 py-2 text-xs text-text-muted">
-          Showing up to 20 matches per people category. Refine your search for more results.
-        </p>
+        <p className="px-3 py-2 text-xs text-text-muted">{t("search.showingUpTo20")}</p>
       ) : null}
       <div
         ref={listRef}
         className="search-list scrollbar-hide max-h-[min(60vh,440px)] overflow-y-auto p-2"
       >
-        {trimmed.length === 0 ? (
-          <SearchEmptyState text="Search across your project" />
+        {trimmed.length === 0 && sections.length === 0 ? (
+          <SearchEmptyState text={t("search.searchAcrossYourProject")} />
         ) : sections.length === 0 && !search.isFetching && !search.isError ? (
-          <SearchEmptyState text="No results" />
+          <SearchEmptyState text={t("search.noResults")} />
         ) : (
           sections.map((section) => (
             <section key={section.key} className="mb-3 last:mb-0">
@@ -498,14 +571,25 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
                   const index = flatRows.indexOf(row);
                   return (
                     <li key={row.key}>
-                      <TitlebarSearchRow
-                        row={row}
-                        query={search.deferredQuery}
-                        active={index === activeIndex}
-                        {...search.avatars}
-                        onMouseEnter={() => search.setActiveIndex(index)}
-                        onClick={() => search.runRow(row)}
-                      />
+                      {row.kind === "recent" ? (
+                        <RecentConversationRow
+                          conversation={row.conversation}
+                          active={index === activeIndex}
+                          agentAvatarUrls={search.avatars.recentAgentAvatars}
+                          humanAvatarUrls={search.avatars.recentHumanAvatars}
+                          onMouseEnter={() => search.setActiveIndex(index)}
+                          onClick={() => search.runRow(row)}
+                        />
+                      ) : (
+                        <TitlebarSearchRow
+                          row={row}
+                          query={search.deferredQuery}
+                          active={index === activeIndex}
+                          {...search.avatars}
+                          onMouseEnter={() => search.setActiveIndex(index)}
+                          onClick={() => search.runRow(row)}
+                        />
+                      )}
                     </li>
                   );
                 })}
@@ -520,13 +604,16 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
         className="flex items-center justify-between gap-3 border-t border-border px-3 py-2 text-(length:--text-meta) text-text-muted"
       >
         <span className="flex items-center gap-3">
-          <FooterHint keys={[<EnterIcon className="size-3" />]} label="Open" />
+          <FooterHint keys={[<EnterIcon className="size-3" />]} label={t("search.open")} />
           <FooterHint
             keys={[<ArrowUpIcon className="size-3" />, <ArrowDownIcon className="size-3" />]}
-            label="Navigate"
+            label={t("search.navigate")}
           />
-          <FooterHint keys={[<ArrowRightToLineIcon className="size-3" />]} label="Switch type" />
-          <FooterHint keys={["esc"]} label="Close" />
+          <FooterHint
+            keys={[<ArrowRightToLineIcon className="size-3" />]}
+            label={t("search.switchType")}
+          />
+          <FooterHint keys={["esc"]} label={t("common.close")} />
         </span>
         <Button
           type="button"
@@ -537,10 +624,118 @@ function TitlebarSearchResults({ search }: { search: TitlebarSearchModel }): JSX
           data-sticker-tone="neutral"
           onClick={search.openAdvanced}
         >
-          Advanced search
+          {t("search.advancedSearch")}
         </Button>
       </div>
     </>
+  );
+}
+
+const RECENT_LIMIT = 8;
+
+function recentSection(recent: readonly RecentConversation[]): Section[] {
+  if (recent.length === 0) {
+    return [];
+  }
+
+  return [
+    {
+      key: "recent",
+      label: t("search.recent"),
+      icon: <ClockIcon className="size-3" />,
+      rows: recent.map((conversation): FlatRow => ({
+        kind: "recent",
+        key: `recent:${conversation.id}`,
+        conversation,
+      })),
+    },
+  ];
+}
+
+/** A conversation the viewer was last in: its face, its name, where it lives and
+ *  when it last moved; one line, so the list stays short enough to scan. */
+function RecentConversationRow({
+  conversation,
+  active,
+  agentAvatarUrls,
+  humanAvatarUrls,
+  onMouseEnter,
+  onClick,
+}: {
+  conversation: RecentConversation;
+  active: boolean;
+  agentAvatarUrls: ReadonlyMap<string, string | null>;
+  humanAvatarUrls: ReadonlyMap<string, string | null>;
+  onMouseEnter: () => void;
+  onClick: () => void;
+}): JSX.Element {
+  // Each conversation wears the face the sidebar gives it, so a row read here is
+  // recognised there: the tree's `#` and small avatar, or the Recent list's tiles.
+  const tree = useSidebarStyle() === "tree";
+  const counterpart =
+    conversation.kind === "direct" ? presentCounterpart(conversation.counterpart) : null;
+  const title = conversation.kind === "channel" ? conversation.title : counterpart!.label;
+  const at = conversation.latest?.created_at ?? null;
+
+  return (
+    <CollectionItemCard
+      as="button"
+      type="button"
+      onMouseEnter={onMouseEnter}
+      onClick={onClick}
+      data-active={active ? "" : undefined}
+      className="flex w-full min-w-0 items-center gap-2.5 px-3 py-2 text-left"
+    >
+      {tree ? (
+        <span className="flex size-5.5 shrink-0 items-center justify-center">
+          {conversation.kind === "direct" ? (
+            <AuthorAvatarView
+              avatar={counterpart!.avatar}
+              size={AVATAR_PX.xs}
+              label={counterpart!.label}
+              agentAvatarUrls={agentAvatarUrls}
+              humanAvatarUrls={humanAvatarUrls}
+            />
+          ) : (
+            <ChannelIcon variant="sticker" visibility={conversation.visibility} />
+          )}
+        </span>
+      ) : (
+        <span data-recent-avatar className="flex shrink-0">
+          {counterpart ? (
+            <AuthorAvatarView
+              avatar={counterpart.avatar}
+              size={AVATAR_PX.md}
+              label={counterpart.label}
+              agentAvatarUrls={agentAvatarUrls}
+              humanAvatarUrls={humanAvatarUrls}
+            />
+          ) : (
+            <ChannelAvatar id={conversation.id} title={title} size={AVATAR_PX.md} />
+          )}
+        </span>
+      )}
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <span className="min-w-0 truncate text-sm font-medium text-text-primary">{title}</span>
+        {!tree && conversation.kind === "channel" && conversation.visibility === "private" ? (
+          <LockIcon
+            role="img"
+            aria-label={t("search.private")}
+            className="-mx-0.5 size-3 shrink-0 self-center text-text-muted"
+          />
+        ) : null}
+        {conversation.kind === "channel" ? (
+          <span className="min-w-0 shrink-[999] truncate text-xs text-text-muted">
+            {conversation.workspaceName}
+          </span>
+        ) : null}
+      </span>
+      {at !== null ? (
+        <span className="shrink-0 text-xs tabular-nums text-text-muted">
+          {recentTimeLabel(at, Date.now())}
+        </span>
+      ) : null}
+    </CollectionItemCard>
   );
 }
 
@@ -592,7 +787,7 @@ function buildSections(
   if (showPeople && identityRows.length > 0) {
     sections.push({
       key: "people",
-      label: "Human & Agents",
+      label: t("search.humanAgents"),
       icon: <MembersIcon className="size-3" />,
       rows: identityRows.map((candidate): FlatRow => ({
         kind: "identity",
@@ -605,7 +800,7 @@ function buildSections(
   if (showChannels && (channels.length > 0 || workspaces.length > 0)) {
     sections.push({
       key: "channels",
-      label: "Channels",
+      label: t("search.channels"),
       icon: <HashIcon className="size-3" />,
       rows: [
         ...channels.map((result): FlatRow => ({
@@ -625,7 +820,7 @@ function buildSections(
   if (showMessages && messages.length > 0) {
     sections.push({
       key: "messages",
-      label: "Messages",
+      label: t("search.messages"),
       icon: <MessageResultIcon className="size-3" />,
       rows: messages.map((result): FlatRow => ({
         kind: "message",
@@ -651,7 +846,7 @@ function TitlebarSearchRow({
   onMouseEnter,
   onClick,
 }: {
-  row: FlatRow;
+  row: Exclude<FlatRow, { kind: "recent" }>;
   query: string;
   active: boolean;
   agentsById: ReadonlyMap<string, AgentDto>;

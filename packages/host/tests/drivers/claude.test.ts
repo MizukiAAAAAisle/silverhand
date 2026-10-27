@@ -139,9 +139,7 @@ describe('ClaudeDriver.parseLine', () => {
         is_error: true,
         stop_reason: null,
         session_id: '46af7b63-3663-4614-a4e5-a1e93f3a0230',
-        errors: [
-          'No conversation found with session ID: 11111111-1111-4111-8111-111111111111',
-        ],
+        errors: ['No conversation found with session ID: 11111111-1111-4111-8111-111111111111'],
       }),
     );
 
@@ -149,8 +147,7 @@ describe('ClaudeDriver.parseLine', () => {
       kind: 'error',
       code: 'session_not_found',
       fatal: true,
-      message:
-        'No conversation found with session ID: 11111111-1111-4111-8111-111111111111',
+      message: 'No conversation found with session ID: 11111111-1111-4111-8111-111111111111',
     });
     expect(events[1]).toEqual({
       kind: 'turn_end',
@@ -182,7 +179,7 @@ describe('ClaudeDriver — input payload uuid + command_lifecycle (#task:1557)',
 
   it.each(['queued', 'started', 'completed'] as const)(
     'parses command_lifecycle %s into input_lifecycle',
-    state => {
+    (state) => {
       const events = new ClaudeDriver().parseLine(
         JSON.stringify({
           type: 'command_lifecycle',
@@ -191,9 +188,7 @@ describe('ClaudeDriver — input payload uuid + command_lifecycle (#task:1557)',
           uuid: 'frame-own-id',
         }),
       );
-      expect(events).toEqual([
-        { kind: 'input_lifecycle', commandUuid: 'uuid-42', state },
-      ]);
+      expect(events).toEqual([{ kind: 'input_lifecycle', commandUuid: 'uuid-42', state }]);
     },
   );
 
@@ -205,9 +200,7 @@ describe('ClaudeDriver — input payload uuid + command_lifecycle (#task:1557)',
       ),
     ).toEqual([]);
     expect(
-      driver.parseLine(
-        JSON.stringify({ type: 'command_lifecycle', state: 'started' }),
-      ),
+      driver.parseLine(JSON.stringify({ type: 'command_lifecycle', state: 'started' })),
     ).toEqual([]);
   });
 });

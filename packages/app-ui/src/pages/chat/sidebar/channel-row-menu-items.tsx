@@ -10,6 +10,7 @@ import {
   ChannelAttentionMenuItems,
 } from "../../../features/conversation-shell/components/channel-attention-surfaces";
 import { copyConversationName } from "../../../components/layout/sidebar-shared";
+import { t } from "@/lib/i18n";
 
 /** Sidebar placement changes star state, never channel management capabilities. */
 export function ChannelRowMenuItems({
@@ -45,10 +46,13 @@ export function ChannelRowMenuItems({
         icon={<StarIcon className={"size-3.5" + (starred ? " fill-current" : "")} />}
         onSelect={onStar}
       >
-        {starred ? "Unstar" : "Star"}
+        {starred ? t("chat.unstar") : t("chat.star")}
       </AppContextMenuItem>
       {isMember && rosterPolicy === "open" ? (
-        <AppContextMenuSub icon={<AttentionGlyph className="size-3.5" />} label="Notifications">
+        <AppContextMenuSub
+          icon={<AttentionGlyph className="size-3.5" />}
+          label={t("chat.notifications")}
+        >
           <ChannelAttentionMenuItems
             channelId={channelId}
             mode={attention?.mode}
@@ -68,7 +72,7 @@ export function ChannelRowMenuItems({
           disabled={archivePending}
           onSelect={onArchive}
         >
-          {isArchived ? "Restore" : "Archive"}
+          {isArchived ? t("chat.restore") : t("chat.archive")}
         </AppContextMenuItem>
       ) : null}
       <AppContextMenuSeparator />
@@ -76,7 +80,7 @@ export function ChannelRowMenuItems({
         icon={<CopyIcon className="size-3.5" />}
         onSelect={() => void copyConversationName(title)}
       >
-        Copy name
+        {t("chat.copyName")}
       </AppContextMenuItem>
     </>
   );

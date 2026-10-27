@@ -1,5 +1,6 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type {
+  ComposerEvent,
   ComposerMenuItem,
   ComposerPicker,
   ComposerPickerIcon,
@@ -15,13 +16,84 @@ import type { PickerItem } from "../model/composer-picker";
 import { avatarUrlOf, type PickerView } from "../model/composer-picker-rows";
 import { useOpenAgentActivity } from "./use-open-agent-activity";
 import { useNativeComposerActivity } from "./use-native-composer-activity";
+import { t } from "@/lib/i18n";
 
-/** Whether the compact composer is drawn natively (iOS). */
+/** Whether the composer is drawn natively (iOS). */
 export function useNativeComposerPlatform(): boolean {
-  return useCompactLayout() && getPlatform().composer !== undefined;
+  return getPlatform().composer !== undefined;
+}
+
+type PaneFrame = { left: number; width: number; bottom: number };
+
+/** The pane `host` sits in, as native lays a composer over it: null in the
+ * compact layout, where the composer spans the screen, and undefined until
+ * measured, as a screen-wide composer would replace the other pane's. */
+function usePaneFrame(
+  host: RefObject<HTMLElement | null>,
+  enabled: boolean,
+): PaneFrame | null | undefined {
+  const compact = useCompactLayout();
+  const [frame, setFrame] = useState<PaneFrame | undefined>(undefined);
+
+  useEffect(() => {
+    const pane = host.current?.closest<HTMLElement>("[data-panel]");
+    if (!enabled || compact || !pane) {
+      setFrame(undefined);
+      return;
+    }
+    const measure = () => {
+      const rect = pane.getBoundingClientRect();
+      const left = Math.round(rect.left);
+      const width = Math.round(rect.width);
+      const bottom = Math.max(0, Math.round(window.innerHeight - rect.bottom));
+      setFrame((previous) =>
+        previous?.left === left && previous.width === width && previous.bottom === bottom
+          ? previous
+          : { left, width, bottom },
+      );
+    };
+    measure();
+    // A pane moves without resizing only when the window does.
+    const observer = new ResizeObserver(measure);
+    observer.observe(pane);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [host, enabled, compact]);
+
+  return compact ? null : frame;
+}
+
+const METRICS = ["rest", "reserve", "overlay", "picker"] as const;
+
+/** Sets the composer's metrics on its pane, which the page clears
+ * (`--native-composer-*`, mobile.css); null clears them. Native measures from
+ * the window's bottom, and the pane's end may sit above it (iPad's frame). */
+function writeMetrics(
+  host: HTMLElement | null,
+  metrics: Extract<ComposerEvent, { kind: "metrics" }> | null,
+): void {
+  const pane = host?.closest<HTMLElement>("[data-panel]");
+  if (!host || !pane) {
+    return;
+  }
+  const gap = Math.max(0, window.innerHeight - host.getBoundingClientRect().bottom);
+  for (const name of METRICS) {
+    const property = `--native-composer-${name}`;
+    if (!metrics) {
+      pane.style.removeProperty(property);
+    } else {
+      const value = name === "picker" ? metrics[name] : Math.max(0, metrics[name] - gap);
+      pane.style.setProperty(property, `${value}px`);
+    }
+  }
 }
 
 interface NativeComposerOptions {
+  /** An element inside the composer's pane, whose page clears the composer. */
+  host: RefObject<HTMLElement | null>;
   /** False while something covers the composer. */
   shown: boolean;
   draftKey: string;
@@ -51,13 +123,13 @@ interface NativeComposerOptions {
 
 function addMenu(offersMentions: boolean, offersChannels: boolean): ComposerMenuItem[] {
   return [
-    { id: "photos", label: "Photos", icon: iconMarkup(ImageIcon), pick: "photos" },
-    { id: "files", label: "Files", icon: iconMarkup(AttachFileIcon), pick: "files" },
+    { id: "photos", label: t("messages.photos"), icon: iconMarkup(ImageIcon), pick: "photos" },
+    { id: "files", label: t("messages.files"), icon: iconMarkup(AttachFileIcon), pick: "files" },
     ...(offersMentions
-      ? [{ id: "mention", label: "Mention a member", icon: iconMarkup(MentionIcon) }]
+      ? [{ id: "mention", label: t("messages.mentionAMember"), icon: iconMarkup(MentionIcon) }]
       : []),
     ...(offersChannels
-      ? [{ id: "channel", label: "Reference a channel", icon: iconMarkup(HashIcon) }]
+      ? [{ id: "channel", label: t("messages.referenceAChannel"), icon: iconMarkup(HashIcon) }]
       : []),
   ];
 }
@@ -95,7 +167,7 @@ export function useNativeComposer(options: NativeComposerOptions): {
   const capability = getPlatform().composer;
   const live = usePageLive();
   const native = useNativeComposerPlatform();
-  const shown = options.shown && live && native;
+  const wanted = options.shown && live && native;
   const activity = useNativeComposerActivity(
     options.conversationId,
     options.activityAgentIds,
@@ -103,19 +175,22 @@ export function useNativeComposer(options: NativeComposerOptions): {
   );
   const openAgentActivity = useOpenAgentActivity();
   const key = options.draftKey;
+  const frame = usePaneFrame(options.host, wanted);
+  const shown = wanted && frame !== undefined;
   const state: ComposerState = {
     key,
     placeholder: options.placeholder,
     enabled: options.enabled,
     canSend: options.canSend,
-    sendLabel: "Send",
-    addLabel: "Add",
+    sendLabel: t("messages.send"),
+    addLabel: t("messages.add"),
     add: addMenu(options.offersMentions, options.offersChannels),
     accessoryHeight: options.accessoryHeight,
     picker: picker
       ? nativePickerOf(picker, options.agentAvatarUrls, options.humanAvatarUrls)
       : undefined,
     activity,
+    frame: frame ?? undefined,
   };
   const latest = useRef({ ...options, openAgentActivity });
   latest.current = { ...options, openAgentActivity };
@@ -127,18 +202,14 @@ export function useNativeComposer(options: NativeComposerOptions): {
     if (!shown || !capability) {
       return;
     }
-    void capability.sync(JSON.parse(serialized) as ComposerState).catch(() => {});
-  }, [capability, shown, serialized]);
-
-  useEffect(() => {
-    if (!shown || !capability) {
-      return;
-    }
+    const host = options.host.current;
     const listening = capability.subscribe((event) => {
       if (event.key !== key) {
         return;
       }
-      if (event.kind === "change") {
+      if (event.kind === "metrics") {
+        writeMetrics(host, event);
+      } else if (event.kind === "change") {
         shownText.current = event.text;
         latest.current.onChange(event.text, event.caret, event.composing);
       } else if (event.kind === "send") {
@@ -161,10 +232,19 @@ export function useNativeComposer(options: NativeComposerOptions): {
     });
     return () => {
       void listening.then((remove) => remove());
+      writeMetrics(host, null);
       shownText.current = null;
       void capability.remove(key).catch(() => {});
     };
-  }, [capability, shown, key]);
+  }, [capability, shown, key, options.host]);
+
+  // After the listener above, so it hears native's first metrics.
+  useEffect(() => {
+    if (!shown || !capability) {
+      return;
+    }
+    void capability.sync(JSON.parse(serialized) as ComposerState).catch(() => {});
+  }, [capability, shown, serialized]);
 
   useEffect(() => {
     if (!shown || !capability || draft === shownText.current) {

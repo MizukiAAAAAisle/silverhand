@@ -1,4 +1,5 @@
 import type { MessageAuthorDto } from "@silverhand/shared";
+import { t } from "@/lib/i18n";
 
 /**
  * The ONE author-presentation seam (#task:1792). Every surface that renders a
@@ -41,8 +42,8 @@ import type { MessageAuthorDto } from "@silverhand/shared";
  * claim. A hand-typed copy would let the two drift while the borrowed-word
  * justification silently stayed in the comment, so the sharing is structural.
  */
-export const UNRESOLVED_AGENT_LABEL = "Unknown agent";
-export const UNRESOLVED_USER_LABEL = "Unknown user";
+export const unresolvedAgentLabel = () => t("messages.unknownAgent");
+export const unresolvedUserLabel = () => t("messages.unknownUser");
 
 type ActiveAgentAuthor = Extract<MessageAuthorDto, { status: "active"; kind: "agent" }>;
 
@@ -81,7 +82,7 @@ export interface AuthorPresentation {
 export function presentAuthor(author: MessageAuthorDto): AuthorPresentation {
   if (author.status === "unresolved") {
     return {
-      label: author.kind === "agent" ? UNRESOLVED_AGENT_LABEL : UNRESOLVED_USER_LABEL,
+      label: author.kind === "agent" ? unresolvedAgentLabel() : unresolvedUserLabel(),
       kind: author.kind,
       status: "unresolved",
       isDeleted: false,
@@ -163,7 +164,9 @@ export function classifyRowAuthor(
  * hand-assemble the deleted suffix and can never diverge on it.
  */
 export function authorStateLabel(presentation: AuthorPresentation): string {
-  return presentation.isDeleted ? `${presentation.label} (deleted account)` : presentation.label;
+  return presentation.isDeleted
+    ? t("messages.deletedAccount", { name: presentation.label })
+    : presentation.label;
 }
 
 /**

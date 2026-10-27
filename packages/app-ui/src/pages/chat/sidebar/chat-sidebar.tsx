@@ -29,6 +29,7 @@ import {
 import { Sidebar } from "../../../components/layout/sidebar";
 import { useSidebarStyle } from "@/features/conversation-shell/use-sidebar-style";
 import { RecentList } from "./recent-list";
+import { t } from "@/lib/i18n";
 
 interface ChatSidebarProps {
   fill?: boolean;
@@ -150,18 +151,18 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
   const recentEntries = style === "recent";
   const [chatsBar, chatsBarHandlers] = nativeActionBar(
     {
-      title: "Chats",
+      title: t("chat.chats"),
       titleAction: null,
       largeTitle: true,
       tabs: null,
       addTabs: null,
-      overflow: recentEntries ? { label: "More", icon: iconMarkup(MoreIcon) } : undefined,
+      overflow: recentEntries ? { label: t("chat.more"), icon: iconMarkup(MoreIcon) } : undefined,
     },
     [
       recentEntries
         ? {
             id: "search",
-            label: "Search",
+            label: t("common.search"),
             icon: iconMarkup(SearchIcon),
             primary: true,
             run: props.onSelectSearch,
@@ -169,7 +170,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
         : null,
       {
         id: "create-workspace",
-        label: "New project",
+        label: t("chat.newProject"),
         icon: iconMarkup(PlusIcon),
         primary: true,
         run: props.onCreateWorkspace,
@@ -177,7 +178,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
       recentEntries
         ? {
             id: "saved",
-            label: "Saved",
+            label: t("chat.saved"),
             icon: iconMarkup(BookmarkIcon),
             run: props.onSelectSaved,
           }
@@ -185,7 +186,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
       recentEntries
         ? {
             id: "archived",
-            label: "Archived",
+            label: t("common.archived"),
             icon: iconMarkup(ArchiveIcon),
             run: props.onSelectArchived,
           }
@@ -249,14 +250,14 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                     active={props.searchActive}
                   >
                     <SearchIcon className="size-4" />
-                    <span>Search</span>
+                    <span>{t("common.search")}</span>
                   </SidebarNavigationButton>
 
                   <SidebarNavigationButton onClick={props.onSelectSaved} active={props.savedActive}>
                     <BookmarkIcon
                       className={cn("size-4", props.savedActive ? "fill-current" : "")}
                     />
-                    <span>Saved</span>
+                    <span>{t("chat.saved")}</span>
                     {props.savedCount !== undefined && props.savedCount > 0 ? (
                       <span
                         data-sidebar-count
@@ -275,7 +276,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                     active={props.archivedActive}
                   >
                     <ArchiveIcon className="size-4" />
-                    <span>Archived</span>
+                    <span>{t("common.archived")}</span>
                   </SidebarNavigationButton>
                 </div>
 
@@ -291,6 +292,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                           selectedChannelId={props.selectedChannelId}
                           watchWorkspaceIds={watchWorkspaceIds}
                           onSelectConversation={props.onSelectConversation}
+                          onSelectDirectPair={props.onSelectDirectPair}
                         />
                       ) : branch.kind === "direct-messages" ? (
                         <DirectMessagesGroup
@@ -306,7 +308,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                   ))}
                 </SortableGroup>
                 {props.workspacesLoading && props.workspaces.length === 0 ? (
-                  <SidebarRowsSkeleton label="Loading projects" />
+                  <SidebarRowsSkeleton label={t("chat.loadingProjects")} />
                 ) : null}
               </>
             )}
@@ -323,7 +325,7 @@ export function ChatSidebar(props: ChatSidebarProps): JSX.Element {
                   onClick={props.onCreateWorkspace}
                 >
                   <PlusIcon className="size-4" />
-                  <span>New project</span>
+                  <span>{t("chat.newProject")}</span>
                 </Button>
               </div>
             )}
@@ -354,8 +356,8 @@ function RecentActions(props: {
         type="button"
         variant="ghost"
         size="icon"
-        aria-label="Search"
-        title="Search"
+        aria-label={t("common.search")}
+        title={t("common.search")}
         aria-pressed={props.searchActive}
         onClick={props.onSelectSearch}
         className={cn(props.searchActive && "bg-bg-hover text-text-primary")}
@@ -368,8 +370,8 @@ function RecentActions(props: {
             type="button"
             variant="ghost"
             size="icon"
-            aria-label="More"
-            title="More"
+            aria-label={t("chat.more")}
+            title={t("chat.more")}
             className={cn(elsewhere && "bg-bg-hover text-text-primary")}
           >
             <MoreIcon className="size-4" />
@@ -385,13 +387,13 @@ function RecentActions(props: {
           }
           onSelect={props.onSelectSaved}
         >
-          Saved
+          {t("chat.saved")}
         </AppDropdownMenuItem>
         <AppDropdownMenuItem
           icon={<ArchiveIcon className="size-3.5" />}
           onSelect={props.onSelectArchived}
         >
-          Archived
+          {t("common.archived")}
         </AppDropdownMenuItem>
       </AppDropdownMenu>
     </div>

@@ -1,8 +1,5 @@
 import { isAgentHomeWorkspaceId } from '@silverhand/shared';
-import {
-  resolveAgentDir,
-  resolveAgentWorkspaceBundleDir,
-} from '../agent-materialize/index.js';
+import { resolveAgentDir, resolveAgentWorkspaceBundleDir } from '../agent-materialize/index.js';
 import { WorkspaceIdSegmentError } from '../workspace-path-authority.js';
 import { AgentWorkspaceFsError } from './error.js';
 

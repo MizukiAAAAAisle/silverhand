@@ -76,11 +76,7 @@
  *    (`node:child_process.spawn`) so handshake parsing and pid
  *    lifecycle are still exercised end-to-end in the test.
  */
-import {
-  spawn as nodeSpawn,
-  type ChildProcess,
-  type SpawnOptions,
-} from 'node:child_process';
+import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process';
 import {
   EventFrameSchema,
   HOST_PROTOCOL_VERSION,
@@ -160,9 +156,7 @@ const REAL_CLOCK: SpawnClock = {
  * "supervisor gave up". Without this discriminator the strict-source
  * rule from `local-host-failure.ts` would be silently violated.
  */
-export type DaemonFatalExitKind =
-  | 'restart_budget_exhausted'
-  | 'respawn_handshake_failed';
+export type DaemonFatalExitKind = 'restart_budget_exhausted' | 'respawn_handshake_failed';
 
 export interface DaemonFatalExitInfo {
   kind: DaemonFatalExitKind;
@@ -383,47 +377,38 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
 
   const spawnOnce = async (): Promise<Extract<EventFrame, { event: 'ready' }>> => {
     const daemonArgs = [
-      '--socket-path', opts.socketPath,
-      '--pid-file', opts.pidFilePath,
-      '--log-dir', opts.logDir,
+      '--socket-path',
+      opts.socketPath,
+      '--pid-file',
+      opts.pidFilePath,
+      '--log-dir',
+      opts.logDir,
       ...(opts.hostConfigPath ? ['--host-config', opts.hostConfigPath] : []),
       ...(opts.localOutboundSocketPath
         ? ['--local-outbound-socket-path', opts.localOutboundSocketPath]
         : []),
-      ...(opts.runtimePidRootDir
-        ? ['--runtime-pid-root-dir', opts.runtimePidRootDir]
-        : []),
-      ...(opts.computersRootDir
-        ? ['--computers-root-dir', opts.computersRootDir]
-        : []),
+      ...(opts.runtimePidRootDir ? ['--runtime-pid-root-dir', opts.runtimePidRootDir] : []),
+      ...(opts.computersRootDir ? ['--computers-root-dir', opts.computersRootDir] : []),
       ...(opts.silverhandStateRootDir
         ? ['--silverhand-state-root-dir', opts.silverhandStateRootDir]
         : []),
-      ...(opts.daemonIdentityPath
-        ? ['--daemon-identity-path', opts.daemonIdentityPath]
-        : []),
+      ...(opts.daemonIdentityPath ? ['--daemon-identity-path', opts.daemonIdentityPath] : []),
 
-      ...(opts.proxyConfigPath
-        ? ['--proxy-config-path', opts.proxyConfigPath]
-        : []),
+      ...(opts.proxyConfigPath ? ['--proxy-config-path', opts.proxyConfigPath] : []),
       ...(opts.controlPlaneServerUrlPath
         ? ['--control-plane-server-url-path', opts.controlPlaneServerUrlPath]
         : []),
       ...(alsoStderr ? ['--stderr'] : []),
     ];
-    const proc = spawnImpl(
-      opts.launcher.command,
-      [...opts.launcher.args, ...daemonArgs],
-      {
-        env: { ...process.env, ...(opts.launcher.env ?? {}) },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      },
-    );
+    const proc = spawnImpl(opts.launcher.command, [...opts.launcher.args, ...daemonArgs], {
+      env: { ...process.env, ...(opts.launcher.env ?? {}) },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     child = proc;
 
     // Drain stderr to parent stderr so daemon warnings are visible.
     proc.stderr?.setEncoding('utf8');
-    proc.stderr?.on('data', chunk => {
+    proc.stderr?.on('data', (chunk) => {
       process.stderr.write(typeof chunk === 'string' ? chunk : String(chunk));
     });
 
@@ -433,13 +418,17 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       const readyTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
-        try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+        try {
+          proc.kill('SIGKILL');
+        } catch {
+          /* already gone */
+        }
         reject(new Error(`daemon did not emit ready handshake within ${readyTimeoutMs}ms`));
       }, readyTimeoutMs);
       readyTimer.unref?.();
 
       proc.stdout?.setEncoding('utf8');
-      proc.stdout?.on('data', chunk => {
+      proc.stdout?.on('data', (chunk) => {
         const { frames, leftover, overflow } = splitNdjson(buffer, chunk as string);
         buffer = leftover;
         if (overflow) {
@@ -452,7 +441,11 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
         }
         for (const line of frames) {
           let parsed: unknown;
-          try { parsed = JSON.parse(line); } catch { continue; }
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            continue;
+          }
           const validated = EventFrameSchema.safeParse(parsed);
           if (!validated.success) continue;
           if (validated.data.event === 'ready') {
@@ -460,7 +453,11 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
             settled = true;
             clearTimeout(readyTimer);
             if (validated.data.protocol_version !== HOST_PROTOCOL_VERSION) {
-              try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+              try {
+                proc.kill('SIGKILL');
+              } catch {
+                /* already gone */
+              }
               reject(
                 new Error(
                   `daemon stdout ready speaks host protocol_version=${validated.data.protocol_version}; ` +
@@ -476,13 +473,13 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
           }
         }
       });
-      proc.once('error', err => {
+      proc.once('error', (err) => {
         if (settled) return;
         settled = true;
         clearTimeout(readyTimer);
         reject(err);
       });
-      proc.once('exit', code => {
+      proc.once('exit', (code) => {
         if (settled) return;
         settled = true;
         clearTimeout(readyTimer);
@@ -512,7 +509,11 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
    *  so consumers can apply different recovery semantics. */
   const emitFatalExit = (info: DaemonFatalExitInfo): void => {
     for (const h of exitHandlers) {
-      try { h(info); } catch { /* swallow */ }
+      try {
+        h(info);
+      } catch {
+        /* swallow */
+      }
     }
   };
 
@@ -537,7 +538,9 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
             startedAt: handshake.started_at,
             attempt,
           });
-        } catch { /* swallow */ }
+        } catch {
+          /* swallow */
+        }
       }
     } catch (err) {
       emitFatalExit({
@@ -589,7 +592,7 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
   };
 
   const attachExit = (): void => {
-    child?.once('exit', code => onExit(code));
+    child?.once('exit', (code) => onExit(code));
   };
 
   const firstHandshake = await spawnOnce();
@@ -627,17 +630,23 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
       // Supervisor escalates runtime SIGTERM at 5s and waits up to 10s.
       // Keep the daemon alive long enough to reap its own children.
       const gracefulMs = killOpts?.gracefulMs ?? 15_000;
-      await new Promise<void>(resolve => {
+      await new Promise<void>((resolve) => {
         killResolve = resolve;
         const fallback = setTimeout(() => {
-          try { proc.kill('SIGKILL'); } catch { /* already gone */ }
+          try {
+            proc.kill('SIGKILL');
+          } catch {
+            /* already gone */
+          }
         }, gracefulMs);
         fallback.unref?.();
         proc.once('exit', () => {
           clearTimeout(fallback);
           resolve();
         });
-        try { proc.kill('SIGTERM'); } catch {
+        try {
+          proc.kill('SIGTERM');
+        } catch {
           clearTimeout(fallback);
           resolve();
         }
@@ -645,11 +654,15 @@ export async function spawnDaemonChild(opts: SpawnDaemonOptions): Promise<Daemon
     },
     onExit(handler) {
       exitHandlers.add(handler);
-      return () => { exitHandlers.delete(handler); };
+      return () => {
+        exitHandlers.delete(handler);
+      };
     },
     onDaemonGenerationChanged(handler) {
       generationHandlers.add(handler);
-      return () => { generationHandlers.delete(handler); };
+      return () => {
+        generationHandlers.delete(handler);
+      };
     },
   };
   // Use the captured firstHandshake (`lastHandshake` is updated across

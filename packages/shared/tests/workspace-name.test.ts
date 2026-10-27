@@ -89,10 +89,7 @@ describe('WorkspaceNameSchema', () => {
       noncharacterFFFE: 'a\uFFFEb',
     };
     for (const [label, name] of Object.entries(cases)) {
-      expect(
-        WorkspaceNameSchema.safeParse(name).success,
-        `${label} must be rejected`,
-      ).toBe(false);
+      expect(WorkspaceNameSchema.safeParse(name).success, `${label} must be rejected`).toBe(false);
     }
   });
 
@@ -125,9 +122,7 @@ describe('WorkspaceNameSchema', () => {
   it('reports overflow as too_big so the renderer can say "too long"', () => {
     const parsed = WorkspaceNameSchema.safeParse('设'.repeat(65));
     expect(parsed.success).toBe(false);
-    expect(
-      !parsed.success && parsed.error.issues.some(i => i.code === 'too_big'),
-    ).toBe(true);
+    expect(!parsed.success && parsed.error.issues.some((i) => i.code === 'too_big')).toBe(true);
   });
 
   it('does not report too_big for a charset-only rejection', () => {
@@ -136,9 +131,7 @@ describe('WorkspaceNameSchema', () => {
     // too_big, or the inline hint would talk about length.
     const parsed = WorkspaceNameSchema.safeParse('a\u200Db');
     expect(parsed.success).toBe(false);
-    expect(
-      !parsed.success && parsed.error.issues.some(i => i.code === 'too_big'),
-    ).toBe(false);
+    expect(!parsed.success && parsed.error.issues.some((i) => i.code === 'too_big')).toBe(false);
   });
 
   it('round-trips readable segments without slugifying display text', () => {
@@ -147,8 +140,9 @@ describe('WorkspaceNameSchema', () => {
       const segment = formatWorkspaceAddressSegment(canonical);
       expect(parseWorkspaceAddressSegment(segment)).toEqual(canonical);
     }
-    expect(formatWorkspaceAddressSegment(fixedWorkspaceName('设计/100% Ready')))
-      .toBe('设计%2F100%25%20Ready');
+    expect(formatWorkspaceAddressSegment(fixedWorkspaceName('设计/100% Ready'))).toBe(
+      '设计%2F100%25%20Ready',
+    );
   });
 
   it('rejects delimiter injection and non-canonical equivalent spellings', () => {
@@ -165,7 +159,6 @@ describe('WorkspaceNameSchema', () => {
     }
     // One decode only: this is the canonical address of the literal name
     // `Design%2FReview`, never an alias for `Design/Review`.
-    expect(parseWorkspaceAddressSegment('Design%252FReview')?.name)
-      .toBe('Design%2FReview');
+    expect(parseWorkspaceAddressSegment('Design%252FReview')?.name).toBe('Design%2FReview');
   });
 });

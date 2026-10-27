@@ -1,4 +1,5 @@
 import type { BackendInfoSnapshot } from "@/features/computers/hooks/hooks";
+import { t } from "@/lib/i18n";
 
 type OutboundProtocolCompatibility = BackendInfoSnapshot["outbound_protocol_compatibility"];
 
@@ -24,15 +25,13 @@ export function describeProtocolSkew(
   switch (compat.status) {
     case "app_update_required":
       return {
-        title: "Silverhand update required",
-        detail:
-          "This version is incompatible with the server. Update Silverhand to restore agent connectivity.",
+        title: t("appShell.skew.appTitle"),
+        detail: t("appShell.skew.appDetail"),
       };
     case "server_update_required":
       return {
-        title: "Server update required",
-        detail:
-          "The server uses an incompatible protocol version. Agent operations are unavailable until the server is updated.",
+        title: t("appShell.serverUpdateRequired"),
+        detail: t("appShell.skew.serverDetail"),
       };
     case "compatible":
     case "unknown":

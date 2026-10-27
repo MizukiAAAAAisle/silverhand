@@ -28,13 +28,7 @@
  *  - SIGHUP is intentionally NOT handled in PR-1 (no config reload
  *    yet). It uses node default (exit) — acceptable.
  */
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { DaemonLogger } from './logger.js';
 
@@ -100,7 +94,7 @@ export function installShutdownHandlers(
     fired = true;
     logger.info({ signal }, 'received shutdown signal');
     Promise.resolve(onShutdown(`signal:${signal}`))
-      .catch(err => {
+      .catch((err) => {
         logger.error({ err: (err as Error).message }, 'shutdown handler threw');
       })
       .finally(() => {

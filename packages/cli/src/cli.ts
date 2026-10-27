@@ -15,12 +15,7 @@ import { reportPreflightFailure, wasRequestAttempted } from './cli-trace.js';
 import { findCommand, findFacet, findGroup } from './commands/index.js';
 import type { Command } from './commands/index.js';
 import { loadEnv } from './env.js';
-import {
-  CliError,
-  exitCodeFor,
-  fromUnknown,
-  writeError,
-} from './errors.js';
+import { CliError, exitCodeFor, fromUnknown, writeError } from './errors.js';
 import { nounHelp, topLevelHelp, verbHelp, facetHelp, facetVerbHelp } from './help.js';
 import { writeJson } from './output.js';
 import { parseArgs } from './parse.js';
@@ -95,7 +90,7 @@ async function main(argv: string[]): Promise<number> {
       }
       const fverb = argv[2]!;
       traceCtx.verb = `${facetToken} ${fverb}`;
-      const fcmd = facet.commands.find(c => c.verb === fverb);
+      const fcmd = facet.commands.find((c) => c.verb === fverb);
       if (!fcmd) {
         throw new CliError({
           code: 'validation_error',
@@ -214,9 +209,7 @@ async function executeCommand(
       subkind: 'unexpected_arguments',
       message:
         `silverhand ${noun} ${verb} ${
-          cmd.allowPositional
-            ? 'does not accept tokens after `--`'
-            : 'accepts flags only'
+          cmd.allowPositional ? 'does not accept tokens after `--`' : 'accepts flags only'
         }; ` +
         `got unexpected ${parts.join(' and ')}. ` +
         (cmd.allowPositional
@@ -251,10 +244,10 @@ ensureSystemCaTrusted();
 
 const startedAt = performance.now();
 void main(process.argv.slice(2)).then(
-  code => {
+  (code) => {
     process.exit(code);
   },
-  async err => {
+  async (err) => {
     const cliErr = fromUnknown(err);
     writeError(cliErr, { json: true });
     // Best-effort: tell the backend about a CLI-side failure that

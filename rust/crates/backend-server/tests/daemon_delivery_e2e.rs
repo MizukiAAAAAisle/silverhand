@@ -29,6 +29,7 @@ use silverhand_backend_core::{
             ClearSessionRefusal, RuntimeControlAdmission, RuntimeControlAdmissionScope,
             RuntimeControlPort, RuntimeControlSeatPort, RuntimeControlSeatSnapshot,
             RuntimeSeatTarget, RuntimeStartTarget, clear_conversation_session,
+            notification::{NotificationListQuery, NotificationReadPort},
         },
         post_commit::{IdleStart, MainDelivery},
     },
@@ -47,11 +48,11 @@ use silverhand_backend_core::{
     },
     host_runtime::runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
-        ProjectRuntimeStatus, RefineRuntimeToolCallInput, RuntimeActivityCommitResult,
-        RuntimeActivityFact, RuntimeConsumedCommitResult, RuntimeEventAdmission,
-        RuntimeExitCommitResult, RuntimeObservedStatus, RuntimeSessionInitCommitResult,
-        RuntimeStatusCommitResult, RuntimeToolCallInputCommitResult, StampRuntimePresence,
-        UpsertRuntimeTextActivity,
+        ProjectRuntimeStatus, RecordRuntimeStartFailure, RefineRuntimeToolCallInput,
+        RuntimeActivityCommitResult, RuntimeActivityFact, RuntimeConsumedCommitResult,
+        RuntimeEventAdmission, RuntimeExitCommitResult, RuntimeObservedStatus,
+        RuntimeSessionInitCommitResult, RuntimeStatusCommitResult,
+        RuntimeToolCallInputCommitResult, StampRuntimePresence, UpsertRuntimeTextActivity,
     },
     identity_access::agent_profile_mcp::{
         AgentProfileMcpDataPlane, McpDataPlaneFaultCode, McpProbeCommand,
@@ -496,6 +497,14 @@ impl DaemonEventDurablePort for CountingRuntimeDeliveryStore {
         self.inner.current_admission(host_id, scope).await
     }
 
+    async fn has_pending_turn(
+        &self,
+        admission: RuntimeEventAdmission,
+        conversation: ConversationId,
+    ) -> Result<bool, PersistenceFailure> {
+        self.inner.has_pending_turn(admission, conversation).await
+    }
+
     async fn commit_exit(
         &self,
         event: CommitRuntimeExit,
@@ -555,6 +564,13 @@ impl DaemonEventDurablePort for CountingRuntimeDeliveryStore {
         event: StampRuntimePresence,
     ) -> Result<Option<Vec<UserId>>, PersistenceFailure> {
         self.inner.stamp_presence(event).await
+    }
+
+    async fn record_start_failure(
+        &self,
+        event: RecordRuntimeStartFailure,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        self.inner.record_start_failure(event).await
     }
 }
 
@@ -2377,6 +2393,231 @@ async fn synchronous_refusal_releases_the_lease_and_a_retry_can_be_admitted() {
             .await
             .unwrap();
     assert!(owner.is_some());
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+/// Both automatic start arms (`runtime_deliver` spawn and idle `runtime_start`) share
+/// one refusal reading: the batch stays pending, the owner gets one unread notice
+/// carrying the daemon's text, and the connection stays usable.
+#[tokio::test]
+async fn runtime_unavailable_refusals_keep_delivery_pending_and_notify_the_owner_once() {
+    let cases = [
+        (
+            "runtime_deliver",
+            "runtime_binary_missing",
+            "Codex CLI is not installed on this computer.",
+        ),
+        (
+            "runtime_start",
+            "runtime_version_unsupported",
+            "Codex CLI 0.1.0 is not supported. Update to 0.2.0 or newer.",
+        ),
+    ];
+    for (kind, code, message) in cases {
+        let fixture = fixture(&format!("runtime-unavailable-{code}.sqlite")).await;
+        let mut viewer = connect_event_scope(fixture.address, "viewer:user-1").await;
+        let mut socket = connect(fixture.address).await;
+        complete_attachment(&mut socket, &fixture.controller).await;
+        assert_eq!(
+            next_json(&mut viewer).await["kind"],
+            "host_connection_changed"
+        );
+
+        for attempt in 0..2 {
+            let effects = fixture.effects.clone();
+            let call = tokio::spawn(async move {
+                let agent = AgentId::parse(AGENT).unwrap();
+                if kind == "runtime_deliver" {
+                    MainDelivery::deliver_to(&effects, &agent, &created_message()).await
+                } else {
+                    IdleStart::start_if_idle(
+                        &effects,
+                        &agent,
+                        &ConversationId::parse(CONVERSATION).unwrap(),
+                    )
+                    .await
+                }
+            });
+            let command = next_json(&mut socket).await;
+            assert_eq!(command["kind"], kind);
+            respond_error(
+                &mut socket,
+                &command,
+                json!({ "code": code, "message": message }),
+            )
+            .await;
+            assert!(
+                call.await.unwrap().is_err(),
+                "{code} is a failure, attempt {attempt}"
+            );
+        }
+
+        let notice = next_json(&mut viewer).await;
+        assert_eq!(notice["kind"], "notification", "{notice:#}");
+        assert_eq!(notice["payload"], json!({ "kind": "agent_start_failed" }));
+
+        let mut db = open(&fixture.path).await;
+        let inbox = sqlx::query(
+            "SELECT delivered_at, failed_at, in_flight_owner FROM conversation_inboxes WHERE id = 1",
+        )
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+        assert!(inbox.get::<Option<i64>, _>("delivered_at").is_none());
+        assert!(inbox.get::<Option<i64>, _>("failed_at").is_none());
+        assert!(inbox.get::<Option<String>, _>("in_flight_owner").is_none());
+        let rows = sqlx::query(
+            "SELECT user_id, agent_id, workspace_id, conversation_id, message_id, payload
+               FROM notifications WHERE kind = 'agent_start_failed'",
+        )
+        .fetch_all(&mut db)
+        .await
+        .unwrap();
+        assert_eq!(rows.len(), 1, "a repeated refusal must not stack notices");
+        let row = &rows[0];
+        assert_eq!(row.get::<String, _>("user_id"), "user-1");
+        assert_eq!(row.get::<String, _>("agent_id"), AGENT);
+        assert_eq!(row.get::<String, _>("workspace_id"), "workspace-1");
+        assert_eq!(row.get::<String, _>("conversation_id"), CONVERSATION);
+        assert!(row.get::<Option<String>, _>("message_id").is_none());
+        assert_eq!(
+            serde_json::from_str::<Value>(&row.get::<String, _>("payload")).unwrap(),
+            json!({ "reason": code, "error": message, "agent_name": "Delivery Agent" })
+        );
+
+        socket.close(None).await.unwrap();
+        fixture.controller.close().await;
+        fixture.server.abort();
+    }
+}
+
+/// An owner who cannot read the source conversation still gets the notice, without
+/// its coordinates, and a newer reason refreshes the one unread row in place.
+#[tokio::test]
+async fn a_start_failure_notice_for_an_owner_outside_the_conversation_hides_its_coordinates() {
+    let fixture = fixture("runtime-unavailable-outsider.sqlite").await;
+    let mut db = open(&fixture.path).await;
+    sqlx::query("DELETE FROM conversation_users WHERE user_id = 'user-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    sqlx::query("DELETE FROM workspace_users WHERE user_id = 'user-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+
+    for (code, message) in [
+        (
+            "runtime_binary_missing",
+            "Codex CLI is not installed on this computer.",
+        ),
+        (
+            "runtime_version_unsupported",
+            "Codex CLI 0.1.0 is not supported. Update to 0.2.0 or newer.",
+        ),
+    ] {
+        let effects = fixture.effects.clone();
+        let call = tokio::spawn(async move {
+            MainDelivery::deliver_to(
+                &effects,
+                &AgentId::parse(AGENT).unwrap(),
+                &created_message(),
+            )
+            .await
+        });
+        let command = next_json(&mut socket).await;
+        respond_error(
+            &mut socket,
+            &command,
+            json!({ "code": code, "message": message }),
+        )
+        .await;
+        assert!(call.await.unwrap().is_err());
+    }
+
+    let rows = sqlx::query(
+        "SELECT user_id, workspace_id, conversation_id, payload, read_at
+           FROM notifications WHERE kind = 'agent_start_failed'",
+    )
+    .fetch_all(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(rows.len(), 1);
+    let row = &rows[0];
+    assert_eq!(row.get::<String, _>("user_id"), "user-1");
+    assert!(row.get::<Option<String>, _>("workspace_id").is_none());
+    assert!(row.get::<Option<String>, _>("conversation_id").is_none());
+    assert!(row.get::<Option<i64>, _>("read_at").is_none());
+    assert_eq!(
+        serde_json::from_str::<Value>(&row.get::<String, _>("payload")).unwrap()["reason"],
+        "runtime_version_unsupported",
+        "the unread row carries the latest reason"
+    );
+
+    // Coming back online, the owner's unread list (the toast surface's first load)
+    // carries the notice.
+    let listed = MessagingStore::open(&fixture.path)
+        .await
+        .unwrap()
+        .notifications()
+        .list(
+            &UserId::parse("user-1").unwrap(),
+            NotificationListQuery {
+                unread_only: true,
+                limit: 100,
+            },
+        )
+        .await
+        .unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].notification.kind.as_str(), "agent_start_failed");
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+/// An unknown internal failure keeps the generic path: no notice, nothing consumed.
+#[tokio::test]
+async fn an_internal_start_failure_neither_notifies_nor_consumes() {
+    let fixture = fixture("runtime-internal-error.sqlite").await;
+    let mut socket = connect(fixture.address).await;
+    complete_attachment(&mut socket, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let call = tokio::spawn(async move {
+        MainDelivery::deliver_to(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &created_message(),
+        )
+        .await
+    });
+    let command = next_json(&mut socket).await;
+    respond_error(
+        &mut socket,
+        &command,
+        json!({ "code": "internal_error", "message": "boom at /Users/someone/.secret" }),
+    )
+    .await;
+    assert!(call.await.unwrap().is_err());
+
+    let mut db = open(&fixture.path).await;
+    let notices: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM notifications")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(notices, 0);
+    let delivered: Option<i64> =
+        sqlx::query_scalar("SELECT delivered_at FROM conversation_inboxes WHERE id = 1")
+            .fetch_one(&mut db)
+            .await
+            .unwrap();
+    assert!(delivered.is_none());
 
     socket.close(None).await.unwrap();
     fixture.controller.close().await;
@@ -6380,4 +6621,93 @@ async fn assert_grok_auth_activity_reads(
             .iter()
             .any(|row| row["id"] == id && row["payload"]["message"] == "Authentication required")
     );
+}
+
+#[tokio::test]
+async fn a_turn_end_drains_queued_turns_but_not_observe_only_context() {
+    let fixture = fixture("daemon-turn-end-drain.sqlite").await;
+    let mut daemon = connect(fixture.address).await;
+    complete_attachment(&mut daemon, &fixture.controller).await;
+    let effects = fixture.effects.clone();
+    let start = tokio::spawn(async move {
+        IdleStart::start_if_idle(
+            &effects,
+            &AgentId::parse(AGENT).unwrap(),
+            &ConversationId::parse(CONVERSATION).unwrap(),
+        )
+        .await
+    });
+    let start_command = next_json(&mut daemon).await;
+    let generation = start_command["params"]["runtime_generation"]
+        .as_i64()
+        .unwrap();
+    respond(
+        &mut daemon,
+        &start_command,
+        json!({ "started": true, "pid": 7, "started_at": 100 }),
+    )
+    .await;
+    start.await.unwrap().unwrap();
+
+    let turn_ended = |ts: i64| {
+        product_frame(
+            "runtime_state",
+            Some(generation),
+            json!({
+                "state": {
+                    "runId": format!("run-{ts}"),
+                    "agentId": AGENT,
+                    "conversationId": CONVERSATION,
+                    "status": "idle",
+                    "terminalReason": "turn_ended",
+                    "startedAt": 10,
+                    "updatedAt": ts,
+                    "lastActivityAt": ts,
+                },
+                "ts": ts,
+            }),
+        )
+    };
+
+    // A queued turn behind the batch the run took is drained when the turn ends.
+    let mut db = open(&fixture.path).await;
+    add_inbox(&mut db, "message-2", 2).await;
+    sqlx::query("UPDATE conversation_inboxes SET delivered_at = 15 WHERE message_id = 'message-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    send_product(&mut daemon, turn_ended(20)).await;
+    let drain = next_json(&mut daemon).await;
+    assert_eq!(drain["kind"], "runtime_deliver");
+    assert_eq!(drain["params"]["deliveries"][0]["seq"], 2);
+    respond(
+        &mut daemon,
+        &drain,
+        json!({ "disposition": "admitted", "pid": 7, "started_at": 100 }),
+    )
+    .await;
+
+    // Only observe context left: the turn end wakes nobody.
+    sqlx::query("UPDATE conversation_inboxes SET in_flight_owner = NULL, in_flight_at = NULL, delivered_at = 30")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    add_inbox(&mut db, "message-3", 3).await;
+    sqlx::query(
+        "UPDATE conversation_inboxes SET delivery_kind = 'observe' WHERE message_id = 'message-3'",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    send_product(&mut daemon, turn_ended(40)).await;
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(300), daemon.next())
+            .await
+            .is_err(),
+        "observe-only pending context must not be drained"
+    );
+
+    daemon.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
 }

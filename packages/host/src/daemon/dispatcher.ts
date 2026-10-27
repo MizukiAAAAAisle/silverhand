@@ -77,10 +77,7 @@ import { detectRuntimeCatalog } from '../runtimes.js';
 import { DAEMON_VERSION, createDaemonHelloResult } from './version.js';
 import { composeHostOs, hostOsArch } from './host-os.js';
 import type { DaemonLogger } from './logger.js';
-import type {
-  DeliveryOwnerContext,
-  SupervisorContract,
-} from './supervisor-contract.js';
+import type { DeliveryOwnerContext, SupervisorContract } from './supervisor-contract.js';
 import { logIntent } from './daemon-logging.js';
 import { DaemonTypedError } from './typed-error.js';
 import {
@@ -127,9 +124,7 @@ export interface DispatcherOptions {
    * means the intent is not wired and the dispatcher throws
    * (translated to `internal_error` by the catch arm).
    */
-  hostOutboundDetachHandler?: () =>
-    | HostOutboundDetachResult
-    | Promise<HostOutboundDetachResult>;
+  hostOutboundDetachHandler?: () => HostOutboundDetachResult | Promise<HostOutboundDetachResult>;
   /**
    * Stage D3.c Commit 2 — handler for the `host_outbound_reload`
    * intent. Production wiring: `OutboundSupervisor.reload`. Same
@@ -139,12 +134,8 @@ export interface DispatcherOptions {
    * `undefined` means the intent is not wired and the dispatcher
    * throws (translated to `internal_error` by the catch arm).
    */
-  hostOutboundReloadHandler?: () =>
-    | HostOutboundReloadResult
-    | Promise<HostOutboundReloadResult>;
-  hostProxyConfigGetHandler?: () =>
-    | HostProxyConfigGetResult
-    | Promise<HostProxyConfigGetResult>;
+  hostOutboundReloadHandler?: () => HostOutboundReloadResult | Promise<HostOutboundReloadResult>;
+  hostProxyConfigGetHandler?: () => HostProxyConfigGetResult | Promise<HostProxyConfigGetResult>;
   hostProxyConfigSetHandler?: (
     params: HostProxyConfigSetParams,
   ) => HostProxyConfigSetResult | Promise<HostProxyConfigSetResult>;
@@ -252,9 +243,7 @@ export interface DispatcherOptions {
    * tools failures come back INSIDE the result (`ok:false` + phase); only a
    * host-local fault throws a typed `McpProbeError`.
    */
-  mcpProbeHandler?: (
-    params: McpProbeParams,
-  ) => McpProbeResult | Promise<McpProbeResult>;
+  mcpProbeHandler?: (params: McpProbeParams) => McpProbeResult | Promise<McpProbeResult>;
 }
 
 export class IntentDispatcher {
@@ -284,9 +273,7 @@ export class IntentDispatcher {
       ) => HostProxyConfigSetResult | Promise<HostProxyConfigSetResult>)
     | undefined;
   private readonly agentMaterializeHandler:
-    | ((
-        params: AgentMaterializeParams,
-      ) => AgentMaterializeResult | Promise<AgentMaterializeResult>)
+    | ((params: AgentMaterializeParams) => AgentMaterializeResult | Promise<AgentMaterializeResult>)
     | undefined;
   private readonly agentWorkspaceIndexHandler:
     | ((
@@ -301,14 +288,10 @@ export class IntentDispatcher {
   private readonly agentWorkspaceFileReadHandler:
     | ((
         params: AgentWorkspaceFileReadParams,
-      ) =>
-        | AgentWorkspaceFileReadResult
-        | Promise<AgentWorkspaceFileReadResult>)
+      ) => AgentWorkspaceFileReadResult | Promise<AgentWorkspaceFileReadResult>)
     | undefined;
   private readonly agentL2SeedHandler:
-    | ((
-        params: AgentL2SeedParams,
-      ) => AgentL2SeedResult | Promise<AgentL2SeedResult>)
+    | ((params: AgentL2SeedParams) => AgentL2SeedResult | Promise<AgentL2SeedResult>)
     | undefined;
   private readonly agentFilesPurgeHandler:
     | ((
@@ -344,24 +327,18 @@ export class IntentDispatcher {
     // `'__test_instance__'` is the grep-friendly sentinel — if it
     // ever shows up on the wire in prod logs, something forgot to
     // pass `helloResult`.
-    this.helloResult =
-      opts.helloResult ?? createDaemonHelloResult('__test_instance__');
+    this.helloResult = opts.helloResult ?? createDaemonHelloResult('__test_instance__');
     this.supervisor = opts.supervisor;
-    const supervisorCoordinator =
-      opts.supervisor?.agentHomeMutationCoordinator?.() ?? null;
+    const supervisorCoordinator = opts.supervisor?.agentHomeMutationCoordinator?.() ?? null;
     if (
       supervisorCoordinator &&
       opts.agentHomeMutationCoordinator &&
       supervisorCoordinator !== opts.agentHomeMutationCoordinator
     ) {
-      throw new Error(
-        'IntentDispatcher refused split agent-home fence authorities',
-      );
+      throw new Error('IntentDispatcher refused split agent-home fence authorities');
     }
     if (opts.supervisor?.fenceAndQuiesceAgent && !supervisorCoordinator) {
-      throw new Error(
-        'purge-capable Supervisor must expose its agent-home mutation coordinator',
-      );
+      throw new Error('purge-capable Supervisor must expose its agent-home mutation coordinator');
     }
     this.agentHomeMutationCoordinator =
       supervisorCoordinator ??
@@ -475,9 +452,7 @@ export class IntentDispatcher {
       return finish(
         this.errorFrame(requestId, {
           code: 'invalid_params',
-          message: parsed.error.errors
-            .map(e => `${e.path.join('.')}: ${e.message}`)
-            .join('; '),
+          message: parsed.error.errors.map((e) => `${e.path.join('.')}: ${e.message}`).join('; '),
         }),
       );
     }
@@ -485,37 +460,26 @@ export class IntentDispatcher {
     try {
       const intentName = intent as IntentName;
       const effect = agentHomeCommandEffect(intentName);
-      const execute = (): Promise<unknown> =>
-        this.runHandler(intentName, parsed.data, ctx);
+      const execute = (): Promise<unknown> => this.runHandler(intentName, parsed.data, ctx);
       let result: unknown;
       if (isAgentHomeMutatorEffect(effect)) {
         const scopedAgentId = commandAgentId(parsed.data);
         if (!scopedAgentId) {
-          throw new Error(
-            `${intent} is classified as an agent mutator but has no agent_id`,
-          );
+          throw new Error(`${intent} is classified as an agent mutator but has no agent_id`);
         }
-        result = await this.agentHomeMutationCoordinator.runBounded(
-          scopedAgentId,
-          execute,
-        );
+        result = await this.agentHomeMutationCoordinator.runBounded(scopedAgentId, execute);
       } else if (effect === 'purge') {
         const scopedAgentId = commandAgentId(parsed.data);
         if (!scopedAgentId) {
           throw new Error(`${intent} is classified as purge but has no agent_id`);
         }
-        result = await this.agentHomeMutationCoordinator.runPurge(
-          scopedAgentId,
-          async () => {
-            const quiesced = await this.requireAgentQuiescenceSupervisor()(
-              scopedAgentId,
-            );
-            const purged = await this.requireAgentFilesPurgeHandler()(
-              parsed.data as AgentFilesPurgeParams,
-            );
-            return { ...purged, quiesced_count: quiesced.quiesced_count };
-          },
-        );
+        result = await this.agentHomeMutationCoordinator.runPurge(scopedAgentId, async () => {
+          const quiesced = await this.requireAgentQuiescenceSupervisor()(scopedAgentId);
+          const purged = await this.requireAgentFilesPurgeHandler()(
+            parsed.data as AgentFilesPurgeParams,
+          );
+          return { ...purged, quiesced_count: quiesced.quiesced_count };
+        });
       } else {
         result = await execute();
       }
@@ -535,7 +499,7 @@ export class IntentDispatcher {
           {
             intent,
             issues: resultValidated.error.errors
-              .map(e => `${e.path.join('.')}: ${e.message}`)
+              .map((e) => `${e.path.join('.')}: ${e.message}`)
               .join('; '),
           },
           'daemon emitted result that does not match schema',
@@ -604,7 +568,7 @@ export class IntentDispatcher {
             err: err.message,
             code: err.code,
             issues: validated.error.errors
-              .map(e => `${e.path.join('.')}: ${e.message}`)
+              .map((e) => `${e.path.join('.')}: ${e.message}`)
               .join('; '),
           },
           'intent handler returned a code not in its IPC error taxonomy; emitting internal_error',
@@ -656,11 +620,7 @@ export class IntentDispatcher {
    * code against the per-intent error schema, so we know it's
    * legitimate within the per-intent contract.
    */
-  private typedErrorFrame(
-    id: string,
-    code: string,
-    message: string,
-  ): ResponseFrame {
+  private typedErrorFrame(id: string, code: string, message: string): ResponseFrame {
     return {
       id,
       error: { code, message } as unknown as ResponseError,
@@ -699,9 +659,7 @@ export class IntentDispatcher {
           started_at: this.startedAt,
           uptime_ms: this.now() - this.startedAt,
           intent_count: this.intentCount,
-          runtimes: this.supervisor
-            ? (await this.supervisor.status({})).runtimes
-            : [],
+          runtimes: this.supervisor ? (await this.supervisor.status({})).runtimes : [],
         };
       case 'echo': {
         const p = params as { message: string };
@@ -739,8 +697,8 @@ export class IntentDispatcher {
             ? Array.from(
                 new Set(
                   (await this.supervisor.status({})).runtimes
-                    .filter(r => HOST_ACTIVE_RUNTIME_PHASES.has(r.phase))
-                    .map(r => r.agent_id),
+                    .filter((r) => HOST_ACTIVE_RUNTIME_PHASES.has(r.phase))
+                    .map((r) => r.agent_id),
                 ),
               )
             : [],
@@ -762,23 +720,16 @@ export class IntentDispatcher {
         return { ok: true, enabled: false, expires_at: null };
       }
       case 'agent_message_send':
-        return this.requireSupervisor().agentMessageSend(
-          params as AgentMessageSendParams,
-        );
+        return this.requireSupervisor().agentMessageSend(params as AgentMessageSendParams);
       case 'agent_stale_resolve':
-        return this.requireSupervisor().agentStaleResolve(
-          params as AgentStaleResolveParams,
-        );
+        return this.requireSupervisor().agentStaleResolve(params as AgentStaleResolveParams);
       case 'agent_stale_receive':
         // #task:1614 — deferred-pull second consumer. `ctx` carries the
         // ingress's response-handoff capability; the supervisor defers
         // custody settlement to `ctx.responseHandoff` (invoked by the
         // control-socket ingress after the response frame's write
         // settles) and fails closed on ingresses that cannot prove it.
-        return this.requireSupervisor().agentStaleReceive(
-          params as AgentStaleReceiveParams,
-          ctx,
-        );
+        return this.requireSupervisor().agentStaleReceive(params as AgentStaleReceiveParams, ctx);
       // ── runtime_* family ────────────────────────────────────────
       // Each case below requires `this.supervisor` to be set; when
       // it isn't, we throw — `dispatch()` catches and projects as
@@ -795,48 +746,31 @@ export class IntentDispatcher {
         // `runtime_delivery_consumed`/`_failed` events. `ctx.owner` (Stage 3,
         // §11.4.1) is the connection identity injected by the ingress — the
         // supervisor stamps it onto any `deferred` queue entry.
-        return this.requireSupervisor().deliver(
-          params as RuntimeDeliverParams,
-          ctx,
-        );
+        return this.requireSupervisor().deliver(params as RuntimeDeliverParams, ctx);
       case 'runtime_status':
-        return this.requireSupervisor().status(
-          params as RuntimeStatusParams,
-        );
+        return this.requireSupervisor().status(params as RuntimeStatusParams);
       case 'runtime_clear_session':
-        return this.requireSupervisor().clearSession(
-          params as RuntimeClearSessionParams,
-        );
+        return this.requireSupervisor().clearSession(params as RuntimeClearSessionParams);
       case 'runtime_stop_all':
-        return this.requireSupervisor().stopAll(
-          params as RuntimeStopAllParams,
-        );
+        return this.requireSupervisor().stopAll(params as RuntimeStopAllParams);
       case 'runtime_close_activity_log':
-        return this.requireSupervisor().closeActivityLog(
-          params as RuntimeCloseActivityLogParams,
-        );
+        return this.requireSupervisor().closeActivityLog(params as RuntimeCloseActivityLogParams);
       // ── output flow control ─────────────────────────────────────
       // Cindy `_YD0KJF-YAQXlcki`: route through the SupervisorContract
       // interface instead of emitting from the dispatcher. The
       // concrete supervisor owns both flow-control state and the
       // `runtime_output_paused` / `_resumed` ack event.
       case 'runtime_output_pause':
-        return this.requireSupervisor().pauseOutput(
-          params as RuntimeOutputPauseParams,
-        );
+        return this.requireSupervisor().pauseOutput(params as RuntimeOutputPauseParams);
       case 'runtime_output_resume':
-        return this.requireSupervisor().resumeOutput(
-          params as RuntimeOutputResumeParams,
-        );
+        return this.requireSupervisor().resumeOutput(params as RuntimeOutputResumeParams);
       case 'host_outbound_attach':
         // Late-attach is a daemon-control intent, not a runtime_*
         // intent, so it has its own handler slot. When a daemon is
         // launched in the protocol-only test surface no handler is
         // wired; the require helper throws, the catch arm in
         // `dispatch()` projects that as `internal_error`.
-        return this.requireHostOutboundAttachHandler()(
-          params as HostOutboundAttachParams,
-        );
+        return this.requireHostOutboundAttachHandler()(params as HostOutboundAttachParams);
       case 'host_outbound_detach':
         // Detach is the symmetric daemon-control intent. No params
         // (validated to `{}` by the schema before reaching here).
@@ -851,9 +785,7 @@ export class IntentDispatcher {
       case 'host_proxy_config_get':
         return this.requireHostProxyConfigGetHandler()();
       case 'host_proxy_config_set':
-        return this.requireHostProxyConfigSetHandler()(
-          params as HostProxyConfigSetParams,
-        );
+        return this.requireHostProxyConfigSetHandler()(params as HostProxyConfigSetParams);
       case 'agent_materialize':
         // D4.d D2 — server↔daemon formal semantics. The slot is
         // wired by `runDaemon` to `materializeAgent` from
@@ -862,59 +794,43 @@ export class IntentDispatcher {
         // `dispatch()` and projected with their typed code; other
         // throws still flow through the generic `internal_error`
         // path.
-        return this.requireAgentMaterializeHandler()(
-          params as AgentMaterializeParams,
-        );
+        return this.requireAgentMaterializeHandler()(params as AgentMaterializeParams);
       case 'agent_workspace_index':
         // D4.e-1 — route-time agent_dir resolver. Slot wired to
         // `indexAgentWorkspaces`.
-        return this.requireAgentWorkspaceIndexHandler()(
-          params as AgentWorkspaceIndexParams,
-        );
+        return this.requireAgentWorkspaceIndexHandler()(params as AgentWorkspaceIndexParams);
       case 'agent_workspace_tree':
         // #task:811 — flat tree of every visible file/directory under
         // the agent home dir. Slot wired to `listAgentWorkspaceTree`.
         // Typed errors (AgentWorkspaceFsError) are projected by the
         // DaemonTypedError catch arm.
-        return this.requireAgentWorkspaceTreeHandler()(
-          params as AgentWorkspaceTreeParams,
-        );
+        return this.requireAgentWorkspaceTreeHandler()(params as AgentWorkspaceTreeParams);
       case 'agent_workspace_file_read':
         // #task:811 — read one file from the agent home dir by virtual
         // path. Slot wired to `readAgentWorkspaceFile`. Same typed-
         // error taxonomy as the tree handler (forbidden_path /
         // not_found / fs_unavailable / internal_error).
-        return this.requireAgentWorkspaceFileReadHandler()(
-          params as AgentWorkspaceFileReadParams,
-        );
+        return this.requireAgentWorkspaceFileReadHandler()(params as AgentWorkspaceFileReadParams);
       case 'agent_l2_seed':
         // D4.e-3 — member agent L2 seed on the owning host. Slot wired to
         // `seedAgentL2`. Typed errors (AgentL2SeedError) are projected by
         // the DaemonTypedError catch arm.
-        return this.requireAgentL2SeedHandler()(
-          params as AgentL2SeedParams,
-        );
+        return this.requireAgentL2SeedHandler()(params as AgentL2SeedParams);
       case 'agent_files_purge':
         // D4.e-4 — remove an agent's host-local L1/L2 files on the owning
         // host. Slot wired to `purgeAgentFiles`. Typed errors
         // (AgentFilesPurgeError) are projected by the DaemonTypedError
         // catch arm.
-        return this.requireAgentFilesPurgeHandler()(
-          params as AgentFilesPurgeParams,
-        );
+        return this.requireAgentFilesPurgeHandler()(params as AgentFilesPurgeParams);
       case 'agent_profile_mcp_read':
         // #task:1135 — read the subject's L1 mcp.json. Slot wired to
         // `readAgentProfileMcp`. Typed errors (AgentProfileMcpError)
         // are projected by the DaemonTypedError catch arm.
-        return this.requireAgentProfileMcpReadHandler()(
-          params as AgentProfileMcpReadParams,
-        );
+        return this.requireAgentProfileMcpReadHandler()(params as AgentProfileMcpReadParams);
       case 'agent_profile_mcp_write':
         // #task:1135 — validate + atomically write the subject's L1
         // mcp.json. Slot wired to `writeAgentProfileMcp`.
-        return this.requireAgentProfileMcpWriteHandler()(
-          params as AgentProfileMcpWriteParams,
-        );
+        return this.requireAgentProfileMcpWriteHandler()(params as AgentProfileMcpWriteParams);
       case 'mcp_probe':
         // #task:1137 — one-shot live MCP probe. Slot wired to
         // `probeMcpServer`. Connection/handshake/tools failures come back in
@@ -927,9 +843,7 @@ export class IntentDispatcher {
    *  the dispatcher's catch arm will project as `internal_error`. */
   private requireSupervisor(): SupervisorContract {
     if (!this.supervisor) {
-      throw new Error(
-        'runtime_* intent reached dispatcher with no supervisor wired',
-      );
+      throw new Error('runtime_* intent reached dispatcher with no supervisor wired');
     }
     return this.supervisor;
   }
@@ -961,9 +875,7 @@ export class IntentDispatcher {
     params: HostOutboundAttachParams,
   ) => HostOutboundAttachResult | Promise<HostOutboundAttachResult> {
     if (!this.hostOutboundAttachHandler) {
-      throw new Error(
-        'host_outbound_attach intent reached dispatcher with no handler wired',
-      );
+      throw new Error('host_outbound_attach intent reached dispatcher with no handler wired');
     }
     return this.hostOutboundAttachHandler;
   }
@@ -972,9 +884,7 @@ export class IntentDispatcher {
     | HostOutboundDetachResult
     | Promise<HostOutboundDetachResult> {
     if (!this.hostOutboundDetachHandler) {
-      throw new Error(
-        'host_outbound_detach intent reached dispatcher with no handler wired',
-      );
+      throw new Error('host_outbound_detach intent reached dispatcher with no handler wired');
     }
     return this.hostOutboundDetachHandler;
   }
@@ -983,9 +893,7 @@ export class IntentDispatcher {
     | HostOutboundReloadResult
     | Promise<HostOutboundReloadResult> {
     if (!this.hostOutboundReloadHandler) {
-      throw new Error(
-        'host_outbound_reload intent reached dispatcher with no handler wired',
-      );
+      throw new Error('host_outbound_reload intent reached dispatcher with no handler wired');
     }
     return this.hostOutboundReloadHandler;
   }
@@ -994,9 +902,7 @@ export class IntentDispatcher {
     | HostProxyConfigGetResult
     | Promise<HostProxyConfigGetResult> {
     if (!this.hostProxyConfigGetHandler) {
-      throw new Error(
-        'host_proxy_config_get intent reached dispatcher with no handler wired',
-      );
+      throw new Error('host_proxy_config_get intent reached dispatcher with no handler wired');
     }
     return this.hostProxyConfigGetHandler;
   }
@@ -1005,9 +911,7 @@ export class IntentDispatcher {
     params: HostProxyConfigSetParams,
   ) => HostProxyConfigSetResult | Promise<HostProxyConfigSetResult> {
     if (!this.hostProxyConfigSetHandler) {
-      throw new Error(
-        'host_proxy_config_set intent reached dispatcher with no handler wired',
-      );
+      throw new Error('host_proxy_config_set intent reached dispatcher with no handler wired');
     }
     return this.hostProxyConfigSetHandler;
   }
@@ -1016,9 +920,7 @@ export class IntentDispatcher {
     params: AgentMaterializeParams,
   ) => AgentMaterializeResult | Promise<AgentMaterializeResult> {
     if (!this.agentMaterializeHandler) {
-      throw new Error(
-        'agent_materialize intent reached dispatcher with no handler wired',
-      );
+      throw new Error('agent_materialize intent reached dispatcher with no handler wired');
     }
     return this.agentMaterializeHandler;
   }
@@ -1027,9 +929,7 @@ export class IntentDispatcher {
     params: AgentWorkspaceIndexParams,
   ) => AgentWorkspaceIndexResult | Promise<AgentWorkspaceIndexResult> {
     if (!this.agentWorkspaceIndexHandler) {
-      throw new Error(
-        'agent_workspace_index intent reached dispatcher with no handler wired',
-      );
+      throw new Error('agent_workspace_index intent reached dispatcher with no handler wired');
     }
     return this.agentWorkspaceIndexHandler;
   }
@@ -1038,22 +938,16 @@ export class IntentDispatcher {
     params: AgentWorkspaceTreeParams,
   ) => AgentWorkspaceTreeResult | Promise<AgentWorkspaceTreeResult> {
     if (!this.agentWorkspaceTreeHandler) {
-      throw new Error(
-        'agent_workspace_tree intent reached dispatcher with no handler wired',
-      );
+      throw new Error('agent_workspace_tree intent reached dispatcher with no handler wired');
     }
     return this.agentWorkspaceTreeHandler;
   }
 
   private requireAgentWorkspaceFileReadHandler(): (
     params: AgentWorkspaceFileReadParams,
-  ) =>
-    | AgentWorkspaceFileReadResult
-    | Promise<AgentWorkspaceFileReadResult> {
+  ) => AgentWorkspaceFileReadResult | Promise<AgentWorkspaceFileReadResult> {
     if (!this.agentWorkspaceFileReadHandler) {
-      throw new Error(
-        'agent_workspace_file_read intent reached dispatcher with no handler wired',
-      );
+      throw new Error('agent_workspace_file_read intent reached dispatcher with no handler wired');
     }
     return this.agentWorkspaceFileReadHandler;
   }
@@ -1062,9 +956,7 @@ export class IntentDispatcher {
     params: AgentL2SeedParams,
   ) => AgentL2SeedResult | Promise<AgentL2SeedResult> {
     if (!this.agentL2SeedHandler) {
-      throw new Error(
-        'agent_l2_seed intent reached dispatcher with no handler wired',
-      );
+      throw new Error('agent_l2_seed intent reached dispatcher with no handler wired');
     }
     return this.agentL2SeedHandler;
   }
@@ -1075,9 +967,7 @@ export class IntentDispatcher {
     | Omit<AgentFilesPurgeResult, 'quiesced_count'>
     | Promise<Omit<AgentFilesPurgeResult, 'quiesced_count'>> {
     if (!this.agentFilesPurgeHandler) {
-      throw new Error(
-        'agent_files_purge intent reached dispatcher with no handler wired',
-      );
+      throw new Error('agent_files_purge intent reached dispatcher with no handler wired');
     }
     return this.agentFilesPurgeHandler;
   }
@@ -1086,9 +976,7 @@ export class IntentDispatcher {
     params: AgentProfileMcpReadParams,
   ) => AgentProfileMcpReadResult | Promise<AgentProfileMcpReadResult> {
     if (!this.agentProfileMcpReadHandler) {
-      throw new Error(
-        'agent_profile_mcp_read intent reached dispatcher with no handler wired',
-      );
+      throw new Error('agent_profile_mcp_read intent reached dispatcher with no handler wired');
     }
     return this.agentProfileMcpReadHandler;
   }
@@ -1097,9 +985,7 @@ export class IntentDispatcher {
     params: AgentProfileMcpWriteParams,
   ) => AgentProfileMcpWriteResult | Promise<AgentProfileMcpWriteResult> {
     if (!this.agentProfileMcpWriteHandler) {
-      throw new Error(
-        'agent_profile_mcp_write intent reached dispatcher with no handler wired',
-      );
+      throw new Error('agent_profile_mcp_write intent reached dispatcher with no handler wired');
     }
     return this.agentProfileMcpWriteHandler;
   }
@@ -1108,9 +994,7 @@ export class IntentDispatcher {
     params: McpProbeParams,
   ) => McpProbeResult | Promise<McpProbeResult> {
     if (!this.mcpProbeHandler) {
-      throw new Error(
-        'mcp_probe intent reached dispatcher with no handler wired',
-      );
+      throw new Error('mcp_probe intent reached dispatcher with no handler wired');
     }
     return this.mcpProbeHandler;
   }

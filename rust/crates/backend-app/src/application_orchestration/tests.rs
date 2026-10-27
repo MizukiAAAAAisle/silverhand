@@ -8405,6 +8405,52 @@ async fn readyz_reports_listen_ready_only_after_serve_receives_the_bound_listene
 /// unset/empty to enabled, and hard-fails on anything else. This pins both against
 /// the TS authorities (`packages/backend/src/auth/config.ts`,
 /// `packages/server/src/config.ts`), including the values where they DIVERGE.
+#[tokio::test]
+async fn features_advertise_recovery_with_remote_mail_and_deletion_off_embedded() {
+    let mail = crate::foundation::mail::MailConfig::parse(
+        Some("smtps://user:secret@smtp.example.com:465"),
+        Some("no-reply@example.com"),
+    )
+    .unwrap();
+    for (remote, with_mail, expected) in [
+        (true, true, true),
+        (true, false, false),
+        (false, true, false),
+        (false, false, false),
+    ] {
+        let fixture = fixture(true).await;
+        let mut config = if remote {
+            remote_config(fixture.path.clone())
+        } else {
+            config(fixture.path.clone())
+        };
+        if with_mail {
+            config.mail = mail.clone();
+        }
+        let app = prepare(&config).await.unwrap();
+        let (status, body) = request(&app.router, "GET", "/api/server/info", None).await;
+        assert_eq!(status, StatusCode::OK);
+        let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(body["features"]["password_recovery_enabled"], expected);
+        assert_eq!(body["features"]["account_deletion_enabled"], remote);
+        assert_eq!(body["features"]["signup_enabled"], body["signup_enabled"]);
+        let (status, _) = json_request_with_body(
+            &app.router,
+            "POST",
+            "/auth/password-recovery/request",
+            None,
+            Body::from(r#"{"email":"nobody@example.com"}"#),
+        )
+        .await;
+        let refused = if expected {
+            StatusCode::ACCEPTED
+        } else {
+            StatusCode::SERVICE_UNAVAILABLE
+        };
+        assert_eq!(status, refused);
+    }
+}
+
 #[test]
 fn signup_admission_matches_each_launchers_contract() {
     use DeploymentProfile::{Embedded, RemoteOnly};
@@ -11178,6 +11224,8 @@ mod account_deletion_tests;
 mod avatar_design_tests;
 #[path = "password_change_tests.rs"]
 mod password_change_tests;
+#[path = "task_content_length_tests.rs"]
+mod task_content_length_tests;
 
 #[path = "host_activation_tests.rs"]
 mod host_activation_tests;

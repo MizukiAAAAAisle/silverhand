@@ -6,6 +6,7 @@ import {
   ChannelMembersContent,
   type ChannelMembersContentProps,
 } from "./channel-view/channel-members-content";
+import { t } from "@/lib/i18n";
 
 /** One search filters the roster and offers additions through the existing candidate authority. */
 export function ChannelMembersPage({
@@ -34,10 +35,10 @@ export function ChannelMembersPage({
           <SearchIcon className="size-3.5 shrink-0 text-text-muted" aria-hidden />
           <input
             autoFocus={autoFocus}
-            aria-label="Search members"
+            aria-label={t("conversationShell.searchMembers")}
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="Search members"
+            placeholder={t("conversationShell.searchMembers")}
             className="w-full min-w-0 bg-transparent text-sm text-text-primary placeholder:text-text-muted focus:outline-none"
           />
         </label>

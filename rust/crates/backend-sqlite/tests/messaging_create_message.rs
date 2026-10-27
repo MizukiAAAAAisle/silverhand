@@ -1998,6 +1998,52 @@ async fn following_a_cluster_twice_queues_its_history_once() {
     assert_eq!(observe_after_second, observe_after_first);
 }
 
+/// A newly followed agent is caught up with only the most recent replies.
+#[tokio::test]
+async fn a_followed_cluster_backfills_only_its_most_recent_replies() {
+    let mut fixture = Fixture::new().await;
+    let store = fixture.store().await;
+    let root = store
+        .send_message(send(agent_actor(), CHANNEL_ID, "root"))
+        .await
+        .unwrap()
+        .committed()
+        .clone();
+    let root_id = root.message().id.as_str().to_owned();
+    let mut replies = Vec::new();
+    for n in 0..12 {
+        let reply = store
+            .send_message(reply_to(
+                user_actor(),
+                CHANNEL_ID,
+                &format!("reply {n}"),
+                &root_id,
+            ))
+            .await
+            .unwrap()
+            .committed()
+            .clone();
+        replies.push(reply.message().id.as_str().to_owned());
+    }
+    store
+        .send_message(reply_to(
+            user_actor(),
+            CHANNEL_ID,
+            &addressing_broad("look"),
+            &root_id,
+        ))
+        .await
+        .unwrap();
+    let observed: Vec<String> = fixture
+        .queued_for(BROAD_AGENT_ID)
+        .await
+        .into_iter()
+        .filter(|(_, kind)| kind == "observe")
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(observed, replies[2..]);
+}
+
 /// Following is not a way into a conversation: a reference to someone who does not
 /// participate widens nothing.
 #[tokio::test]

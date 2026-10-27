@@ -42,6 +42,7 @@ import {
   isReferenceScheme,
   PLUGIN_LINK_PROP,
 } from "../model/reference-href";
+import { t, useLocale } from "@/lib/i18n";
 
 interface MarkdownProps {
   content: string;
@@ -183,6 +184,7 @@ function MarkdownInner({
   // message cap, the workspace file preview is bounded by the daemon's read cap
   // and so opts out here rather than inheriting a chat limit.
   const budget = renderBudget === "unbounded" ? null : MESSAGE_RENDER_BUDGET_BYTES;
+  useLocale();
   const oversizedBytes = useMemo(
     () => (exceedsRenderBudget(content, budget) ? markdownByteLength(content) : null),
     [content, budget],
@@ -642,7 +644,9 @@ function StaticConversationRef({
   return (
     <span
       className="inline-flex max-w-55 items-center gap-0.5 rounded-(--chip-radius) bg-accent-soft px-1.5 -mx-0.5 font-medium text-accent"
-      aria-label={conversation ? `${faceLabel("channel")} ${label}` : `Conversation #conv:${id}`}
+      aria-label={
+        conversation ? `${faceLabel("channel")} ${label}` : t("messages.conversationId", { id })
+      }
       data-conversation-ref={id}
     >
       {icon}
@@ -951,9 +955,11 @@ function OversizedContent({ content, bytes }: { content: string; bytes: number }
   return (
     <div className="markdown-body">
       <div className="flex items-center gap-2 text-xs opacity-60">
-        <span>{label} too large to render as Markdown</span>
+        <span>
+          {label} {t("messages.tooLargeToRender")}
+        </span>
         <button type="button" onClick={onCopy} className="underline hover:opacity-80">
-          {copied ? "Copied" : "Copy full text"}
+          {copied ? t("messages.copied") : t("messages.copyFullText")}
         </button>
       </div>
       <pre className="whitespace-pre-wrap wrap-break-word">
@@ -1002,8 +1008,8 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
           type="button"
           onClick={onCopy}
           className="code-block__copy"
-          title={copied ? "Copied" : "Copy code"}
-          aria-label="Copy code"
+          title={copied ? t("messages.copied") : t("messages.copyCode")}
+          aria-label={t("messages.copyCode")}
         >
           {/* Icon only — the header strip is chrome, and a word next to a
               glyph that already says "copy" spends label width on nothing
@@ -1020,9 +1026,9 @@ function CodeBlock({ children }: { children: React.ReactNode }): JSX.Element {
           type="button"
           onClick={() => setExpanded((value) => !value)}
           className="code-block__expand"
-          aria-label={expanded ? "Collapse code" : "Expand code"}
+          aria-label={expanded ? t("messages.collapseCode") : t("messages.expandCode")}
           aria-expanded={expanded}
-          title={expanded ? "Collapse code" : "Expand code"}
+          title={expanded ? t("messages.collapseCode") : t("messages.expandCode")}
         >
           {expanded ? (
             <ChevronUpIcon size={16} aria-hidden="true" />

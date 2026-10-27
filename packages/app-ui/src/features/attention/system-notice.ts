@@ -1,6 +1,7 @@
 import type { MessageAuthorDto, NotificationDto } from "@silverhand/shared";
 import { presentAuthor } from "@/features/messages/model/author-presentation";
 import { readableExcerpt } from "./mention-toast";
+import { t } from "@/lib/i18n";
 
 /** An OS notification's lines. The system already names the app, so the title
  *  carries the subject, not "Silverhand". */
@@ -18,29 +19,32 @@ export function systemNoticeOf(n: NotificationDto, fallback: string): SystemNoti
     const conversationTitle = payloadString(n, "conversation_title");
     const excerpt = payloadString(n, "mention_excerpt");
     return {
-      title: senderLabel(n.sender ?? null) ?? payloadString(n, "trigger_name") ?? "Someone",
-      subtitle: conversationTitle ? `in #${conversationTitle}` : undefined,
-      body: excerpt ? readableExcerpt(excerpt) : "Mentioned you",
+      title:
+        senderLabel(n.sender ?? null) ?? payloadString(n, "trigger_name") ?? t("attention.someone"),
+      subtitle: conversationTitle
+        ? t("attention.inChannel", { channel: conversationTitle })
+        : undefined,
+      body: excerpt ? readableExcerpt(excerpt) : t("attention.mentionedYou"),
       groupId,
     };
   }
   if (n.kind === "agent_start_failed") {
-    const name = payloadString(n, "agent_name") ?? n.agent_id ?? "Agent";
+    const name = payloadString(n, "agent_name") ?? n.agent_id ?? t("attention.agent");
     const reason = payloadString(n, "reason");
     if (reason === "init_timeout") {
-      return { title: `@${name} timed out while starting`, groupId };
+      return { title: t("attention.startTimeout", { name }), groupId };
     }
     if (reason === "runtime_crash") {
       const code = n.payload?.["exit_code"];
       return {
-        title: `@${name} exited unexpectedly`,
-        body: code != null ? `Exit code ${String(code)}` : undefined,
+        title: t("attention.exited", { name }),
+        body: code != null ? t("attention.exitCode", { code: String(code) }) : undefined,
         groupId,
       };
     }
     return {
-      title: `@${name} didn't start`,
-      body: payloadString(n, "error") ?? "Unknown error",
+      title: t("attention.didntStart", { name }),
+      body: payloadString(n, "error") ?? t("attention.unknownError2"),
       groupId,
     };
   }

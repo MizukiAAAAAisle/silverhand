@@ -109,7 +109,6 @@ fn row_local_field(reason: TaskRowCorruption) -> &'static str {
         E::Status => "tasks.status",
         E::Title => "tasks.title",
         E::TitleNotCanonical => "tasks.title:non_canonical",
-        E::Content => "tasks.content",
         E::Board => "tasks.board_key:row_local",
         E::ThreadRootId => "tasks.thread_root_id",
         E::SourceMessageId => "tasks.source_message_id",

@@ -122,9 +122,7 @@ export const asReadSeq = (seq: MessageSeq): ReadSeq => seq as unknown as ReadSeq
  */
 function assertDecodableSeq(n: number, brand: string): void {
   if (!Number.isInteger(n) || n < 0) {
-    throw new RangeError(
-      `${brand}: cannot decode ${n} — expected a non-negative integer seq`,
-    );
+    throw new RangeError(`${brand}: cannot decode ${n} — expected a non-negative integer seq`);
   }
 }
 
@@ -204,7 +202,4 @@ export const TransportSeqSchema = nonNegativeIntSchema.transform(decodeTransport
 /** Wire schema whose parsed output is a {@link ReadSeq}. */
 export const ReadSeqSchema = nonNegativeIntSchema.transform(decodeReadSeq);
 /** Wire schema whose parsed output is a {@link TransportEpoch}. */
-export const TransportEpochSchema = z
-  .string()
-  .min(1)
-  .transform(decodeTransportEpoch);
+export const TransportEpochSchema = z.string().min(1).transform(decodeTransportEpoch);

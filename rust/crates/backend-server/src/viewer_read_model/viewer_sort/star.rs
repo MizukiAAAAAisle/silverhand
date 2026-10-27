@@ -1,14 +1,14 @@
 //! `POST`/`DELETE /api/channels/{id}/star` — toggle THIS viewer's star on a
 //! conversation.
 //!
-//! Both methods share one handler parameterized by the target star state, exactly
-//! like the reference `channelStar(c, starred)`. The route is thin over the ONE
-//! transactional [`ViewerSortMutationWriter`]: it admits the path id and hands a
-//! `SetStarred` mutation to the writer, which — UNDER its own write lock —
-//! re-resolves the channel's `channels:<ws>` list existence (404) / visibility
-//! (403) / live membership (404), toggles the star (and, on unstar, drops the
-//! favorites-rank orphan), and returns the committed `channels:<ws>` post-image.
-//! No decision fact is a stale pre-lock witness.
+//! Both methods share one handler parameterized by the target star state. The route
+//! is thin over the ONE transactional [`ViewerSortMutationWriter`]: it resolves the
+//! conversation's home list (`channels:<ws>`, or `direct_pairs` for a direct pair)
+//! and hands a `SetStarred` mutation to the writer, which — UNDER its own write
+//! lock — re-resolves list existence (404) / visibility (403) / live membership
+//! (404; for a direct pair: the viewer is its human endpoint), toggles the star
+//! (and, on unstar, drops the favorites-rank orphan), and returns the committed
+//! home-list post-image.
 
 use std::sync::Arc;
 
@@ -33,9 +33,9 @@ use super::wire::ViewerSortStateDto;
 /// The shared mounted path for both star methods.
 pub const CHANNEL_STAR_PATH: &str = "/api/channels/{id}/star";
 
-/// The two authorities the star routes bind: `homes` reads the channel's parent
-/// workspace (the reference `getChannelLike` — a missing/non-channel id is `404
-/// channel not found`, distinct from the list-not-found the writer decides);
+/// The two authorities the star routes bind: `homes` reads the conversation's home
+/// (a missing id is `404 channel not found`, distinct from the list-not-found the
+/// writer decides);
 /// `writer` is the ONE transactional sort mutation authority. In production both are
 /// shared-pool handles over the one messaging store.
 pub struct ChannelStarState<H, W> {
@@ -102,24 +102,17 @@ where
     }
     let state = &state.0;
 
-    // The channel-like existence read (reference `getChannelLike`): a missing or
-    // non-channel id is `404 channel not found`, distinct from the list-not-found
-    // the writer decides for a resolvable channel in a gone/forbidden workspace.
-    // This read is a fast pre-writer refusal-order hint; the writer still re-resolves
-    // the list's authority under its own lock before writing.
-    let home = match state.homes.channel_home(&id).await {
-        Ok(Some(ChannelHomeVerdict::WorkspacePlaced(home))) => home,
-        // A missing id is `channel not found`; a workspace-less EXISTING conversation
-        // (direct pair) passed existence but resolves no channels list → `not found`
-        // (the existence fact is not null-collapsed).
-        Ok(Some(ChannelHomeVerdict::WorkspaceLessExisting)) => {
-            return error(StatusCode::NOT_FOUND, "not found");
+    // Existence + home list (a missing id is `404 channel not found`). This read is a
+    // pre-writer hint; the writer re-resolves the list's authority under its lock.
+    let list_key = match state.homes.channel_home(&id).await {
+        Ok(Some(ChannelHomeVerdict::WorkspacePlaced(home))) => {
+            SortListKey::Channels(home.workspace.as_str().to_owned())
         }
+        Ok(Some(ChannelHomeVerdict::DirectPair)) => SortListKey::DirectPairs,
         Ok(None) => return error(StatusCode::NOT_FOUND, "channel not found"),
         Err(cause) => return internal(cause, "channel-star home read failed"),
     };
 
-    let list_key = SortListKey::Channels(home.workspace.as_str().to_owned());
     match state
         .writer
         .apply_sort_mutation(
@@ -145,7 +138,7 @@ where
         Ok(Err(SortMutationRefusal::ListNotFound))
         | Ok(Err(SortMutationRefusal::UnknownEntity)) => error(StatusCode::NOT_FOUND, "not found"),
         Ok(Err(SortMutationRefusal::Forbidden)) => error(StatusCode::FORBIDDEN, "forbidden"),
-        // No other refusal is reachable for a `SetStarred` on a channels list.
+        // No other refusal is reachable for a `SetStarred`.
         Ok(Err(_)) => internal_unreachable(),
         Err(cause) => internal(cause, "channel-star write failed"),
     }

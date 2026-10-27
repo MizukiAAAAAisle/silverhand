@@ -151,12 +151,16 @@ export class SocketTransport implements Transport {
   }
 
   private attachStreamHandlers(socket: Socket): void {
-    socket.on('data', chunk => {
+    socket.on('data', (chunk) => {
       // `setEncoding('utf8')` makes chunks arrive as strings, but
       // node's type defs still type `data` as `Buffer` — coerce
       // defensively in case anything ever upstream-toggles encoding.
       const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
-      const { frames, leftover, overflow } = splitNdjson(this.buffer, text, MAX_WORKSPACE_FILE_FRAME_BYTES);
+      const { frames, leftover, overflow } = splitNdjson(
+        this.buffer,
+        text,
+        MAX_WORKSPACE_FILE_FRAME_BYTES,
+      );
       this.buffer = leftover;
       if (overflow) {
         for (const h of this.handlers.overflow) h();
@@ -169,7 +173,7 @@ export class SocketTransport implements Transport {
       }
     });
     socket.once('end', () => this.fireDisconnect('peer_end'));
-    socket.once('error', err => {
+    socket.once('error', (err) => {
       const code = (err as NodeJS.ErrnoException).code;
       this.fireDisconnect(`socket_error:${code ?? err.message}`);
     });

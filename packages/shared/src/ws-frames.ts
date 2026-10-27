@@ -200,16 +200,12 @@ export function conversationSideScope(conversationId: string): string {
 
 /** Extract the conversationId from a message-stream scope, or null. */
 export function parseConversationScope(scope: string): string | null {
-  return scope.startsWith('conversation:')
-    ? scope.slice('conversation:'.length)
-    : null;
+  return scope.startsWith('conversation:') ? scope.slice('conversation:'.length) : null;
 }
 
 /** Extract the conversationId from a side-channel scope, or null. */
 export function parseConversationSideScope(scope: string): string | null {
-  return scope.startsWith('conversation-side:')
-    ? scope.slice('conversation-side:'.length)
-    : null;
+  return scope.startsWith('conversation-side:') ? scope.slice('conversation-side:'.length) : null;
 }
 
 /** Full detailed stream; subscribe only after agent visibility admission. */

@@ -21,6 +21,7 @@ import {
   useRemoveWorkspaceHumanMember,
   type WorkspaceHumanMember,
 } from "./hooks";
+import { t, useLocale } from "@/lib/i18n";
 
 type Candidate = MemberCandidate;
 
@@ -84,6 +85,7 @@ export function WorkspaceMembersPanel({
   // The creator narrowing lives in the `scope=owned` query above, so a
   // workspace role only decides which *kinds* may be added, never *whose*
   // agents: any member gets the agent group, only admins get the human group.
+  const locale = useLocale();
   const candidateGroups = useMemo<MemberCandidateGroup[]>(() => {
     const agentItems: Candidate[] = canAddOwnAgents
       ? agents
@@ -96,10 +98,10 @@ export function WorkspaceMembersPanel({
           .map((u) => ({ kind: "human" as const, user: u }))
       : [];
     return [
-      { label: "AGENTS", items: agentItems },
-      { label: "HUMANS", items: humanItems },
+      { label: t("workspaces.agents"), items: agentItems },
+      { label: t("workspaces.humans"), items: humanItems },
     ];
-  }, [agents, users, agentMemberIds, humanMemberIds, canAddOwnAgents, canAddHumans]);
+  }, [locale, agents, users, agentMemberIds, humanMemberIds, canAddOwnAgents, canAddHumans]);
 
   // Flat member list (everyone currently enrolled). Agents first, then
   // humans — same ordering contract as the picker, without its labels.
@@ -166,9 +168,9 @@ export function WorkspaceMembersPanel({
           groups={candidateGroups}
           onPick={(c) => void onPick(c)}
           disabled={addMember.isPending}
-          ariaLabel={canAddHumans ? "Add member" : "Add agent"}
+          ariaLabel={canAddHumans ? t("workspaces.addMember") : t("workspaces.addAgent")}
           emptyHint={
-            canAddHumans ? "Everyone is already in this project" : "You have no agents left to add"
+            canAddHumans ? t("workspaces.everyoneIsAlreadyIn") : t("workspaces.youHaveNoAgents")
           }
         />
       ) : null}
@@ -177,7 +179,7 @@ export function WorkspaceMembersPanel({
         {membersLoading ? (
           <WorkspaceMembersSkeleton />
         ) : members.length === 0 ? (
-          <Hint>No members yet</Hint>
+          <Hint>{t("workspaces.noMembersYet")}</Hint>
         ) : (
           <ul className="flex flex-col gap-1">
             {members.map((m) => {
@@ -200,7 +202,7 @@ export function WorkspaceMembersPanel({
                       handleOpenMember(m);
                     }
                   }}
-                  title={`Open ${displayName}`}
+                  title={t("workspaces.openNamed", { name: displayName })}
                   className="flex h-8 cursor-pointer items-center gap-2 rounded-(--chip-radius) border-(length:--control-border-width) border-border-subtle bg-bg-base px-2 text-left transition-colors hover:border-text-primary focus-visible:border-text-primary focus-visible:outline-none"
                 >
                   {m.kind === "agent" ? (
@@ -236,8 +238,8 @@ export function WorkspaceMembersPanel({
                         void handleRemove(m.agent.id);
                       }}
                       disabled={removeMember.isPending}
-                      aria-label="Remove"
-                      title="Remove member"
+                      aria-label={t("workspaces.remove")}
+                      title={t("workspaces.removeMember")}
                       className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:text-error disabled:opacity-60"
                     >
                       <RemoveMemberIcon className="size-3.5" />
@@ -255,8 +257,8 @@ export function WorkspaceMembersPanel({
                         void handleRemoveHuman(m.user.user_id);
                       }}
                       disabled={removeHumanMember.isPending}
-                      aria-label="Remove"
-                      title="Remove member"
+                      aria-label={t("workspaces.remove")}
+                      title={t("workspaces.removeMember")}
                       className="ml-auto flex size-6 items-center justify-center rounded-(--chip-radius) text-text-muted hover:text-error disabled:opacity-60"
                     >
                       <RemoveMemberIcon className="size-3.5" />
@@ -290,18 +292,18 @@ function formatAddError(err: unknown): string {
     // (adding that creator to the workspace is itself `admin` governance), and
     // never an admin, who collects the identical refusal here (#task:1683).
     if (code === "agent_not_owned") {
-      return "You can only add agents you created. Someone else's can be brought in only by its creator.";
+      return t("workspaces.youCanOnlyAdd");
     }
-    if (err.status === 403) return "You do not have permission to manage members of this project.";
+    if (err.status === 403) return t("workspaces.youDoNotHave");
     if (err.status === 404) {
-      if (detail === "user not found") return "This user does not exist or has been deleted.";
-      if (detail === "agent not found") return "This agent does not exist or has been deleted.";
-      return "This project does not exist.";
+      if (detail === "user not found") return t("workspaces.thisUserDoesNot");
+      if (detail === "agent not found") return t("workspaces.thisAgentDoesNot");
+      return t("workspaces.thisProjectDoesNot");
     }
-    if (err.status === 400) return "Invalid parameters. Please refresh and try again.";
-    return `Failed to add member (HTTP ${err.status}).`;
+    if (err.status === 400) return t("workspaces.invalidParametersPleaseRefresh");
+    return t("workspaces.addFailedStatus", { status: err.status });
   }
-  return "Failed to add member. Please try again.";
+  return t("workspaces.failedToAddMember");
 }
 
 /**
@@ -315,14 +317,14 @@ function formatRemoveAgentError(err: unknown): string {
   if (err instanceof ApiError) {
     const { code } = parseApiErrorBody(err.body);
     if (code === "agent_not_owned") {
-      return "You can only remove agents you created. Ask a project admin for the others.";
+      return t("workspaces.youCanOnlyRemove");
     }
-    if (err.kind === "backend_unreachable") return "Remove failed: cannot reach the backend.";
-    if (err.status === 403) return "You do not have permission to remove this member.";
-    if (err.status === 404) return "This member does not exist or has already been removed.";
-    return `Failed to remove member (HTTP ${err.status}).`;
+    if (err.kind === "backend_unreachable") return t("workspaces.removeFailedCannotReach");
+    if (err.status === 403) return t("workspaces.youDoNotHave2");
+    if (err.status === 404) return t("workspaces.thisMemberDoesNot");
+    return t("workspaces.removeFailedStatus", { status: err.status });
   }
-  return "Failed to remove member. Please try again.";
+  return t("workspaces.failedToRemoveMember");
 }
 
 /**
@@ -333,14 +335,13 @@ function formatRemoveAgentError(err: unknown): string {
  */
 function formatRemoveHumanError(err: unknown): string {
   if (err instanceof ApiError) {
-    if (err.kind === "backend_unreachable") return "Remove failed: cannot reach the backend.";
-    if (err.status === 403)
-      return "You do not have permission to remove this member (owner required).";
-    if (err.status === 400) return "Cannot remove the project owner.";
-    if (err.status === 404) return "This member does not exist or has already been removed.";
-    return `Failed to remove member (HTTP ${err.status}).`;
+    if (err.kind === "backend_unreachable") return t("workspaces.removeFailedCannotReach");
+    if (err.status === 403) return t("workspaces.youDoNotHave3");
+    if (err.status === 400) return t("workspaces.cannotRemoveTheProject");
+    if (err.status === 404) return t("workspaces.thisMemberDoesNot");
+    return t("workspaces.removeFailedStatus", { status: err.status });
   }
-  return "Failed to remove member. Please try again.";
+  return t("workspaces.failedToRemoveMember");
 }
 
 function Section({ title, children }: { title: string; children: ReactNode }): JSX.Element {

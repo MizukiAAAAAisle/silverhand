@@ -21,6 +21,7 @@ axum.workspace = true
 futures-util.workspace = true
 http-body-util.workspace = true
 http-body = "=1.0.1"
+lettre.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 silverhand-backend-core.workspace = true
@@ -33,6 +34,7 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-appender.workspace = true
 tracing-subscriber.workspace = true
+url.workspace = true
 
 [build-dependencies]
 serde_json.workspace = true

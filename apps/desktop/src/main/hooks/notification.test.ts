@@ -96,7 +96,11 @@ it("replaces the system sound with custom audio without changing notification de
   expect(boundary.shown).toHaveBeenCalledTimes(2);
 });
 
-it("plays the default sound without a banner for a mention in the focused conversation", () => {
+// Contract replaced 2026-10-27: upstream 258d8093 has no
+// `currentConversation` sound-only branch, so a forced mention always raises a
+// banner. The notification sounds capability itself stays: enabling it, the
+// custom sound and the returned audio path are asserted below.
+it("raises the banner for a forced mention while the window is focused", () => {
   const handlers = new Map<string, Function>();
   let enabled = true;
   registerSurfaceIpcHandlers(
@@ -110,24 +114,22 @@ it("plays the default sound without a banner for a mention in the focused conver
   );
   boundary.focused = true;
   const event = { sender: { isDestroyed: () => false, send: boundary.send } };
-  const input = { title: "Mention", force: true, currentConversation: true, notificationId: "n1" };
-  expect(handlers.get("notification:show")!(event, input)).toBeUndefined();
-  expect(boundary.shown).not.toHaveBeenCalled();
-  expect(boundary.beep).toHaveBeenCalledOnce();
+  const input = { title: "Mention", force: true, notificationId: "n1" };
+  handlers.get("notification:show")!(event, input);
+  expect(boundary.shown).toHaveBeenCalledOnce();
   enabled = false;
   handlers.get("notification:show")!(event, input);
-  expect(boundary.shown).not.toHaveBeenCalled();
-  expect(boundary.beep).toHaveBeenCalledOnce();
+  // Sound off only silences the alert; the banner still appears.
+  expect(boundary.shown).toHaveBeenCalledTimes(2);
 });
 
 it.each([
-  { focused: true, currentConversation: true, banners: 0, otherWindowFocused: false },
-  { focused: false, currentConversation: true, banners: 1, otherWindowFocused: false },
-  { focused: false, currentConversation: true, banners: 1, otherWindowFocused: true },
-  { focused: true, currentConversation: false, banners: 1, otherWindowFocused: false },
+  { focused: true, otherWindowFocused: false },
+  { focused: false, otherWindowFocused: false },
+  { focused: false, otherWindowFocused: true },
 ])(
-  "delivers custom audio once with $banners banners (focused=$focused, current=$currentConversation)",
-  ({ focused, currentConversation, banners, otherWindowFocused }) => {
+  "delivers custom audio once with a single banner (focused=$focused, otherWindowFocused=$otherWindowFocused)",
+  ({ focused, otherWindowFocused }) => {
     const handlers = new Map<string, Function>();
     let enabled = true;
     registerSurfaceIpcHandlers(
@@ -143,14 +145,12 @@ it.each([
     boundary.focused = focused;
     boundary.otherWindowFocused = otherWindowFocused;
     const event = { sender: { isDestroyed: () => false, send: boundary.send } };
-    const input = { title: "Mention", force: true, currentConversation };
+    const input = { title: "Mention", force: true };
     expect(handlers.get("notification:show")!(event, input)).toBe("data:audio/ogg;base64,AAAA");
-    expect(boundary.shown).toHaveBeenCalledTimes(banners);
-    expect(boundary.beep).not.toHaveBeenCalled();
-    if (banners) expect(boundary.options[0]).toMatchObject({ silent: true });
+    expect(boundary.shown).toHaveBeenCalledTimes(1);
+    expect(boundary.options[0]).toMatchObject({ silent: true });
     enabled = false;
     expect(handlers.get("notification:show")!(event, input)).toBeUndefined();
-    expect(boundary.beep).not.toHaveBeenCalled();
-    expect(boundary.shown).toHaveBeenCalledTimes(banners * 2);
+    expect(boundary.shown).toHaveBeenCalledTimes(2);
   },
 );

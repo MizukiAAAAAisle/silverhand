@@ -27,13 +27,10 @@ import { ParticipantNameSchema } from './api/name.js';
 export const HandleSchema = z
   .string()
   .trim()
-  .refine(
-    handle => ParticipantNameSchema.safeParse(normalizeHandle(handle)).success,
-    {
-      message:
-        'handle must start with a letter and contain only letters, numbers, dash, or underscore; one leading @ is allowed',
-    },
-  );
+  .refine((handle) => ParticipantNameSchema.safeParse(normalizeHandle(handle)).success, {
+    message:
+      'handle must start with a letter and contain only letters, numbers, dash, or underscore; one leading @ is allowed',
+  });
 
 /**
  * Strip the display `@` (and surrounding whitespace) to get the stored name.

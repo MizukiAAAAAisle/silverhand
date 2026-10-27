@@ -3,6 +3,7 @@ import { useEffect, useRef } from "react";
 import { routes, useNav, useRouteState } from "@/router";
 import { useAgents } from "@/features/agents/hooks/hooks";
 import { DirectoryShell, type DirectoryLifecycle } from "@/components/layout/directory-shell";
+import { Sidebar } from "@/components/layout/sidebar";
 import { AgentSidebarShell } from "./agent-sidebar-shell";
 import { AgentDetailPage, type AgentNavigation } from "./agent-detail-page";
 import { resolveDefaultAgent } from "./selection";
@@ -65,5 +66,26 @@ export function AgentShell({
         onOpenConversation={onOpenConversation}
       />
     </DirectoryShell>
+  );
+}
+
+/** The Members sidebar as the rail's hover peek. */
+export function MembersPeekSidebar(): JSX.Element {
+  const route = useRouteState();
+  const nav = useNav();
+
+  return (
+    <Sidebar
+      name="members"
+      width="var(--sidebar-width)"
+      sidebar={
+        <AgentSidebarShell
+          selectedAgentId={route.section === "members" ? route.agentId : null}
+          selectedUserId={route.section === "members" ? route.userId : null}
+          onSelectAgent={(id) => nav.toMembers(id)}
+          onSelectUser={(id) => nav.toMembersUser(id)}
+        />
+      }
+    />
   );
 }

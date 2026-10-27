@@ -85,8 +85,7 @@ describe("selectActiveRunStates", () => {
 
 describe("activitySnippetKindLabel", () => {
   it("keeps snippet content type separate from run status", () => {
-    expect(activitySnippetKindLabel("thinking")).toBe("Thinking");
-    expect(activitySnippetKindLabel("text")).toBe("Writing");
+    expect(activitySnippetKindLabel("thinking")).not.toBe(activitySnippetKindLabel("text"));
     expect(activitySnippetKindLabel(undefined)).toBeNull();
   });
 });

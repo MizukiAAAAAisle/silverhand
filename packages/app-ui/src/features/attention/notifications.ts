@@ -15,6 +15,7 @@ import { recordChannelWorkspace } from "@/features/channels/channel-workspace-in
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import { showMentionToast } from "./mention-toast";
 import { payloadString, systemNoticeOf } from "./system-notice";
+import { t } from "@/lib/i18n";
 
 const unreadKey = ["notifications", "unread"] as const;
 const listKey = ["notifications", "list"] as const;
@@ -120,8 +121,8 @@ export function useMarkNotificationsRead() {
 /**
  * Mount this once at the App root. Listens for WS viewer-scoped notification
  * events (replacing the previous 5 s poll) and fires:
- *  - an in-app toast when the arrival needs surfacing
- *  - a system notification, or sound alone in the focused desktop conversation
+ *  - an in-app toast (sonner) for every new notification
+ *  - a system notification via IPC when the app is not in the foreground
  *
  * Suppresses toasts for the currently active channel (user can already
  * see it) unless the kind is `agent_start_failed` (always shown — it's
@@ -137,19 +138,18 @@ export function useNotificationToasts(
   onJump?: (target: MessageJumpTarget) => void,
 ) {
   const qc = useQueryClient();
-  const { data, dataUpdatedAt } = useQuery<{ notifications: NotificationDto[] }>({
-    queryKey: [...listKey, { toasts: true }],
-    // Arrival alerts must survive a concurrent visible-read update. Read state
-    // drives badges, not whether a new notification deserves an alert.
-    queryFn: () => api<{ notifications: NotificationDto[] }>("/api/notifications"),
+  const { mutate: markRead } = useMarkNotificationsRead();
+  const { data } = useQuery<{ notifications: NotificationDto[] }>({
+    queryKey: [...listKey, { unread: true, toasts: true }],
+    queryFn: () => api<{ notifications: NotificationDto[] }>("/api/notifications?unread=1"),
     staleTime: 2_000,
   });
 
   const seenIds = useRef<Set<string>>(new Set());
   const initialized = useRef(false);
-  // A list refresh can include older, already-read rows after reconnect. Only
-  // a matching viewer event authorizes a new @me alert; read_at does not.
-  const incomingMentions = useRef(new Map<string, string>());
+  // Sticky start-failure toasts on screen. Each lives only while its notice is
+  // unread, so a read from anywhere else (Activity, another device) takes it down.
+  const stickyIds = useRef<Set<string>>(new Set());
   // Live notification rows the user can click on. Toast `onClick` reads
   // straight from this map; native-notification clicks come back from
   // main as ids and look up here too. We keep it as a ref instead of
@@ -186,22 +186,10 @@ export function useNotificationToasts(
   // fact to the OS-dismiss projection; main never re-derives read state.
   useEffect(() => {
     const sub = subscribeViewerScope();
-    const toastKey = [...listKey, { toasts: true }] as const;
+    const toastKey = [...listKey, { unread: true, toasts: true }] as const;
     const unsub = onWsFrame((frame) => {
       if (frame.type === "event" && isCurrentViewerScope(frame.scope)) {
         if (frame.kind === "notification") {
-          const payload = frame.payload as {
-            kind?: unknown;
-            message_id?: unknown;
-            conversation_id?: unknown;
-          } | null;
-          if (
-            payload?.kind === "mention_self" &&
-            typeof payload.message_id === "string" &&
-            typeof payload.conversation_id === "string"
-          ) {
-            incomingMentions.current.set(payload.message_id, payload.conversation_id);
-          }
           invalidateQueryDebounced(qc, toastKey);
         } else if (
           frame.kind === "unread_updated" &&
@@ -216,7 +204,6 @@ export function useNotificationToasts(
           }
         }
       } else if (frame.type === "snapshot_required" && isCurrentViewerScope(frame.scope)) {
-        incomingMentions.current.clear();
         invalidateQueryDebounced(qc, toastKey);
       }
     });
@@ -260,32 +247,31 @@ export function useNotificationToasts(
     if (!data) return;
     const notifications = data.notifications;
 
+    const unreadIds = new Set(notifications.map((n) => n.id));
+    for (const id of stickyIds.current) {
+      if (!unreadIds.has(id)) {
+        toast.dismiss(id);
+        stickyIds.current.delete(id);
+      }
+    }
+
     if (!initialized.current) {
-      // First load: mark all existing notifications as seen without
-      // toasting — we only alert for genuinely new arrivals.
+      // First load: existing notifications are seen without toasting, except an
+      // unread agent start failure — it may have no Activity row (owner outside
+      // the source conversation) and stays actionable until dismissed.
       for (const n of notifications) {
-        if (
-          !(
-            n.kind === "mention_self" &&
-            n.message_id &&
-            incomingMentions.current.get(n.message_id) === n.conversation_id
-          )
-        ) {
-          seenIds.current.add(n.id);
-        }
+        if (n.kind === "agent_start_failed") continue;
+        seenIds.current.add(n.id);
         if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
       }
       initialized.current = true;
     }
 
     for (const n of notifications) {
-      if (n.kind === "mention_self") {
-        if (!n.message_id || incomingMentions.current.get(n.message_id) !== n.conversation_id)
-          continue;
-        incomingMentions.current.delete(n.message_id);
-      }
-      if (seenIds.current.has(n.id)) continue;
-      seenIds.current.add(n.id);
+      // A start-failure row is refreshed in place (same id, newer created_at).
+      const seenKey = n.kind === "agent_start_failed" ? `${n.id}@${n.created_at}` : n.id;
+      if (seenIds.current.has(seenKey)) continue;
+      seenIds.current.add(seenKey);
       if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
 
       const isAgentFailure = n.kind === "agent_start_failed";
@@ -301,31 +287,17 @@ export function useNotificationToasts(
         continue;
       }
 
-      const desktopSounds = getPlatform().notificationSounds;
-      const currentConversation = !!(
-        isViewerMention &&
-        desktopSounds &&
-        n.conversation_id &&
-        n.conversation_id === activeChannelId
-      );
       if (isViewerMention) {
-        // Desktop sound is delivered independently below. Don't stack an in-app
-        // card over the conversation the user is reading, or queue one behind
-        // another app. Native/mobile banners retain their existing behavior.
-        if (
-          !desktopSounds ||
-          (!currentConversation && document.hasFocus() && document.visibilityState === "visible")
-        )
-          showMentionToast(
-            {
-              sender: n.sender ?? null,
-              fallbackName: payloadString(n, "trigger_name") ?? "Someone",
-              conversationTitle: payloadString(n, "conversation_title"),
-              excerpt: payloadString(n, "mention_excerpt"),
-            },
-            n.id,
-            () => handleClickById(n.id),
-          );
+        showMentionToast(
+          {
+            sender: n.sender ?? null,
+            fallbackName: payloadString(n, "trigger_name") ?? t("attention.someone"),
+            conversationTitle: payloadString(n, "conversation_title"),
+            excerpt: payloadString(n, "mention_excerpt"),
+          },
+          n.id,
+          () => handleClickById(n.id),
+        );
       } else {
         const label = buildToastLabel(n);
         // A plain toast has no whole-surface click, so a clickable kind gets a
@@ -333,25 +305,44 @@ export function useNotificationToasts(
         const toastOptions = isClickableKind(n.kind)
           ? {
               action: {
-                label: "View",
+                label: t("attention.view"),
                 onClick: () => handleClickById(n.id),
               },
             }
           : undefined;
 
         if (isAgentFailure) {
-          toast.error(label, toastOptions);
+          // Sticky until the read is confirmed: that acknowledge lets the next
+          // failure of this agent notify again. A failed read keeps it up for retry.
+          stickyIds.current.add(n.id);
+          toast.error(label, {
+            id: n.id,
+            duration: Infinity,
+            action: {
+              label: "Dismiss",
+              onClick: (event) => {
+                event.preventDefault();
+                markRead(
+                  { id: n.id },
+                  {
+                    onSuccess: () => toast.dismiss(n.id),
+                    onError: () =>
+                      toast.error(label, { id: n.id, description: "Couldn't dismiss. Try again." }),
+                  },
+                );
+              },
+            },
+          });
         } else {
           toast(label, { ...toastOptions, icon: toastIcon("notification") });
         }
       }
 
-      // Main verifies the sender window's focus: a direct mention in the
-      // displayed conversation uses sound alone only while that window is focused.
+      // System notification — main process suppresses ordinary alerts when an
+      // Electron window is focused; direct human mentions opt out via `force`.
       void getPlatform().notifications?.showSystemNotification({
         ...systemNoticeOf(n, buildToastLabel(n)),
         force: isViewerMention,
-        currentConversation,
         notificationId: isClickableKind(n.kind) ? n.id : undefined,
       });
     }
@@ -364,7 +355,7 @@ export function useNotificationToasts(
     // read-state, so the notification correctly stays unread until an ACTIVE
     // eliminate path clears it: visible read advancing the cursor, clicking the
     // toast/notification to jump to source, or the Activity Mark-as-read ✓.
-  }, [data, dataUpdatedAt, activeChannelId, qc, handleClickById]);
+  }, [data, activeChannelId, qc, handleClickById, markRead]);
 }
 
 /**
@@ -513,26 +504,33 @@ async function resolveTargetFromConversationId(
 
 function buildToastLabel(n: NotificationDto): string {
   if (n.kind === "agent_start_failed") {
-    const name = (n.payload?.["agent_name"] as string | undefined) ?? n.agent_id ?? "Agent";
+    const name =
+      (n.payload?.["agent_name"] as string | undefined) ?? n.agent_id ?? t("attention.agent");
     const reason = n.payload?.["reason"] as string | undefined;
-    if (reason === "init_timeout") return `@${name} timed out while starting`;
+    if (reason === "init_timeout") return t("attention.startTimeout", { name });
     if (reason === "runtime_crash") {
       const code = n.payload?.["exit_code"];
-      return `@${name} exited unexpectedly${code != null ? ` (exit ${code})` : ""}`;
+      return code != null
+        ? t("attention.exitedWithCode", { name, code: String(code) })
+        : t("attention.exited", { name });
     }
-    const error = (n.payload?.["error"] as string | undefined) ?? "unknown error";
-    return `@${name} didn't start: ${error}`;
+    const error = (n.payload?.["error"] as string | undefined) ?? t("attention.unknownError");
+    return t("attention.didntStartReason", { name, reason: error });
   }
   if (n.kind === "mention_external") {
     // `source_workspace_name` is a WORKSPACE name — a free-text label
     // (#task:1827), not `#`-addressable, so it renders bare. The `mention_self`
     // arm below reads `conversation_title` and keeps its `#`.
     const workspaceName = n.payload?.["source_workspace_name"] as string | undefined;
-    return workspaceName ? `New mention in ${workspaceName}` : "New mention";
+    return workspaceName
+      ? t("attention.newMentionIn", { project: workspaceName })
+      : t("attention.newMention");
   }
   if (n.kind === "mention_self") {
     const conversationTitle = n.payload?.["conversation_title"] as string | undefined;
-    return conversationTitle ? `You were mentioned in #${conversationTitle}` : "You were mentioned";
+    return conversationTitle
+      ? t("attention.mentionedIn", { channel: conversationTitle })
+      : t("attention.youWereMentioned");
   }
-  return "New notification";
+  return t("attention.newNotification");
 }

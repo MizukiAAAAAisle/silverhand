@@ -11,9 +11,7 @@
  * audit face in its own module leaves `agent.ts` a leaf and breaks the cycle.
  */
 import { z } from 'zod';
-import {
-  ConversationRosterPolicySchema,
-} from '../db/schema.js';
+import { ConversationRosterPolicySchema } from '../db/schema.js';
 import { DirectPairCounterpartSchema } from './conversation.js';
 import { MessageDtoSchema } from './message.js';
 
@@ -65,9 +63,7 @@ export type AgentAuditChatSummary = z.infer<typeof AgentAuditChatSummarySchema>;
 export const AgentAuditChatListResponseSchema = z.object({
   chats: z.array(AgentAuditChatSummarySchema),
 });
-export type AgentAuditChatListResponse = z.infer<
-  typeof AgentAuditChatListResponseSchema
->;
+export type AgentAuditChatListResponse = z.infer<typeof AgentAuditChatListResponseSchema>;
 
 /**
  * The read-only full transcript of one of the agent's chats — `GET
@@ -87,6 +83,4 @@ export const AgentAuditTranscriptResponseSchema = z.object({
   has_more_before: z.boolean(),
   has_more_after: z.boolean(),
 });
-export type AgentAuditTranscriptResponse = z.infer<
-  typeof AgentAuditTranscriptResponseSchema
->;
+export type AgentAuditTranscriptResponse = z.infer<typeof AgentAuditTranscriptResponseSchema>;

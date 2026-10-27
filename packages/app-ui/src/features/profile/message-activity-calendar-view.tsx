@@ -6,6 +6,7 @@ import {
   type MessageActivityDay,
 } from "./message-activity-calendar";
 import { useCoarsePointer } from "@/navigation/layout";
+import { localeTag, t } from "@/lib/i18n";
 import "./message-activity.css";
 
 interface Props {
@@ -89,8 +90,8 @@ export function MessageActivityCalendar({
       : [],
   );
 
-  const monthFormat = new Intl.DateTimeFormat("en-US", { month: "short", timeZone: "UTC" });
-  const dateFormat = new Intl.DateTimeFormat("en-US", {
+  const monthFormat = new Intl.DateTimeFormat(localeTag, { month: "short", timeZone: "UTC" });
+  const dateFormat = new Intl.DateTimeFormat(localeTag, {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -120,11 +121,11 @@ export function MessageActivityCalendar({
             {fit ? null : (
               <div className="message-activity-weekdays" aria-hidden>
                 <span />
-                <span>Mon</span>
+                <span>{t("profile.mon")}</span>
                 <span />
-                <span>Wed</span>
+                <span>{t("profile.wed")}</span>
                 <span />
-                <span>Fri</span>
+                <span>{t("profile.fri")}</span>
                 <span />
               </div>
             )}
@@ -132,7 +133,7 @@ export function MessageActivityCalendar({
               <div
                 className="message-activity-grid"
                 role="group"
-                aria-label={`Daily message counts for ${year}`}
+                aria-label={t("profile.dailyCounts", { year })}
               >
                 {cells.map((cell, index) =>
                   cell.visible ? (
@@ -212,12 +213,12 @@ export function MessageActivityCalendar({
       </div>
       {legend ? (
         <div className="mt-3 flex items-center justify-end gap-3 text-[11px] text-text-muted">
-          <div className="message-activity-legend" aria-label="Message count intensity">
-            <span>Less</span>
+          <div className="message-activity-legend" aria-label={t("profile.messageCountIntensity")}>
+            <span>{t("profile.less")}</span>
             {[0, 1, 2, 3, 4].map((level) => (
               <i key={level} data-level={level} />
             ))}
-            <span>More</span>
+            <span>{t("profile.more")}</span>
           </div>
         </div>
       ) : null}

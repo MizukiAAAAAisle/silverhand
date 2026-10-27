@@ -12,6 +12,7 @@ import {
   type ElementRef,
 } from "react";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 const DialogBoundaryContext = createContext<HTMLElement | null>(null);
 /** Inline popovers must collide with the dialog's clipping viewport, not the window. */
@@ -184,7 +185,7 @@ export const DialogContent = forwardRef<
             className={dialogCornerButtonClass}
           >
             <CloseIcon className="size-4" />
-            <span className="sr-only">Close</span>
+            <span className="sr-only">{t("common.close")}</span>
           </DialogPrimitive.Close>
         </div>
       </DialogPrimitive.Content>

@@ -1,4 +1,5 @@
 {
+  "_generatedBy": "apps/ios/native-protocol.ts",
   "desktopApi": 4,
   "desktopMinClient": 4,
   "desktopMinServer": 4,
@@ -10,5 +11,7 @@
   "mePassword": "/api/me/password",
   "login": "/auth/login",
   "signup": "/auth/signup",
-  "logout": "/auth/logout"
+  "logout": "/auth/logout",
+  "passwordRecoveryRequest": "/auth/password-recovery/request",
+  "passwordRecoveryReset": "/auth/password-recovery/reset"
 }

@@ -36,7 +36,7 @@ async fn snapshot(
     db: &mut SqliteConnection,
     omit_retired_preferences: bool,
 ) -> Vec<(String, Vec<String>)> {
-    let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('_migrations','avatar_designs') ORDER BY name").fetch_all(&mut *db).await.unwrap();
+    let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('_migrations','avatar_designs','password_recovery_state') ORDER BY name").fetch_all(&mut *db).await.unwrap();
     let mut result = vec![];
     for table in tables {
         let columns: Vec<String> =

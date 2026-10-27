@@ -57,11 +57,7 @@
  *    socket buckets — one slow consumer cannot starve another. State
  *    is keyed by `(socket, conv, agent)`.
  */
-import {
-  encodeFrame,
-  type EventFrame,
-  type RuntimeScope,
-} from '../protocol.js';
+import { encodeFrame, type EventFrame, type RuntimeScope } from '../protocol.js';
 import type { Socket } from 'node:net';
 
 /** Hard ceiling on un-flushed runtime_output bytes per (conv, agent). */
@@ -165,8 +161,7 @@ export class OutputBackpressure {
     const agent = event.agent_id;
     const state = this.getOrCreateKeyState(socket, conv, agent);
 
-    const wouldExceed =
-      state.bytes_in_node_buffer + encoded.length > this.highWater;
+    const wouldExceed = state.bytes_in_node_buffer + encoded.length > this.highWater;
     // Two-condition gate: drop only when the kernel itself is signaling
     // back-pressure (writableNeedDrain) AND our application-side counter
     // is over the high-water mark. This means a momentary burst that
@@ -205,17 +200,11 @@ export class OutputBackpressure {
         // forgetSocket() between enqueue and ack is a no-op.
         const stateNow = this.peekKeyState(socket, conv, agent);
         if (!stateNow) return;
-        stateNow.bytes_in_node_buffer = Math.max(
-          0,
-          stateNow.bytes_in_node_buffer - encoded.length,
-        );
+        stateNow.bytes_in_node_buffer = Math.max(0, stateNow.bytes_in_node_buffer - encoded.length);
         // Recovery: if we were dropping and we've now dropped below
         // the low-water mark, emit ONE summary frame and reset the
         // window. Subsequent drops start a fresh window.
-        if (
-          stateNow.dropping_window &&
-          stateNow.bytes_in_node_buffer <= this.lowWater
-        ) {
+        if (stateNow.dropping_window && stateNow.bytes_in_node_buffer <= this.lowWater) {
           this.emitSummary(socket, conv, agent, stateNow);
         }
       });
@@ -224,10 +213,7 @@ export class OutputBackpressure {
     }
     if (!writeOk) {
       // Roll back the counter; the bytes never made it onto the wire.
-      state.bytes_in_node_buffer = Math.max(
-        0,
-        state.bytes_in_node_buffer - encoded.length,
-      );
+      state.bytes_in_node_buffer = Math.max(0, state.bytes_in_node_buffer - encoded.length);
       return 'closed';
     }
     return 'sent';
@@ -243,19 +229,11 @@ export class OutputBackpressure {
     this.bySocket.delete(socket);
   }
 
-  private peekKeyState(
-    socket: Socket,
-    conv: string,
-    agent: string,
-  ): KeyState | undefined {
+  private peekKeyState(socket: Socket, conv: string, agent: string): KeyState | undefined {
     return this.bySocket.get(socket)?.get(conv)?.get(agent);
   }
 
-  private getOrCreateKeyState(
-    socket: Socket,
-    conv: string,
-    agent: string,
-  ): KeyState {
+  private getOrCreateKeyState(socket: Socket, conv: string, agent: string): KeyState {
     let sock = this.bySocket.get(socket);
     if (!sock) {
       sock = new Map();
@@ -274,12 +252,7 @@ export class OutputBackpressure {
     return state;
   }
 
-  private emitSummary(
-    socket: Socket,
-    conv: string,
-    agent: string,
-    state: KeyState,
-  ): void {
+  private emitSummary(socket: Socket, conv: string, agent: string, state: KeyState): void {
     if (!state.dropping_window) return;
     const summary: EventFrame = {
       event: 'runtime_output_dropped',

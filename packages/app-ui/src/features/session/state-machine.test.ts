@@ -65,7 +65,6 @@ describe("mapAuthStateToViewer — three IPC arms (D4.a Commit 6 part 2)", () =>
     const user = userDto({ id: "u-42", display_name: "Forty Two" });
     const viewer = mapAuthStateToViewer({
       status: "authenticated",
-      signup_enabled: true,
       user,
     });
     // Pinning identity, not just equality — the gate decision uses
@@ -74,29 +73,11 @@ describe("mapAuthStateToViewer — three IPC arms (D4.a Commit 6 part 2)", () =>
     expect(viewer).toBe(user);
   });
 
-  it("unauthenticated arm → SetupRequired with passed-through signup_enabled (true)", () => {
-    const viewer = mapAuthStateToViewer({
-      status: "unauthenticated",
-      signup_enabled: true,
-    });
+  it("unauthenticated arm → SetupRequired", () => {
+    const viewer = mapAuthStateToViewer({ status: "unauthenticated" });
     expect(viewer).toEqual({
       registration_required: true,
       suggested_name: "",
-      signup_enabled: true,
-    } satisfies SetupRequired);
-  });
-
-  it("unauthenticated arm with signup disabled → SetupRequired carries the disabled bit", () => {
-    // Renderer's RegistrationGate uses this to flip into login-only
-    // mode (suppressing the signup tab).
-    const viewer = mapAuthStateToViewer({
-      status: "unauthenticated",
-      signup_enabled: false,
-    });
-    expect(viewer).toEqual({
-      registration_required: true,
-      suggested_name: "",
-      signup_enabled: false,
     } satisfies SetupRequired);
   });
 
@@ -164,7 +145,6 @@ describe("mapAuthStateToViewer — three IPC arms (D4.a Commit 6 part 2)", () =>
       isUpdateRequired({
         registration_required: true,
         suggested_name: "",
-        signup_enabled: true,
       }),
     ).toBe(false);
   });
@@ -211,7 +191,6 @@ describe("isBackendUnreachable / isRegistrationRequired type guards", () => {
       isBackendUnreachable({
         registration_required: true,
         suggested_name: "",
-        signup_enabled: true,
       }),
     ).toBe(false);
     expect(isBackendUnreachable(userDto())).toBe(false);
@@ -222,7 +201,6 @@ describe("isBackendUnreachable / isRegistrationRequired type guards", () => {
       isRegistrationRequired({
         registration_required: true,
         suggested_name: "",
-        signup_enabled: true,
       }),
     ).toBe(true);
     expect(
@@ -255,7 +233,6 @@ describe("isBackendUnreachable / isRegistrationRequired type guards", () => {
       message: "oops",
       registration_required: true,
       suggested_name: "",
-      signup_enabled: false,
     } as unknown as ViewerState;
     // Both guards return true on the synthetic payload — the gate
     // order is what disambiguates, not the guards. Pin both true so
@@ -362,7 +339,6 @@ describe("useViewerUser ← mapAuthStateToViewer wiring (end-to-end through Reac
     const user = userDto({ id: "u-wire", display_name: "Wire" });
     silverhand.getAuthState.mockResolvedValueOnce({
       status: "authenticated",
-      signup_enabled: true,
       user,
     });
     const viewer = mapAuthStateToViewer(await silverhand.getAuthState());
@@ -382,14 +358,9 @@ describe("useViewerUser ← mapAuthStateToViewer wiring (end-to-end through Reac
     expect(viewer.message).toContain("ECONNREFUSED");
   });
 
-  it("IPC unauthenticated → ViewerState is SetupRequired with signup_enabled", async () => {
-    silverhand.getAuthState.mockResolvedValueOnce({
-      status: "unauthenticated",
-      signup_enabled: false,
-    });
+  it("IPC unauthenticated → ViewerState is SetupRequired", async () => {
+    silverhand.getAuthState.mockResolvedValueOnce({ status: "unauthenticated" });
     const viewer = mapAuthStateToViewer(await silverhand.getAuthState());
     expect(isRegistrationRequired(viewer)).toBe(true);
-    if (!isRegistrationRequired(viewer)) throw new Error("unreachable");
-    expect(viewer.signup_enabled).toBe(false);
   });
 });

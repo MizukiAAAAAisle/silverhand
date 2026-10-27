@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import {
-  SILVERHAND_OPENCODE_AGENT,
-  buildOpencodeConfigContent,
-} from '../src/opencode-config.js';
+import { SILVERHAND_OPENCODE_AGENT, buildOpencodeConfigContent } from '../src/opencode-config.js';
 
 /**
  * `OPENCODE_CONFIG_CONTENT` assembly (#task:1405). opencode deep-merges this
@@ -56,8 +53,6 @@ describe('buildOpencodeConfigContent', () => {
 
   it('returns null when there is nothing to inject (pure user config)', () => {
     expect(buildOpencodeConfigContent({})).toBeNull();
-    expect(
-      buildOpencodeConfigContent({ standingPrompt: '', mcpConfig: null }),
-    ).toBeNull();
+    expect(buildOpencodeConfigContent({ standingPrompt: '', mcpConfig: null })).toBeNull();
   });
 });

@@ -1,0 +1,21 @@
+export const activity = {
+  loadingActivity: "Loading activity",
+  all: "All",
+  mentions: "Mentions",
+  threads: "Threads",
+  activity: "Activity",
+  couldntLoadActivity: "Couldn't load Activity",
+  checkYourConnectionAnd: "Check your connection and retry",
+  allCaughtUp: "All caught up",
+  requiresAttention: "Requires attention",
+  subscribed: "Subscribed",
+  markAsRead: "Mark as read",
+  markAllRead: "Mark all as read",
+  markAllReadFailed: "Couldn't mark all as read. Try again.",
+  newCount: "{n} new",
+  emptyFilter: {
+    all: "Nothing here",
+    mention: "No mentions",
+    thread: "No threads",
+  },
+} as const;

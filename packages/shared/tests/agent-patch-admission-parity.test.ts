@@ -18,10 +18,7 @@ import corpus from './fixtures/agent-patch-admission.json' with { type: 'json' }
 
 type RepeatSpec = { $repeat: { unit: string; times: number } };
 type FieldValue = unknown | RepeatSpec;
-type Op =
-  | { op: 'leave' }
-  | { op: 'clear' }
-  | { op: 'set'; value: unknown };
+type Op = { op: 'leave' } | { op: 'clear' } | { op: 'set'; value: unknown };
 interface Case {
   name: string;
   body: Record<string, FieldValue>;
@@ -42,9 +39,7 @@ function materialize(value: FieldValue): unknown {
 }
 
 function materializeBody(body: Record<string, FieldValue>): Record<string, unknown> {
-  return Object.fromEntries(
-    Object.entries(body).map(([key, value]) => [key, materialize(value)]),
-  );
+  return Object.fromEntries(Object.entries(body).map(([key, value]) => [key, materialize(value)]));
 }
 
 function materializeOp(op: Op): Op {
@@ -52,9 +47,7 @@ function materializeOp(op: Op): Op {
 }
 
 function materializeCanonical(canonical: Record<string, Op>): Record<string, Op> {
-  return Object.fromEntries(
-    Object.entries(canonical).map(([key, op]) => [key, materializeOp(op)]),
-  );
+  return Object.fromEntries(Object.entries(canonical).map(([key, op]) => [key, materializeOp(op)]));
 }
 
 /** Project the schema's parsed output to the shared normalized op-form. `display_name`
@@ -68,9 +61,7 @@ function project(parsed: Record<string, unknown>): Record<string, Op> {
         ? { op: 'clear' }
         : { op: 'set', value: parsed[key] };
   return {
-    display_name: has('display_name')
-      ? { op: 'set', value: parsed.display_name }
-      : { op: 'leave' },
+    display_name: has('display_name') ? { op: 'set', value: parsed.display_name } : { op: 'leave' },
     description: nullable('description'),
     model: nullable('model'),
     reasoning_effort: nullable('reasoning_effort'),

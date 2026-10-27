@@ -22,6 +22,7 @@ import {
 import { buildLocatorTargetUrl, useNav } from "@/router";
 import { faceLabel } from "./conversation-ref";
 import { INLINE_REF_HOVER_CLASS } from "../model/inline-ref-chip";
+import { t } from "@/lib/i18n";
 
 export function LocatorRef({
   locator,
@@ -180,7 +181,12 @@ function WorkspaceSegment({ name }: { name: string }): JSX.Element {
  *  "thread" — a root message id is not a name, so the segment says what it is
  *  instead of showing an opaque id the reader cannot check. */
 function ThreadSegment(): JSX.Element {
-  return <Segment sigil={<ThreadIcon className="size-3 shrink-0 self-center" />} label="thread" />;
+  return (
+    <Segment
+      sigil={<ThreadIcon className="size-3 shrink-0 self-center" />}
+      label={t("messages.thread")}
+    />
+  );
 }
 
 function Segment({ sigil, label }: { sigil: JSX.Element; label: string }): JSX.Element {
@@ -203,10 +209,11 @@ function Segment({ sigil, label }: { sigil: JSX.Element; label: string }): JSX.E
  *  does; a thread renames the whole coordinate because the thread IS what a
  *  thread-bearing locator points at. */
 function locatorTooltip(locator: Locator): string {
-  if (locator.kind === "workspace") return `Project ${locator.workspace.name}`;
+  if (locator.kind === "workspace")
+    return t("messages.projectNamed", { name: locator.workspace.name });
   const [kind, path] =
     locator.kind === "channel"
       ? [faceLabel("channel"), `${locator.workspace.name} / ${locator.channel.title}`]
       : [faceLabel("direct_line"), `${locator.endpoints[0]} & ${locator.endpoints[1]}`];
-  return locator.threadRootId === null ? `${kind} ${path}` : `Thread ${path}`;
+  return locator.threadRootId === null ? `${kind} ${path}` : t("messages.threadNamed", { path });
 }

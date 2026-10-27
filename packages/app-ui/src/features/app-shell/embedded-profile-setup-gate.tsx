@@ -3,9 +3,11 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { UserDto } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
 import { cacheViewer } from "@/features/session/hooks";
+import { serverEnvironmentQuery } from "@/features/session/server-environment";
 import { eventWsClient } from "@/lib/ws-client";
 import { ProfileSetupForm } from "./profile-setup-form";
 import { EmbeddedProfileSetup, setupTransport, type SetupState } from "./embedded-profile-setup";
+import { t } from "@/lib/i18n";
 
 export function EmbeddedProfileSetupGate({
   viewerId,
@@ -22,6 +24,7 @@ export function EmbeddedProfileSetupGate({
   useEffect(() => {
     const model = new EmbeddedProfileSetup({
       ...setupTransport,
+      mode: async () => (await qc.fetchQuery(serverEnvironmentQuery)).mode,
       isCurrent: () => qc.getQueryData<UserDto>(["me"])?.id === viewerId,
       applyUser: (user) => {
         if (user.id !== viewerId) {
@@ -61,22 +64,22 @@ export function EmbeddedProfileSetupGate({
     return (
       <main className="flex min-h-screen items-center justify-center bg-bg-base p-6 text-text-primary">
         <div className="flex max-w-105 flex-col gap-4">
-          <h1 className="text-lg font-semibold">Profile saved</h1>
+          <h1 className="text-lg font-semibold">{t("appShell.profile.saved")}</h1>
           <p role="alert" className="text-sm text-text-muted">
-            {state.error ?? "Uploading profile photo"}
+            {state.error ?? t("appShell.profile.uploadingPhoto")}
           </p>
           <div className="flex gap-2">
             <Button
               disabled={state.phase === "uploading"}
               onClick={() => void controller.current?.retryAvatar()}
             >
-              Retry photo
+              {t("appShell.profile.retryPhoto")}
             </Button>
             <Button
               disabled={state.phase === "uploading"}
               onClick={() => controller.current?.continueWithoutAvatar()}
             >
-              Continue without photo
+              {t("appShell.profile.continueWithoutPhoto")}
             </Button>
           </div>
         </div>
@@ -95,9 +98,9 @@ export function EmbeddedProfileSetupGate({
         />
       ) : (
         <div className="flex min-h-screen flex-col items-center justify-center gap-4 bg-bg-base p-6 text-sm text-text-muted">
-          <p role={state.error ? "alert" : "status"}>{state.error ?? "Loading"}</p>
+          <p role={state.error ? "alert" : "status"}>{state.error ?? t("common.loading")}</p>
           {state.phase === "read-error" ? (
-            <Button onClick={() => void controller.current?.read()}>Retry</Button>
+            <Button onClick={() => void controller.current?.read()}>{t("common.retry")}</Button>
           ) : null}
         </div>
       )}

@@ -1,6 +1,7 @@
 import { PlusIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { TaskFilterBar, FILTER_ROW_TRIGGER_BOX, type TaskFilterBarProps } from "./task-filter-bar";
+import { t } from "@/lib/i18n";
 
 /** Global and conversation boards share the entire responsive toolbar. Without
  * `onCreate` the row holds filters only (the page puts New task elsewhere). */
@@ -23,7 +24,7 @@ export function TaskToolbar({
           onClick={onCreate}
         >
           <PlusIcon className="size-3.5" />
-          New task
+          {t("tasks.newTask")}
         </Button>
       ) : null}
     </div>

@@ -6,6 +6,7 @@ import { useUsersById, makeUserNameResolver } from "@/features/users/hooks";
 import { formatUserDisplayName } from "@/features/session/current-user";
 import { Markdown } from "./markdown";
 import { useRelativeTime } from "../hooks/use-relative-time";
+import { t } from "@/lib/i18n";
 
 interface QuotedMessagePreviewProps {
   /** The thread_anchor system message — its metadata carries the
@@ -133,7 +134,7 @@ export function QuotedMessagePreview({
     >
       <div className="mb-1 flex items-center gap-1 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
         <ThreadIcon className="size-3" />
-        <span>thread from</span>
+        <span>{t("messages.threadFrom")}</span>
       </div>
       <header className="mb-1 text-xs">
         <span className={"font-medium " + (isUser ? "text-text-primary" : "text-accent")}>

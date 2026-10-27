@@ -1,11 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { isAgentHomeWorkspaceId } from '@silverhand/shared';
-import type {
-  AgentL2SeedErrorCode,
-  AgentL2SeedParams,
-  AgentL2SeedResult,
-} from '../../protocol.js';
+import type { AgentL2SeedErrorCode, AgentL2SeedParams, AgentL2SeedResult } from '../../protocol.js';
 import { DaemonTypedError } from '../typed-error.js';
 import {
   bundleL2Present,
@@ -82,21 +78,14 @@ export async function seedAgentL2(
 
   let l2Dir: string;
   try {
-    l2Dir = resolveAgentWorkspaceBundleDir(
-      params.agent_id,
-      params.workspace_id,
-      deps,
-    );
+    l2Dir = resolveAgentWorkspaceBundleDir(params.agent_id, params.workspace_id, deps);
   } catch (err) {
     // An unsafe id segment can never become a path segment under the agent
     // home — fail closed before touching disk.
     if (err instanceof WorkspaceIdSegmentError) {
       throw new AgentL2SeedError('registry_unavailable', err.message);
     }
-    throw new AgentL2SeedError(
-      'internal_error',
-      err instanceof Error ? err.message : String(err),
-    );
+    throw new AgentL2SeedError('internal_error', err instanceof Error ? err.message : String(err));
   }
   try {
     let seeded = false;
@@ -105,10 +94,7 @@ export async function seedAgentL2(
       await fs.mkdir(join(l2Dir, dir), { recursive: true });
     }
     for (const file of template.files) {
-      const wrote = await writeIfMissing(
-        join(l2Dir, file.relPath),
-        file.content,
-      );
+      const wrote = await writeIfMissing(join(l2Dir, file.relPath), file.content);
       seeded = seeded || wrote;
     }
     // Report the completion fact via the shared predicate — the SAME one the
@@ -146,13 +132,7 @@ function toSeedError(err: unknown): AgentL2SeedError {
   if (err instanceof AgentL2SeedError) return err;
   const code = (err as { code?: unknown })?.code;
   if (typeof code === 'string' && /^E[A-Z]+$/.test(code)) {
-    return new AgentL2SeedError(
-      'fs_unavailable',
-      err instanceof Error ? err.message : String(err),
-    );
+    return new AgentL2SeedError('fs_unavailable', err instanceof Error ? err.message : String(err));
   }
-  return new AgentL2SeedError(
-    'internal_error',
-    err instanceof Error ? err.message : String(err),
-  );
+  return new AgentL2SeedError('internal_error', err instanceof Error ? err.message : String(err));
 }

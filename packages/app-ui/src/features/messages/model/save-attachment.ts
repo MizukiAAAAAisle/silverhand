@@ -2,6 +2,7 @@ import { getPlatform } from "@/platform";
 import { toast } from "sonner";
 import type { AttachmentSnapshot } from "@silverhand/shared";
 import { fetchAttachmentBytes } from "@/lib/api";
+import { t } from "@/lib/i18n";
 
 /**
  * Save-as flow for a chat attachment. Fetches the bytes through the
@@ -27,13 +28,15 @@ export async function saveAttachmentToDisk(
     const { bytes } = await deps.fetchBytes(attachment.id);
     const result = await deps.save({ filename: attachment.filename, bytes });
     if (result.ok) {
-      deps.toastSuccess("Saved");
+      deps.toastSuccess(t("messages.saved"));
       return;
     }
     if ("canceled" in result) return;
-    deps.toastError("Couldn't save: " + result.reason);
+    deps.toastError(t("messages.saveFailed", { reason: result.reason }));
   } catch (err) {
-    deps.toastError("Couldn't save: " + (err instanceof Error ? err.message : String(err)));
+    deps.toastError(
+      t("messages.saveFailed", { reason: err instanceof Error ? err.message : String(err) }),
+    );
   }
 }
 

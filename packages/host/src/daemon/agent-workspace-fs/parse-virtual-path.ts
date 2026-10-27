@@ -70,9 +70,7 @@ export type ResolveAgentHomeBaseResult =
  *    converted to an empty tree at the call site (brand-new agent
  *    before L3a/L3b graceful path).
  */
-export async function resolveAgentHomeBase(
-  baseDir: string,
-): Promise<ResolveAgentHomeBaseResult> {
+export async function resolveAgentHomeBase(baseDir: string): Promise<ResolveAgentHomeBaseResult> {
   let lst: Stats;
   try {
     lst = await fs.lstat(baseDir);
@@ -140,9 +138,7 @@ export function validateVirtualPathShape(
   // Empty / pure-root path. Tree handler accepts (the base dir itself);
   // read handler refuses (you can't read a directory as a file).
   if (virtualPath === '') {
-    return opts.allowRoot
-      ? { ok: true, segments: [] }
-      : { ok: false, code: 'forbidden_path' };
+    return opts.allowRoot ? { ok: true, segments: [] } : { ok: false, code: 'forbidden_path' };
   }
   // Reject leading or trailing `/` outright. A leading `/` would split
   // into a leading empty segment (treated as absolute); a trailing `/`
@@ -208,8 +204,10 @@ export async function resolveValidatedSegments(
       // exotic FS-layer surprises like case-insensitive mounts).
       const realTarget = await fs.realpath(current);
       const rel = relative(realBase, realTarget);
-      if (rel === '' || (!rel.startsWith('..') && !rel.startsWith(`..${sep}`)
-                          && !isAbsolute(rel))) {
+      if (
+        rel === '' ||
+        (!rel.startsWith('..') && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+      ) {
         return { ok: true, real: realTarget, lstat: lst };
       }
       return { ok: false, code: 'forbidden_path' };

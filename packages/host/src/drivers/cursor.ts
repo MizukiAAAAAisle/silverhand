@@ -1,10 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-import {
-  type Driver,
-  type DriverSpawnContext,
-  type ParsedEvent,
-} from './index.js';
+import { type Driver, type DriverSpawnContext, type ParsedEvent } from './index.js';
 
 /**
  * Cursor CLI (`cursor-agent --print`) driver.
@@ -47,13 +43,7 @@ export class CursorDriver implements Driver {
   readonly initPostProtocolMs = 60 * 1000;
 
   buildArgs(ctx: DriverSpawnContext): string[] {
-    const args = [
-      '--print',
-      '--output-format',
-      'stream-json',
-      '--yolo',
-      '--trust',
-    ];
+    const args = ['--print', '--output-format', 'stream-json', '--yolo', '--trust'];
     if (ctx.model) args.push('--model', ctx.model);
     if (ctx.cliSessionId) args.push('--resume', ctx.cliSessionId);
 
@@ -145,8 +135,7 @@ export class CursorDriver implements Driver {
         }
         events.push({
           kind: 'turn_end',
-          sessionId:
-            typeof event.session_id === 'string' ? event.session_id : undefined,
+          sessionId: typeof event.session_id === 'string' ? event.session_id : undefined,
         });
         break;
       }
@@ -169,7 +158,11 @@ export class CursorDriver implements Driver {
       return null;
     }
 
-    if (event?.type === 'system' && event.subtype === 'init' && typeof event.session_id === 'string') {
+    if (
+      event?.type === 'system' &&
+      event.subtype === 'init' &&
+      typeof event.session_id === 'string'
+    ) {
       return 'session_ready';
     }
     return event && typeof event === 'object' ? 'protocol_ready' : null;

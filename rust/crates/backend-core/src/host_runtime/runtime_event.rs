@@ -735,6 +735,14 @@ pub trait DaemonEventDurablePort: Clone + Send + Sync + 'static {
         scope: crate::host_runtime::runtime_credential::RuntimeScope,
     ) -> impl Future<Output = Result<Option<RuntimeEventAdmission>, PersistenceFailure>> + Send;
 
+    /// Whether the current custody still has an unclaimed `turn` delivery in
+    /// `conversation`. Pending `observe` context alone is not owed a run.
+    fn has_pending_turn(
+        &self,
+        admission: RuntimeEventAdmission,
+        conversation: ConversationId,
+    ) -> impl Future<Output = Result<bool, PersistenceFailure>> + Send;
+
     fn commit_exit(
         &self,
         event: CommitRuntimeExit,
@@ -776,6 +784,23 @@ pub trait DaemonEventDurablePort: Clone + Send + Sync + 'static {
         &self,
         event: StampRuntimePresence,
     ) -> impl Future<Output = Result<Option<Vec<UserId>>, PersistenceFailure>> + Send;
+
+    /// Records an `agent_start_failed` notice for the agent's owner. Returns the
+    /// notified owner, or `None` when an unread notice for the agent already exists.
+    fn record_start_failure(
+        &self,
+        event: RecordRuntimeStartFailure,
+    ) -> impl Future<Output = Result<Option<UserId>, PersistenceFailure>> + Send;
+}
+
+/// A daemon refused to start an agent's runtime for a reason its owner can act on.
+/// `message` is display text the daemon composed from a fixed template.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RecordRuntimeStartFailure {
+    pub agent: AgentId,
+    pub conversation: ConversationId,
+    pub reason: &'static str,
+    pub message: String,
 }
 
 #[cfg(test)]

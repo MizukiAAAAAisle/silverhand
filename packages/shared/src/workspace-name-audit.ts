@@ -63,7 +63,8 @@ export function auditWorkspaceNameAddresses(
     const canonical = canonicalizeStoredWorkspaceName(row.name);
     const group = byKey.get(canonical.key);
     if (group) group.members.push({ id: row.id, name: row.name });
-    else byKey.set(canonical.key, { key: canonical.key, members: [{ id: row.id, name: row.name }] });
+    else
+      byKey.set(canonical.key, { key: canonical.key, members: [{ id: row.id, name: row.name }] });
 
     if (!options.keysExpected) continue;
     if (row.nameKey === null) {
@@ -99,7 +100,7 @@ export function describeWorkspaceNameAudit(report: WorkspaceNameAuditReport): st
   if (report.defects.length === 0) {
     return `workspace addresses clean: ${report.regularScanned} regular workspace(s) scanned`;
   }
-  const samples = report.defects.slice(0, 20).map(defect => `  ${describeDefect(defect)}`);
+  const samples = report.defects.slice(0, 20).map((defect) => `  ${describeDefect(defect)}`);
   const omitted = report.defects.length - samples.length;
   return [
     `workspace address defects: ${report.defects.length} in ${report.regularScanned} regular workspace(s) scanned`,
@@ -117,7 +118,7 @@ function describeDefect(defect: WorkspaceNameDefect): string {
     case 'unnormalized_name':
       return `unnormalized_name workspace=${defect.id} stored=${JSON.stringify(defect.name)} canonical=${JSON.stringify(defect.canonicalName)}`;
     case 'folded_collision':
-      return `folded_collision key=${JSON.stringify(defect.key)} members=${defect.members.map(member => `${member.id}:${JSON.stringify(member.name)}`).join(',')}`;
+      return `folded_collision key=${JSON.stringify(defect.key)} members=${defect.members.map((member) => `${member.id}:${JSON.stringify(member.name)}`).join(',')}`;
     case 'agent_home_has_key':
       return `agent_home_has_key workspace=${defect.id} key=${JSON.stringify(defect.key)}`;
   }

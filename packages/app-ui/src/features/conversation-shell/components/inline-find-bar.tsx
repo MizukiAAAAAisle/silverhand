@@ -1,6 +1,7 @@
 import { type KeyboardEvent, useCallback } from "react";
 import { ChevronDownIcon, ChevronUpIcon, CloseIcon, SearchIcon } from "@/icons";
 import { type InlineFindController, inlineFindKeyAction } from "@/features/search/use-inline-find";
+import { t } from "@/lib/i18n";
 
 /**
  * The fixed search bar for the in-conversation header find (#task:1335).
@@ -16,7 +17,7 @@ import { type InlineFindController, inlineFindKeyAction } from "@/features/searc
 export function InlineFindBar({
   controller,
   onOpenAdvanced,
-  placeholder = "Search this conversation",
+  placeholder = t("conversationShell.searchThisConversation"),
 }: {
   controller: InlineFindController;
   onOpenAdvanced: () => void;
@@ -71,7 +72,7 @@ export function InlineFindBar({
               {truncated ? "+" : ""}
             </>
           ) : (
-            "No results"
+            t("conversationShell.noResults")
           )}
         </span>
       ) : null}
@@ -85,8 +86,8 @@ export function InlineFindBar({
           data-sticker-tone="neutral"
           onClick={prev}
           disabled={!hasMatches}
-          aria-label="Previous match"
-          title="Previous match (⇧⏎ / ↑)"
+          aria-label={t("conversationShell.previousMatch")}
+          title={t("conversationShell.previousMatch2")}
           className="flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-30"
         >
           <ChevronUpIcon className="size-3.5" />
@@ -99,8 +100,8 @@ export function InlineFindBar({
           data-sticker-tone="neutral"
           onClick={next}
           disabled={!hasMatches}
-          aria-label="Next match"
-          title="Next match (⏎ / ↓)"
+          aria-label={t("conversationShell.nextMatch")}
+          title={t("conversationShell.nextMatch2")}
           className="flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary disabled:pointer-events-none disabled:opacity-30"
         >
           <ChevronDownIcon className="size-3.5" />
@@ -116,10 +117,10 @@ export function InlineFindBar({
         data-sticker-size="md"
         data-sticker-tone="neutral"
         onClick={onOpenAdvanced}
-        title="Open advanced search (cross-channel filters)"
+        title={t("conversationShell.openAdvancedSearchCross")}
         className="flex h-7 shrink-0 items-center whitespace-nowrap rounded-(--control-radius) px-2 text-xs font-medium text-text-primary hover:bg-bg-hover"
       >
-        Advanced
+        {t("conversationShell.advanced")}
       </button>
 
       <button
@@ -129,8 +130,8 @@ export function InlineFindBar({
         data-sticker-size="md"
         data-sticker-tone="neutral"
         onClick={close}
-        aria-label="Close search"
-        title="Close (Esc)"
+        aria-label={t("conversationShell.closeSearch")}
+        title={t("conversationShell.closeEsc")}
         className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary"
       >
         <CloseIcon className="size-3.5" />

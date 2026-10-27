@@ -151,7 +151,7 @@ export const KNOWN_CAPABILITIES_V1 = [
   // instead of `unknown_intent`.
   'agent.stale_receive.v1',
 ] as const;
-export type KnownCapabilityV1 = typeof KNOWN_CAPABILITIES_V1[number];
+export type KnownCapabilityV1 = (typeof KNOWN_CAPABILITIES_V1)[number];
 
 export const HelloParamsSchema = z.object({}).strict();
 export type HelloParams = z.infer<typeof HelloParamsSchema>;
@@ -314,14 +314,10 @@ export const HostRuntimeCatalogParamsSchema = z
     force: z.boolean().optional(),
   })
   .strict();
-export type HostRuntimeCatalogParams = z.infer<
-  typeof HostRuntimeCatalogParamsSchema
->;
+export type HostRuntimeCatalogParams = z.infer<typeof HostRuntimeCatalogParamsSchema>;
 
 export const HostRuntimeCatalogResultSchema = RuntimeCatalogResponseSchema;
-export type HostRuntimeCatalogResult = z.infer<
-  typeof HostRuntimeCatalogResultSchema
->;
+export type HostRuntimeCatalogResult = z.infer<typeof HostRuntimeCatalogResultSchema>;
 
 // ── conversation_log_debug ─────────────────────────────────────────
 
@@ -340,9 +336,7 @@ export const ConversationLogDebugParamsSchema = z.discriminatedUnion('enabled', 
     })
     .strict(),
 ]);
-export type ConversationLogDebugParams = z.infer<
-  typeof ConversationLogDebugParamsSchema
->;
+export type ConversationLogDebugParams = z.infer<typeof ConversationLogDebugParamsSchema>;
 
 export const ConversationLogDebugResultSchema = z
   .object({
@@ -351,9 +345,7 @@ export const ConversationLogDebugResultSchema = z
     expires_at: z.number().int().positive().nullable(),
   })
   .strict();
-export type ConversationLogDebugResult = z.infer<
-  typeof ConversationLogDebugResultSchema
->;
+export type ConversationLogDebugResult = z.infer<typeof ConversationLogDebugResultSchema>;
 
 // ── agent_message_send / agent_stale_resolve ───────────────────────
 //
@@ -378,14 +370,14 @@ export type AgentBackendHttpError = z.infer<typeof AgentBackendHttpErrorSchema>;
  *  never an HTTP route or message destination. */
 export const AgentRuntimeIntentScopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('agent') }).strict(),
-  z.object({
-    kind: z.literal('conversation'),
-    conversation_id: z.string().min(1),
-  }).strict(),
+  z
+    .object({
+      kind: z.literal('conversation'),
+      conversation_id: z.string().min(1),
+    })
+    .strict(),
 ]);
-export type AgentRuntimeIntentScope = z.infer<
-  typeof AgentRuntimeIntentScopeSchema
->;
+export type AgentRuntimeIntentScope = z.infer<typeof AgentRuntimeIntentScopeSchema>;
 
 const AgentRuntimeIntentIdentityFields = {
   runtime_scope: AgentRuntimeIntentScopeSchema,
@@ -416,9 +408,7 @@ export const AgentMessageSendParamsSchema = z
     freshness_bypass: z.boolean().optional(),
   })
   .strict();
-export type AgentMessageSendParams = z.infer<
-  typeof AgentMessageSendParamsSchema
->;
+export type AgentMessageSendParams = z.infer<typeof AgentMessageSendParamsSchema>;
 
 export const AgentMessageSendResultSchema = z.union([
   z
@@ -454,17 +444,12 @@ export const AgentMessageSendResultSchema = z.union([
        *  definition of "addressed", reported to the one reader who cannot check
        *  it. Reason-free for the same purpose it is reason-free at the backend
        *  boundary: `unknown handle` and `not a participant` are one outcome. */
-      unresolved_references: z
-        .array(MessageReferenceSchema)
-        .nonempty()
-        .optional(),
+      unresolved_references: z.array(MessageReferenceSchema).nonempty().optional(),
     })
     .strict(),
   AgentBackendHttpErrorSchema,
 ]);
-export type AgentMessageSendResult = z.infer<
-  typeof AgentMessageSendResultSchema
->;
+export type AgentMessageSendResult = z.infer<typeof AgentMessageSendResultSchema>;
 
 export const AgentStaleResolveParamsSchema = z
   .object({
@@ -475,9 +460,7 @@ export const AgentStaleResolveParamsSchema = z
     resolution_reason: z.literal('obsolete'),
   })
   .strict();
-export type AgentStaleResolveParams = z.infer<
-  typeof AgentStaleResolveParamsSchema
->;
+export type AgentStaleResolveParams = z.infer<typeof AgentStaleResolveParamsSchema>;
 
 export const AgentStaleResolveResultSchema = z.union([
   z
@@ -508,9 +491,7 @@ export const AgentStaleResolveResultSchema = z.union([
     .strict(),
   AgentBackendHttpErrorSchema,
 ]);
-export type AgentStaleResolveResult = z.infer<
-  typeof AgentStaleResolveResultSchema
->;
+export type AgentStaleResolveResult = z.infer<typeof AgentStaleResolveResultSchema>;
 
 // ── agent_stale_receive (CLI→daemon, #task:1614 deferred pull) ──────
 //
@@ -560,9 +541,7 @@ export const AgentStaleReceiveParamsSchema = z
     wait_ms: z.number().int().min(0).max(120_000).optional(),
   })
   .strict();
-export type AgentStaleReceiveParams = z.infer<
-  typeof AgentStaleReceiveParamsSchema
->;
+export type AgentStaleReceiveParams = z.infer<typeof AgentStaleReceiveParamsSchema>;
 
 const staleReceiveBatchFields = {
   ok: z.literal(true),
@@ -576,9 +555,7 @@ const staleReceiveBatchFields = {
 
 export const AgentStaleReceiveResultSchema = z.discriminatedUnion('outcome', [
   z.object({ outcome: z.literal('batch_queue_drained'), ...staleReceiveBatchFields }).strict(),
-  z
-    .object({ outcome: z.literal('batch_more_pending'), ...staleReceiveBatchFields })
-    .strict(),
+  z.object({ outcome: z.literal('batch_more_pending'), ...staleReceiveBatchFields }).strict(),
   z.object({ ok: z.literal(true), outcome: z.literal('no_pending_stale') }).strict(),
   z
     .object({
@@ -603,9 +580,7 @@ export const AgentStaleReceiveResultSchema = z.discriminatedUnion('outcome', [
     })
     .strict(),
 ]);
-export type AgentStaleReceiveResult = z.infer<
-  typeof AgentStaleReceiveResultSchema
->;
+export type AgentStaleReceiveResult = z.infer<typeof AgentStaleReceiveResultSchema>;
 
 /** Non-custody arbitration failures. Each states "this call cannot
  *  arbitrate", never a custody fact — custody facts travel only in the
@@ -634,9 +609,7 @@ export const AgentStaleReceiveErrorCodeSchema = z.enum([
   'runtime_replaced',
   'handoff_unsupported',
 ]);
-export type AgentStaleReceiveErrorCode = z.infer<
-  typeof AgentStaleReceiveErrorCodeSchema
->;
+export type AgentStaleReceiveErrorCode = z.infer<typeof AgentStaleReceiveErrorCodeSchema>;
 // `AgentStaleReceiveIpcErrorSchema` lives next to the other per-intent
 // widened error schemas below (after `ResponseErrorCodeSchema`).
 
@@ -728,9 +701,7 @@ export const RuntimeStartWorkspaceRefSchema = z
     // `resolveAgentDir(agentId)`. No path field travels on this wire.
   })
   .strict();
-export type RuntimeStartWorkspaceRef = z.infer<
-  typeof RuntimeStartWorkspaceRefSchema
->;
+export type RuntimeStartWorkspaceRef = z.infer<typeof RuntimeStartWorkspaceRefSchema>;
 
 /** Semantic origin coordinate for one delivery action. It deliberately carries
  * no host path: the daemon resolves the absolute workdir for the target using
@@ -854,9 +825,9 @@ function rejectForbiddenRuntimeStartOptionKeys(
  * and prompt bytes were never allowed and remain forbidden below.
  */
 const RuntimeStartCommonShape = {
-    agent: RuntimeStartAgentRefSchema,
-    driver: RuntimeStartDriverOptionsSchema,
-    env_policy: RuntimeStartEnvPolicySchema,
+  agent: RuntimeStartAgentRefSchema,
+  driver: RuntimeStartDriverOptionsSchema,
+  env_policy: RuntimeStartEnvPolicySchema,
 } as const;
 
 const ConversationStartOptionsSchema = z
@@ -893,18 +864,13 @@ const AgentStartOptionsSchema = z
 
 export const StartOptionsSchema = z
   .union([ConversationStartOptionsSchema, AgentStartOptionsSchema])
-  .superRefine((val, ctx) =>
-    rejectForbiddenRuntimeStartOptionKeys(val, ctx),
-  );
+  .superRefine((val, ctx) => rejectForbiddenRuntimeStartOptionKeys(val, ctx));
 export type StartOptions = z.infer<typeof StartOptionsSchema>;
 export type ConversationStartOptions = Extract<
   StartOptions,
   { runtime_scope: { kind: 'conversation' } }
 >;
-export type AgentStartOptions = Extract<
-  StartOptions,
-  { runtime_scope: { kind: 'agent' } }
->;
+export type AgentStartOptions = Extract<StartOptions, { runtime_scope: { kind: 'agent' } }>;
 
 /**
  * Where a supervised runtime is in its lifecycle (§3.2.1 startup/live
@@ -1026,10 +992,7 @@ export const RuntimeStartParamsSchema = z
         message: 'runtime scope agent must match runtime_start.agent_id',
       });
     }
-    if (
-      scope.kind === 'conversation'
-      && scope.conversation_id !== value.conversation_id
-    ) {
+    if (scope.kind === 'conversation' && scope.conversation_id !== value.conversation_id) {
       ctx.addIssue({
         code: 'custom',
         path: ['options', 'runtime_scope', 'conversation_id'],
@@ -1039,48 +1002,47 @@ export const RuntimeStartParamsSchema = z
   });
 export type RuntimeStartParams = z.infer<typeof RuntimeStartParamsSchema>;
 
-export const RuntimeStartResultSchema = z
-  .discriminatedUnion('started', [
-    z
-      .object({
-        started: z.literal(true),
-        pid: z.number().int(),
-        started_at: z.number().int(),
-      })
-      .strict(),
-    /**
-     * Cooldown-blocked arm (Cindy `-pdNvRYOWip5e9yA` + plan v2
-     * `EOmOrJxeJUnbcmVR`): daemon is in init-failure cooldown for this
-     * (conv, agent) and refuses to spawn. This is a BUSINESS state —
-     * backend projects it to `agent_status reason:'init_cooldown'` SSE
-     * — not a transport error, so it ships in the result union rather
-     * than throwing an `internal_error` reply.
-     *
-     * Only the daemon's user-facing `runtime_start` gate produces
-     * this arm. Daemon-internal retry respawns (attempt > 0) take a
-     * separate code path that is NEVER blocked by this gate; the
-     * watchdog failure decides retry eligibility at the moment of
-     * failure. The gate ONLY fires when:
-     *   - no live handle exists for (conv, agent), AND
-     *   - this is a fresh user-initiated start (initAttempt === 0).
-     * Idempotent return for an already-running handle is the success
-     * arm even if a stale cooldown would otherwise apply.
-     *
-     * Programmer / deployment errors (missing `options.runtime`,
-     * missing binary, unknown runtime kind) STILL throw and surface
-     * as `internal_error` — they are not modeled as business state.
-     */
-    z
-      .object({
-        started: z.literal(false),
-        reason: z.literal('init_cooldown'),
-        /** Wall-clock epoch ms at which cooldown expires. Backend
-         *  projects to `agent_status.cooldown_until`. Must be strictly
-         *  in the future at emit time. */
-        cooldown_until: z.number().int().positive(),
-      })
-      .strict(),
-  ]);
+export const RuntimeStartResultSchema = z.discriminatedUnion('started', [
+  z
+    .object({
+      started: z.literal(true),
+      pid: z.number().int(),
+      started_at: z.number().int(),
+    })
+    .strict(),
+  /**
+   * Cooldown-blocked arm (Cindy `-pdNvRYOWip5e9yA` + plan v2
+   * `EOmOrJxeJUnbcmVR`): daemon is in init-failure cooldown for this
+   * (conv, agent) and refuses to spawn. This is a BUSINESS state —
+   * backend projects it to `agent_status reason:'init_cooldown'` SSE
+   * — not a transport error, so it ships in the result union rather
+   * than throwing an `internal_error` reply.
+   *
+   * Only the daemon's user-facing `runtime_start` gate produces
+   * this arm. Daemon-internal retry respawns (attempt > 0) take a
+   * separate code path that is NEVER blocked by this gate; the
+   * watchdog failure decides retry eligibility at the moment of
+   * failure. The gate ONLY fires when:
+   *   - no live handle exists for (conv, agent), AND
+   *   - this is a fresh user-initiated start (initAttempt === 0).
+   * Idempotent return for an already-running handle is the success
+   * arm even if a stale cooldown would otherwise apply.
+   *
+   * Programmer / deployment errors (missing `options.runtime`,
+   * missing binary, unknown runtime kind) STILL throw and surface
+   * as `internal_error` — they are not modeled as business state.
+   */
+  z
+    .object({
+      started: z.literal(false),
+      reason: z.literal('init_cooldown'),
+      /** Wall-clock epoch ms at which cooldown expires. Backend
+       *  projects to `agent_status.cooldown_until`. Must be strictly
+       *  in the future at emit time. */
+      cooldown_until: z.number().int().positive(),
+    })
+    .strict(),
+]);
 export type RuntimeStartResult = z.infer<typeof RuntimeStartResultSchema>;
 
 // ── runtime_stop ────────────────────────────────────────────────────
@@ -1176,10 +1138,7 @@ export const RuntimeDeliverParamsSchema = z
       });
     }
     const scope = value.spawn_options.runtime_scope;
-    if (
-      scope.kind === 'conversation'
-      && scope.conversation_id !== value.conversation_id
-    ) {
+    if (scope.kind === 'conversation' && scope.conversation_id !== value.conversation_id) {
       ctx.addIssue({
         code: 'custom',
         path: ['spawn_options', 'runtime_scope', 'conversation_id'],
@@ -1234,9 +1193,7 @@ export const RuntimeDeliverRefusedResultSchema = z.discriminatedUnion('reason', 
     })
     .strict(),
 ]);
-export type RuntimeDeliverRefusedResult = z.infer<
-  typeof RuntimeDeliverRefusedResultSchema
->;
+export type RuntimeDeliverRefusedResult = z.infer<typeof RuntimeDeliverRefusedResultSchema>;
 /** Why the daemon refused custody. Derived from the refused arms
  *  (single source), so consumers can `switch` exhaustively without a
  *  second enum drifting from the schema. */
@@ -1329,9 +1286,7 @@ export const RuntimeDeliveryConsumedEventSchema = z
     ts: z.number().int(),
   })
   .strict();
-export type RuntimeDeliveryConsumedEvent = z.infer<
-  typeof RuntimeDeliveryConsumedEventSchema
->;
+export type RuntimeDeliveryConsumedEvent = z.infer<typeof RuntimeDeliveryConsumedEventSchema>;
 
 export const RuntimeDeliveryFailedReasonSchema = z.enum([
   'child_exit',
@@ -1339,9 +1294,7 @@ export const RuntimeDeliveryFailedReasonSchema = z.enum([
   'write_failed',
   'driver_refused',
 ]);
-export type RuntimeDeliveryFailedReason = z.infer<
-  typeof RuntimeDeliveryFailedReasonSchema
->;
+export type RuntimeDeliveryFailedReason = z.infer<typeof RuntimeDeliveryFailedReasonSchema>;
 
 export const RuntimeDeliveryFailedEventSchema = z
   .object({
@@ -1355,9 +1308,7 @@ export const RuntimeDeliveryFailedEventSchema = z
     ts: z.number().int(),
   })
   .strict();
-export type RuntimeDeliveryFailedEvent = z.infer<
-  typeof RuntimeDeliveryFailedEventSchema
->;
+export type RuntimeDeliveryFailedEvent = z.infer<typeof RuntimeDeliveryFailedEventSchema>;
 
 // ── runtime_status ──────────────────────────────────────────────────
 
@@ -1384,16 +1335,10 @@ export const RuntimeClearSessionParamsSchema = z
     runtime_generation: z.number().int().positive(),
   })
   .strict();
-export type RuntimeClearSessionParams = z.infer<
-  typeof RuntimeClearSessionParamsSchema
->;
+export type RuntimeClearSessionParams = z.infer<typeof RuntimeClearSessionParamsSchema>;
 
-export const RuntimeClearSessionResultSchema = z
-  .object({ cleared: z.boolean() })
-  .strict();
-export type RuntimeClearSessionResult = z.infer<
-  typeof RuntimeClearSessionResultSchema
->;
+export const RuntimeClearSessionResultSchema = z.object({ cleared: z.boolean() }).strict();
+export type RuntimeClearSessionResult = z.infer<typeof RuntimeClearSessionResultSchema>;
 
 // ── runtime_stop_all / runtime_close_activity_log ───────────────────
 
@@ -1406,16 +1351,10 @@ export const RuntimeStopAllResultSchema = z
 export type RuntimeStopAllResult = z.infer<typeof RuntimeStopAllResultSchema>;
 
 export const RuntimeCloseActivityLogParamsSchema = z.object({}).strict();
-export type RuntimeCloseActivityLogParams = z.infer<
-  typeof RuntimeCloseActivityLogParamsSchema
->;
+export type RuntimeCloseActivityLogParams = z.infer<typeof RuntimeCloseActivityLogParamsSchema>;
 
-export const RuntimeCloseActivityLogResultSchema = z
-  .object({ flushed: z.boolean() })
-  .strict();
-export type RuntimeCloseActivityLogResult = z.infer<
-  typeof RuntimeCloseActivityLogResultSchema
->;
+export const RuntimeCloseActivityLogResultSchema = z.object({ flushed: z.boolean() }).strict();
+export type RuntimeCloseActivityLogResult = z.infer<typeof RuntimeCloseActivityLogResultSchema>;
 
 // ── output flow control (intents bodies present, v0 unused) ─────────
 
@@ -1424,26 +1363,16 @@ export const RuntimeOutputPauseParamsSchema = z
     runtime_scope: RuntimeScopeSchema,
   })
   .strict();
-export type RuntimeOutputPauseParams = z.infer<
-  typeof RuntimeOutputPauseParamsSchema
->;
+export type RuntimeOutputPauseParams = z.infer<typeof RuntimeOutputPauseParamsSchema>;
 
-export const RuntimeOutputPauseResultSchema = z
-  .object({ paused: z.boolean() })
-  .strict();
-export type RuntimeOutputPauseResult = z.infer<
-  typeof RuntimeOutputPauseResultSchema
->;
+export const RuntimeOutputPauseResultSchema = z.object({ paused: z.boolean() }).strict();
+export type RuntimeOutputPauseResult = z.infer<typeof RuntimeOutputPauseResultSchema>;
 
 export const RuntimeOutputResumeParamsSchema = RuntimeOutputPauseParamsSchema;
 export type RuntimeOutputResumeParams = RuntimeOutputPauseParams;
 
-export const RuntimeOutputResumeResultSchema = z
-  .object({ resumed: z.boolean() })
-  .strict();
-export type RuntimeOutputResumeResult = z.infer<
-  typeof RuntimeOutputResumeResultSchema
->;
+export const RuntimeOutputResumeResultSchema = z.object({ resumed: z.boolean() }).strict();
+export type RuntimeOutputResumeResult = z.infer<typeof RuntimeOutputResumeResultSchema>;
 
 // ── host_outbound_attach (Stage D3.a Commit 3) ─────────────────────
 //
@@ -1479,9 +1408,7 @@ export const HostOutboundAttachParamsSchema = z
     config_path: z.string().min(1),
   })
   .strict();
-export type HostOutboundAttachParams = z.infer<
-  typeof HostOutboundAttachParamsSchema
->;
+export type HostOutboundAttachParams = z.infer<typeof HostOutboundAttachParamsSchema>;
 
 export const HostOutboundAttachFailureReasonSchema = z.enum([
   'path_not_absolute',
@@ -1490,9 +1417,7 @@ export const HostOutboundAttachFailureReasonSchema = z.enum([
   'parse_failed',
   'invalid_server_url',
 ]);
-export type HostOutboundAttachFailureReason = z.infer<
-  typeof HostOutboundAttachFailureReasonSchema
->;
+export type HostOutboundAttachFailureReason = z.infer<typeof HostOutboundAttachFailureReasonSchema>;
 
 export const HostOutboundAttachResultSchema = z.discriminatedUnion('attached', [
   z
@@ -1515,10 +1440,7 @@ export const HostOutboundAttachResultSchema = z.discriminatedUnion('attached', [
     })
     .strict(),
 ]);
-export type HostOutboundAttachResult = z.infer<
-  typeof HostOutboundAttachResultSchema
->;
-
+export type HostOutboundAttachResult = z.infer<typeof HostOutboundAttachResultSchema>;
 
 // ── host_outbound_detach (Stage D3.b Commit 3) ─────────────────────
 //
@@ -1553,9 +1475,7 @@ export type HostOutboundAttachResult = z.infer<
 //     `runDaemon` shutdown) is the one-way close.
 
 export const HostOutboundDetachParamsSchema = z.object({}).strict();
-export type HostOutboundDetachParams = z.infer<
-  typeof HostOutboundDetachParamsSchema
->;
+export type HostOutboundDetachParams = z.infer<typeof HostOutboundDetachParamsSchema>;
 
 export const HostOutboundDetachResultSchema = z
   .object({
@@ -1569,10 +1489,7 @@ export const HostOutboundDetachResultSchema = z
     action: z.enum(['detached', 'noop']),
   })
   .strict();
-export type HostOutboundDetachResult = z.infer<
-  typeof HostOutboundDetachResultSchema
->;
-
+export type HostOutboundDetachResult = z.infer<typeof HostOutboundDetachResultSchema>;
 
 // ── host_outbound_reload (Stage D3.c Commit 2) ─────────────────────
 //
@@ -1634,9 +1551,7 @@ export type HostOutboundDetachResult = z.infer<
 // backend attachment-freshness check without re-reading the config.
 
 export const HostOutboundReloadParamsSchema = z.object({}).strict();
-export type HostOutboundReloadParams = z.infer<
-  typeof HostOutboundReloadParamsSchema
->;
+export type HostOutboundReloadParams = z.infer<typeof HostOutboundReloadParamsSchema>;
 
 export const HostOutboundReloadFailureReasonSchema = z.enum([
   'not_attached',
@@ -1644,9 +1559,7 @@ export const HostOutboundReloadFailureReasonSchema = z.enum([
   'parse_failed',
   'invalid_server_url',
 ]);
-export type HostOutboundReloadFailureReason = z.infer<
-  typeof HostOutboundReloadFailureReasonSchema
->;
+export type HostOutboundReloadFailureReason = z.infer<typeof HostOutboundReloadFailureReasonSchema>;
 
 export const HostOutboundReloadResultSchema = z.discriminatedUnion('reloaded', [
   z
@@ -1687,9 +1600,7 @@ export const HostOutboundReloadResultSchema = z.discriminatedUnion('reloaded', [
     })
     .strict(),
 ]);
-export type HostOutboundReloadResult = z.infer<
-  typeof HostOutboundReloadResultSchema
->;
+export type HostOutboundReloadResult = z.infer<typeof HostOutboundReloadResultSchema>;
 
 // ── host_proxy_config_* (daemon-host local truth) ──────────────────
 //
@@ -1702,25 +1613,16 @@ export const HostProxyConfigSchema = SharedHostProxyConfigSchema;
 export type HostProxyConfig = z.infer<typeof HostProxyConfigSchema>;
 
 export const HostProxyConfigGetParamsSchema = z.object({}).strict();
-export type HostProxyConfigGetParams = z.infer<
-  typeof HostProxyConfigGetParamsSchema
->;
+export type HostProxyConfigGetParams = z.infer<typeof HostProxyConfigGetParamsSchema>;
 
-export const HostProxyConfigGetResultSchema = z
-  .object({ config: HostProxyConfigSchema })
-  .strict();
-export type HostProxyConfigGetResult = z.infer<
-  typeof HostProxyConfigGetResultSchema
->;
+export const HostProxyConfigGetResultSchema = z.object({ config: HostProxyConfigSchema }).strict();
+export type HostProxyConfigGetResult = z.infer<typeof HostProxyConfigGetResultSchema>;
 
 export const HostProxyConfigSetParamsSchema = HostProxyConfigSchema;
-export type HostProxyConfigSetParams = z.infer<
-  typeof HostProxyConfigSetParamsSchema
->;
+export type HostProxyConfigSetParams = z.infer<typeof HostProxyConfigSetParamsSchema>;
 
 export const HostProxyConfigSetResultSchema = HostProxyConfigGetResultSchema;
 export type HostProxyConfigSetResult = HostProxyConfigGetResult;
-
 
 // ── D4.d: agent_materialize (server↔daemon formal semantics) ──────
 //
@@ -1765,9 +1667,7 @@ export const AgentMaterializeParamsSchema = z
      * 'onboarding' and 'minimal' return `unsupported_template`
      * until they get a template.
      */
-    template_choice: z
-      .enum(['default', 'onboarding', 'minimal'])
-      .default('default'),
+    template_choice: z.enum(['default', 'onboarding', 'minimal']).default('default'),
   })
   .strict();
 export type AgentMaterializeParams = z.infer<typeof AgentMaterializeParamsSchema>;
@@ -1853,10 +1753,7 @@ export const AgentMaterializeErrorCodeSchema = z.enum([
   'unsupported_runtime',
   'internal_error',
 ]);
-export type AgentMaterializeErrorCode = z.infer<
-  typeof AgentMaterializeErrorCodeSchema
->;
-
+export type AgentMaterializeErrorCode = z.infer<typeof AgentMaterializeErrorCodeSchema>;
 
 /**
  * Canonical generic-error code taxonomy. The 5 transport-level codes
@@ -1885,7 +1782,6 @@ export const ResponseErrorCodeSchema = z.enum([
   'request_too_large',
 ]);
 export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
-
 
 /**
  * Per-intent typed-error schemas.
@@ -1917,10 +1813,7 @@ export type ResponseErrorCode = z.infer<typeof ResponseErrorCodeSchema>;
  */
 const AgentMaterializeIpcErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorCodeSchema,
-      AgentMaterializeErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorCodeSchema, AgentMaterializeErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
@@ -1958,11 +1851,16 @@ const AgentMaterializeIpcErrorSchema = z
 //     case — that gate was removed with the registry demotion; it survives only
 //     as the agent-home ownership boundary. (Kept in the enum; a broader
 //     epoch-wide narrowing of the shared code is tracked with #1807/#1808.)
+//   - `runtime_binary_missing`: the runtime's CLI is not installed / not on PATH.
+//   - `runtime_version_unsupported`: the installed CLI parses as older than the
+//     driver's `minimumVersion`. An unparseable/unknown version is NOT refused.
 export const RuntimeStartErrorCodeSchema = z.enum([
   'agent_deleting',
   'workspace_not_provisioned',
   'workspace_bundle_missing',
   'registry_unavailable',
+  'runtime_binary_missing',
+  'runtime_version_unsupported',
 ]);
 export type RuntimeStartErrorCode = z.infer<typeof RuntimeStartErrorCodeSchema>;
 
@@ -2002,9 +1900,7 @@ export const AgentWorkspaceIndexParamsSchema = z
     workspace_ids: z.array(z.string().min(1)),
   })
   .strict();
-export type AgentWorkspaceIndexParams = z.infer<
-  typeof AgentWorkspaceIndexParamsSchema
->;
+export type AgentWorkspaceIndexParams = z.infer<typeof AgentWorkspaceIndexParamsSchema>;
 
 export const AgentWorkspaceIndexEntrySchema = z
   .object({
@@ -2019,9 +1915,7 @@ export const AgentWorkspaceIndexEntrySchema = z
     agent_dir: z.string().min(1),
   })
   .strict();
-export type AgentWorkspaceIndexEntry = z.infer<
-  typeof AgentWorkspaceIndexEntrySchema
->;
+export type AgentWorkspaceIndexEntry = z.infer<typeof AgentWorkspaceIndexEntrySchema>;
 
 export const AgentWorkspaceIndexResultSchema = z
   .object({
@@ -2039,9 +1933,7 @@ export const AgentWorkspaceIndexResultSchema = z
     unresolved: z.array(z.string().min(1)),
   })
   .strict();
-export type AgentWorkspaceIndexResult = z.infer<
-  typeof AgentWorkspaceIndexResultSchema
->;
+export type AgentWorkspaceIndexResult = z.infer<typeof AgentWorkspaceIndexResultSchema>;
 
 export const AgentWorkspaceIndexErrorCodeSchema = z.enum([
   /**
@@ -2054,16 +1946,11 @@ export const AgentWorkspaceIndexErrorCodeSchema = z.enum([
   'registry_unavailable',
   'internal_error',
 ]);
-export type AgentWorkspaceIndexErrorCode = z.infer<
-  typeof AgentWorkspaceIndexErrorCodeSchema
->;
+export type AgentWorkspaceIndexErrorCode = z.infer<typeof AgentWorkspaceIndexErrorCodeSchema>;
 
 const AgentWorkspaceIndexIpcErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorCodeSchema,
-      AgentWorkspaceIndexErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorCodeSchema, AgentWorkspaceIndexErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
@@ -2105,9 +1992,7 @@ export const AgentWorkspaceTreeParamsSchema = z
     workspace_id: z.string().min(1).optional(),
   })
   .strict();
-export type AgentWorkspaceTreeParams = z.infer<
-  typeof AgentWorkspaceTreeParamsSchema
->;
+export type AgentWorkspaceTreeParams = z.infer<typeof AgentWorkspaceTreeParamsSchema>;
 
 export const AgentWorkspaceTreeResultSchema = z
   .object({
@@ -2119,9 +2004,7 @@ export const AgentWorkspaceTreeResultSchema = z
     tree: AgentWorkspaceTreeSchema,
   })
   .strict();
-export type AgentWorkspaceTreeResult = z.infer<
-  typeof AgentWorkspaceTreeResultSchema
->;
+export type AgentWorkspaceTreeResult = z.infer<typeof AgentWorkspaceTreeResultSchema>;
 
 export const AgentWorkspaceFileReadParamsSchema = z
   .object({
@@ -2136,9 +2019,7 @@ export const AgentWorkspaceFileReadParamsSchema = z
     path: z.string().min(1),
   })
   .strict();
-export type AgentWorkspaceFileReadParams = z.infer<
-  typeof AgentWorkspaceFileReadParamsSchema
->;
+export type AgentWorkspaceFileReadParams = z.infer<typeof AgentWorkspaceFileReadParamsSchema>;
 
 export const AgentWorkspaceFileReadResultSchema = z
   .object({
@@ -2148,9 +2029,7 @@ export const AgentWorkspaceFileReadResultSchema = z
     file: AgentWorkspaceFileReadSchema,
   })
   .strict();
-export type AgentWorkspaceFileReadResult = z.infer<
-  typeof AgentWorkspaceFileReadResultSchema
->;
+export type AgentWorkspaceFileReadResult = z.infer<typeof AgentWorkspaceFileReadResultSchema>;
 
 /**
  * Shared error taxonomy for the two new intents. The daemon never
@@ -2178,16 +2057,11 @@ export const AgentWorkspaceFsErrorCodeSchema = z.enum([
   'fs_unavailable',
   'internal_error',
 ]);
-export type AgentWorkspaceFsErrorCode = z.infer<
-  typeof AgentWorkspaceFsErrorCodeSchema
->;
+export type AgentWorkspaceFsErrorCode = z.infer<typeof AgentWorkspaceFsErrorCodeSchema>;
 
 const AgentWorkspaceFsIpcErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorCodeSchema,
-      AgentWorkspaceFsErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorCodeSchema, AgentWorkspaceFsErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
@@ -2215,9 +2089,7 @@ export const AgentL2SeedParamsSchema = z
      */
     workspace_id: z.string().min(1),
     /** Template identifier (matches `agent_materialize`'s wire enum). */
-    template_choice: z
-      .enum(['default', 'onboarding', 'minimal'])
-      .default('default'),
+    template_choice: z.enum(['default', 'onboarding', 'minimal']).default('default'),
   })
   .strict();
 export type AgentL2SeedParams = z.infer<typeof AgentL2SeedParamsSchema>;
@@ -2300,9 +2172,7 @@ export const AgentFilesPurgeErrorCodeSchema = z.enum([
   'partial_purge',
   'internal_error',
 ]);
-export type AgentFilesPurgeErrorCode = z.infer<
-  typeof AgentFilesPurgeErrorCodeSchema
->;
+export type AgentFilesPurgeErrorCode = z.infer<typeof AgentFilesPurgeErrorCodeSchema>;
 
 const AgentFilesPurgeIpcErrorSchema = z
   .object({
@@ -2311,7 +2181,6 @@ const AgentFilesPurgeIpcErrorSchema = z
   })
   .strict();
 
-
 // ── #task:1135: profile MCP read / write ─────────────────────────────
 // Backs `silverhand profile mcp get|set`. The subject's raw MCP config is
 // host-local L1 truth (`<agents root>/<agent_id>/mcp.json`); the backend
@@ -2319,12 +2188,8 @@ const AgentFilesPurgeIpcErrorSchema = z
 // normal "no MCP" case, NOT an error). Write validates the canonical schema
 // (fail-loud `invalid_config`) and atomically replaces the file. The daemon
 // resolves the L1 dir itself (`resolveAgentDir`) — no fs path crosses the wire.
-export const AgentProfileMcpReadParamsSchema = z
-  .object({ agent_id: z.string().min(1) })
-  .strict();
-export type AgentProfileMcpReadParams = z.infer<
-  typeof AgentProfileMcpReadParamsSchema
->;
+export const AgentProfileMcpReadParamsSchema = z.object({ agent_id: z.string().min(1) }).strict();
+export type AgentProfileMcpReadParams = z.infer<typeof AgentProfileMcpReadParamsSchema>;
 
 export const AgentProfileMcpReadResultSchema = z
   .object({
@@ -2333,9 +2198,7 @@ export const AgentProfileMcpReadResultSchema = z
     raw: z.string().nullable(),
   })
   .strict();
-export type AgentProfileMcpReadResult = z.infer<
-  typeof AgentProfileMcpReadResultSchema
->;
+export type AgentProfileMcpReadResult = z.infer<typeof AgentProfileMcpReadResultSchema>;
 
 export const AgentProfileMcpWriteParamsSchema = z
   .object({
@@ -2345,9 +2208,7 @@ export const AgentProfileMcpWriteParamsSchema = z
     raw: z.string(),
   })
   .strict();
-export type AgentProfileMcpWriteParams = z.infer<
-  typeof AgentProfileMcpWriteParamsSchema
->;
+export type AgentProfileMcpWriteParams = z.infer<typeof AgentProfileMcpWriteParamsSchema>;
 
 export const AgentProfileMcpWriteResultSchema = z
   .object({
@@ -2355,9 +2216,7 @@ export const AgentProfileMcpWriteResultSchema = z
     bytes_written: z.number().int().nonnegative(),
   })
   .strict();
-export type AgentProfileMcpWriteResult = z.infer<
-  typeof AgentProfileMcpWriteResultSchema
->;
+export type AgentProfileMcpWriteResult = z.infer<typeof AgentProfileMcpWriteResultSchema>;
 
 export const AgentProfileMcpErrorCodeSchema = z.enum([
   /** Raw failed canonical validation (bad JSON / schema). Write-only;
@@ -2367,9 +2226,7 @@ export const AgentProfileMcpErrorCodeSchema = z.enum([
   'fs_unavailable',
   'internal_error',
 ]);
-export type AgentProfileMcpErrorCode = z.infer<
-  typeof AgentProfileMcpErrorCodeSchema
->;
+export type AgentProfileMcpErrorCode = z.infer<typeof AgentProfileMcpErrorCodeSchema>;
 
 export const AgentProfileMcpWriteErrorCodeSchema = z.enum([
   'invalid_config',
@@ -2377,9 +2234,7 @@ export const AgentProfileMcpWriteErrorCodeSchema = z.enum([
   'internal_error',
   'agent_deleting',
 ]);
-export type AgentProfileMcpWriteErrorCode = z.infer<
-  typeof AgentProfileMcpWriteErrorCodeSchema
->;
+export type AgentProfileMcpWriteErrorCode = z.infer<typeof AgentProfileMcpWriteErrorCodeSchema>;
 
 const AgentProfileMcpIpcErrorSchema = z
   .object({
@@ -2390,10 +2245,7 @@ const AgentProfileMcpIpcErrorSchema = z
 
 const AgentProfileMcpWriteIpcErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorCodeSchema,
-      AgentProfileMcpWriteErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorCodeSchema, AgentProfileMcpWriteErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
@@ -2448,7 +2300,6 @@ const McpProbeIpcErrorSchema = z
     message: z.string(),
   })
   .strict();
-
 
 /**
  * Single source of truth for the intent ↔ params / result / error
@@ -2658,16 +2509,13 @@ export const intentSchemas = {
 } as const;
 
 export type IntentName = keyof typeof intentSchemas;
-export type IntentParams<N extends IntentName> = z.infer<
-  (typeof intentSchemas)[N]['params']
->;
-export type IntentResult<N extends IntentName> = z.infer<
-  (typeof intentSchemas)[N]['result']
->;
-export type IntentError<N extends IntentName> =
-  (typeof intentSchemas)[N] extends { error: infer E extends z.ZodType }
-    ? z.infer<E>
-    : ResponseError;
+export type IntentParams<N extends IntentName> = z.infer<(typeof intentSchemas)[N]['params']>;
+export type IntentResult<N extends IntentName> = z.infer<(typeof intentSchemas)[N]['result']>;
+export type IntentError<N extends IntentName> = (typeof intentSchemas)[N] extends {
+  error: infer E extends z.ZodType;
+}
+  ? z.infer<E>
+  : ResponseError;
 
 /**
  * Resolve the per-intent typed-error schema, falling back to
@@ -2687,12 +2535,8 @@ export type IntentError<N extends IntentName> =
  * with `Cannot read properties of undefined (reading 'error')` and
  * the client would translate a clean rejection into a hang.
  */
-export function intentErrorSchema(
-  intent: string,
-): z.ZodType<{ code: string; message: string }> {
-  const entry = (intentSchemas as Record<string, { error?: unknown } | undefined>)[
-    intent
-  ];
+export function intentErrorSchema(intent: string): z.ZodType<{ code: string; message: string }> {
+  const entry = (intentSchemas as Record<string, { error?: unknown } | undefined>)[intent];
   const error = entry?.error;
   if (error) return error as z.ZodType<{ code: string; message: string }>;
   return ResponseErrorSchema;
@@ -2842,310 +2686,317 @@ export type LooseResponseFrame = z.infer<typeof LooseResponseFrameSchema>;
  *    forge that provenance and push a non-driver value into
  *    `ParsedEventKind`, which the run-state projection consumes.
  */
-export const EventFrameSchema = z.discriminatedUnion('event', [
-  HelloResultSchema.extend({
-    event: z.literal('ready'),
-    socket_path: z.string(),
-    daemon_pid: z.number().int(),
-    started_at: z.number().int(),
-  }),
-  z.object({
-    event: z.literal('shutting_down'),
-    reason: z.string(),
-  }),
-  // ── runtime_* events ────────────────────────────────────────────
-  z.object({
-    event: z.literal('runtime_state'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    runtime_generation: z.number().int().positive(),
-    state: AgentRunStateSchema,
-    ts: z.number().int(),
-  }),
-  z.object({
-    event: z.literal('runtime_output'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    stream: z.enum(['stdout', 'stderr']),
-    /** Raw bytes from the child process, base64-free utf-8 string.
-     *  This is the ONLY droppable field on the wire — see the per-
-     *  stream cap in design doc §2.2.2. */
-    chunk: z.string(),
-    ts: z.number().int(),
-  }),
-  z.object({
-    event: z.literal('runtime_exit'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    runtime_generation: z.number().int().positive(),
-    code: z.number().int().nullable(),
-    intentional: z.boolean(),
-    ts: z.number().int(),
-  }),
-  z.object({
-    event: z.literal('runtime_ready_for_drain'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    runtime_generation: z.number().int().positive(),
-    ts: z.number().int(),
-  }),
-  // ── unified delivery ack events (Stage 2, #task:1417) ───────────
-  //
-  // The single async ack/rollback family for `runtime_deliver`, keyed by
-  // `delivery_ids`. Adding them here is what forces the backend
-  // event-handler exhaustiveness case (`_exhaustive`), so the ingestion
-  // wiring lands with this. Stage 2c retired the legacy
-  // `runtime_startup_delivery_consumed`/`_failed` pair these subsumed —
-  // this is now the ONLY delivery-ack family. Shapes are single-sourced
-  // from the standalone schemas defined above.
-  RuntimeDeliveryConsumedEventSchema,
-  RuntimeDeliveryFailedEventSchema,
-  // ── runtime init lifecycle (locked by Cindy `vqDWkLFF6pAeIE5t`) ──
-  //
-  // These three events surface the daemon-internal init watchdog +
-  // retry loop to backend. Init lifecycle is ORTHOGONAL to
-  // delivery acks (`runtime_delivery_*`): empty-inbox and self-init paths
-  // have no delivery batch to attach to but still get watchdog
-  // timeouts / retries / cooldown. Backend doesn't own retry — daemon
-  // does — but backend translates each event into UI / DB projection
-  // (`agent_status` SSE, `updateAgentRuntime` columns, crash
-  // notifications) since it owns those surfaces.
-  //
-  // Sequence over a typical failure path (retry_attempt is 0-indexed,
-  // matching CM's `handle.initAttempt`):
-  //   runtime_init_timeout (retry_attempt=0, retrying=true) →
-  //   runtime_init_retrying (retry_attempt=1 of N) →
-  //   runtime_init_timeout (retry_attempt=1, retrying=true) →
-  //   ... →
-  //   runtime_init_timeout (retry_attempt=N-1, retrying=false, cooldown_until=…) →
-  //   runtime_init_cooldown (attempts_exhausted = N).
-  // The cooldown path may also fire with retry_attempt=0 if max_retries=0.
-  // The terminal `runtime_exit` follows separately when the daemon
-  // gives up and the child process is gone.
-  z.object({
-    event: z.literal('runtime_init_timeout'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    runtime_generation: z.number().int().positive(),
-    /** Which watchdog tier tripped (mirrors CM's three-tier
-     *  PR-A watchdog: silence between bytes / pre-protocol cap /
-     *  post-protocol stall). Names match CM's `InitTimeoutReason` so
-     *  backend can pass the value straight through to `agent_init_timeout`
-     *  SSE without translation (Cindy `4CJATqU0DdbsGVXW`). */
-    timeout_reason: z.enum(['silence', 'pre_protocol_cap', 'post_protocol']),
-    /** Wall-clock ms between spawn and watchdog firing — only the
-     *  daemon has the precise spawn timestamp, so we ship it on the
-     *  same event rather than asking backend to reconstruct it. */
-    elapsed_ms: z.number().int().nonnegative(),
-    /** The configured timeout value (ms) for the tier that fired —
-     *  varies per driver and may be overridden by daemon config. */
-    timeout_ms: z.number().int().nonnegative(),
-    /** True iff the daemon has already decided to re-spawn after this
-     *  timeout. False means cooldown / give-up — a `runtime_exit`
-     *  follows and no `runtime_init_retrying` will. Lets backend mark
-     *  the projection terminal in a single hop without buffering. */
-    retrying: z.boolean(),
-    /** 0-indexed attempt number that just timed out (first attempt
-     *  is 0). Matches CM's `handle.initAttempt` semantics. */
-    retry_attempt: z.number().int().nonnegative(),
-    /** Total retry budget the daemon will honor before cooldown. */
-    max_retries: z.number().int().nonnegative(),
-    /** Optional: present iff this timeout transition also engaged
-     *  cooldown — wall-clock epoch ms when backend / user may
-     *  attempt a fresh start. Carrying it on the same event keeps the
-     *  cooldown-on-timeout path self-contained; backend never has to
-     *  wait for a follow-up `runtime_init_cooldown` to know whether
-     *  to publish `agent_status:crashed reason=init_cooldown` vs
-     *  `init_timeout`. */
-    cooldown_until: z.number().int().positive().optional(),
-    ts: z.number().int(),
-  }).strict(),
-  z.object({
-    event: z.literal('runtime_init_retrying'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    runtime_generation: z.number().int().positive(),
-    /** The attempt number about to start (= the previous timeout's
-     *  retry_attempt + 1). */
-    retry_attempt: z.number().int().positive(),
-    max_retries: z.number().int().nonnegative(),
-    /** How long the daemon will wait before re-spawning, ms. */
-    delay_ms: z.number().int().nonnegative(),
-    ts: z.number().int(),
-  }).strict(),
-  z.object({
-    event: z.literal('runtime_init_cooldown'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    runtime_generation: z.number().int().positive(),
-    /** Wall-clock epoch ms after which backend / user may attempt a
-     *  fresh start. Daemon will NOT auto-retry past this point. */
-    cooldown_until: z.number().int().positive(),
-    /** Total attempts that failed before cooldown engaged (== max_retries). */
-    attempts_exhausted: z.number().int().nonnegative(),
-    ts: z.number().int(),
-  }).strict(),
-  // ── runtime_compaction_stale (Cindy `-pdNvRYOWip5e9yA` 3c plan
-  //     refinement) ───────────────────────────────────────────────
-  //
-  // Per-handle compaction watchdog (5 min, matches CM
-  // COMPACTION_STALE_MS) fired without observing `compaction_finished`.
-  // CRITICAL: this is observational only — daemon DOES NOT kill the
-  // child or change phase. CM's `recordCompactionStale` preserves
-  // `compacting: true` and only stacks `compactionStale: true` on the
-  // run-state, so the UI can show "still compacting, but stale"
-  // instead of "no longer compacting". Backend maps this 1:1 onto
-  // the existing `compaction_stale` SSE event.
-  //
-  // Non-droppable: backend depends on this to refresh `compactionStale`
-  // in its RunStateCache; dropping would leave the UI showing fresh
-  // compacting state indefinitely. Single implicit reason
-  // (watchdog timeout) — additional reasons would each get their own
-  // strict() variant.
-  z.object({
-    event: z.literal('runtime_compaction_stale'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    /** Ms elapsed since `compaction_started` was observed, at the
-     *  moment the watchdog fired. */
-    elapsed_ms: z.number().int().nonnegative(),
-    ts: z.number().int(),
-  }).strict(),
-  z.object({
-    event: z.literal('runtime_output_dropped'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-    dropped_count: z.number().int().nonnegative(),
-    bytes_dropped: z.number().int().nonnegative(),
-    since_ts: z.number().int(),
-  }),
-  z.object({
-    event: z.literal('runtime_output_paused'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-  }),
-  z.object({
-    event: z.literal('runtime_output_resumed'),
-    runtime_scope: RuntimeScopeSchema,
-    conversation_id: z.string().min(1),
-    agent_id: z.string().min(1),
-  }),
-  // ── runtime parsed event fanout (locked by Cindy `OQCA05pivtB8nSTC` +
-  //     `C2BZGDbQWfnq-bKJ`) ─────────────────────────────────────────
-  //
-  // `runtime_parsed_event` is the structured runtime projection
-  // surface: each line the driver's `parseLine` recognizes becomes
-  // one of these frames. Production no longer forwards raw child
-  // stdout/stderr by default (`runtime_output` is a legacy/diagnostic
-  // compatibility arm) because tool output is unbounded and can fill
-  // the outbound socket buffer. Backend observability / activity UI /
-  // delivery coordination must use parsed/state events instead.
-  //
-  // Non-droppable: backend's `handleParsedEvent` drives the
-  // AgentRunState lifecycle (thinking / tool_running / compacting /
-  // turn_end) and the `session_events` DB projection. Dropping one
-  // would leave run-state stuck or DB out of sync, neither of which
-  // is recoverable from `runtime_output` alone (only the driver
-  // knows the schema).
-  //
-  // No `raw_line` field: carrying raw bytes here would reintroduce
-  // the same unbounded tool-output channel this split is meant to
-  // avoid. The `parsed` payload is the bounded structured contract.
-  z
-    .object({
-      event: z.literal('runtime_parsed_event'),
+export const EventFrameSchema = z
+  .discriminatedUnion('event', [
+    HelloResultSchema.extend({
+      event: z.literal('ready'),
+      socket_path: z.string(),
+      daemon_pid: z.number().int(),
+      started_at: z.number().int(),
+    }),
+    z.object({
+      event: z.literal('shutting_down'),
+      reason: z.string(),
+    }),
+    // ── runtime_* events ────────────────────────────────────────────
+    z.object({
+      event: z.literal('runtime_state'),
       runtime_scope: RuntimeScopeSchema,
       conversation_id: z.string().min(1),
       agent_id: z.string().min(1),
       runtime_generation: z.number().int().positive(),
-      parsed: ParsedEventSchema,
+      state: AgentRunStateSchema,
       ts: z.number().int(),
-    })
-    .strict(),
-  // `runtime_parsed_event_dropped` is the safety valve when a parsed
-  // event's encoded payload exceeds MAX_FRAME_BYTES. We CANNOT silently
-  // truncate the `parsed` payload (Cindy: "frame 保护不要静默改写任意
-  // ParsedEvent") — that would let backend believe it received a
-  // complete `tool_call` / `text` / `unknown.raw` when it didn't.
-  //
-  // The dropped frame is metadata-only by hard rule (Cindy
-  // `C2BZGDbQWfnq-bKJ`): `parsed_kind` lets backend project a
-  // best-effort run-state hint (e.g. "we know a tool_call happened
-  // even though we lost the input"), `encoded_bytes` lets backend
-  // logs surface the size budget, and `reason` is a single-arm enum.
-  // NO payload — explicitly NO `unknown.raw`, NO tool input, NO text.
-  //
-  // Note: this dropped frame is on the WIRE only. Supervisor
-  // still updates its in-memory AgentRunState from the original
-  // ParsedEvent before encoding — frame-too-large is a broadcast
-  // concern, not a run-state concern (Cindy `C2BZGDbQWfnq-bKJ`).
-  z
-    .object({
-      event: z.literal('runtime_parsed_event_dropped'),
+    }),
+    z.object({
+      event: z.literal('runtime_output'),
       runtime_scope: RuntimeScopeSchema,
       conversation_id: z.string().min(1),
       agent_id: z.string().min(1),
-      parsed_kind: ParsedEventKindSchema,
-      encoded_bytes: z.number().int().nonnegative(),
-      reason: z.literal('frame_too_large'),
+      stream: z.enum(['stdout', 'stderr']),
+      /** Raw bytes from the child process, base64-free utf-8 string.
+       *  This is the ONLY droppable field on the wire — see the per-
+       *  stream cap in design doc §2.2.2. */
+      chunk: z.string(),
       ts: z.number().int(),
-    })
-    .strict(),
-  // `runtime_message_stale` (#task:2099) is the authoritative fact axis for a
-  // refused send. Before it, the desktop inferred staleness from the shape of
-  // the agent's command line (`--stale-resolution` / `--anyway` present), which
-  // is a client-side syntax proxy for a server-side verdict: it missed every
-  // retry that omitted the optional reason, reported a pre-emptive `--anyway`
-  // with nothing pending as a conflict, and went blind entirely on runtimes
-  // whose tool-call capture carries no command at all (OpenCode persists only
-  // `{cwd}`).
-  //
-  // The daemon does NOT classify: `extractStaleConflict` reads the backend's
-  // typed `details.subkind === 'message_stale'` and fails closed on a body it
-  // cannot parse, so this frame carries a verdict rather than a guess.
-  //
-  // `conversation_id` is the handle's CURRENT FOCUS target, i.e. the same key
-  // every other activity row of this turn (including the `tool_call` row for the
-  // very `silverhand message send` invocation) is written under. The refused
-  // send's TARGET conversation may differ under an agent-scoped session and is
-  // deliberately NOT carried: the row states that this runtime's send was
-  // refused, and per-conflict triage detail (`stale_event_id`, target, queue
-  // depth) stays in the backend's WARN log — the authority named by
-  // `docs/freshness-boundary-authority-v1.md` §3.2 (whose §6 records this row's
-  // own contract). Adding a field later is
-  // purely additive; retracting one that reached a persisted payload is not.
-  z
-    .object({
-      event: z.literal('runtime_message_stale'),
+    }),
+    z.object({
+      event: z.literal('runtime_exit'),
+      runtime_scope: RuntimeScopeSchema,
+      conversation_id: z.string().min(1),
+      agent_id: z.string().min(1),
+      runtime_generation: z.number().int().positive(),
+      code: z.number().int().nullable(),
+      intentional: z.boolean(),
+      ts: z.number().int(),
+    }),
+    z.object({
+      event: z.literal('runtime_ready_for_drain'),
       runtime_scope: RuntimeScopeSchema,
       conversation_id: z.string().min(1),
       agent_id: z.string().min(1),
       runtime_generation: z.number().int().positive(),
       ts: z.number().int(),
-    })
-    .strict(),
-]).superRefine((frame, ctx) => {
-  if (
-    frame.event === 'runtime_state'
-    && frame.state.conversationId !== frame.conversation_id
-  ) {
-    ctx.addIssue({
-      code: 'custom',
-      path: ['state', 'conversationId'],
-      message: 'runtime_state outer conversation must match state.conversationId',
-    });
-  }
-});
+    }),
+    // ── unified delivery ack events (Stage 2, #task:1417) ───────────
+    //
+    // The single async ack/rollback family for `runtime_deliver`, keyed by
+    // `delivery_ids`. Adding them here is what forces the backend
+    // event-handler exhaustiveness case (`_exhaustive`), so the ingestion
+    // wiring lands with this. Stage 2c retired the legacy
+    // `runtime_startup_delivery_consumed`/`_failed` pair these subsumed —
+    // this is now the ONLY delivery-ack family. Shapes are single-sourced
+    // from the standalone schemas defined above.
+    RuntimeDeliveryConsumedEventSchema,
+    RuntimeDeliveryFailedEventSchema,
+    // ── runtime init lifecycle (locked by Cindy `vqDWkLFF6pAeIE5t`) ──
+    //
+    // These three events surface the daemon-internal init watchdog +
+    // retry loop to backend. Init lifecycle is ORTHOGONAL to
+    // delivery acks (`runtime_delivery_*`): empty-inbox and self-init paths
+    // have no delivery batch to attach to but still get watchdog
+    // timeouts / retries / cooldown. Backend doesn't own retry — daemon
+    // does — but backend translates each event into UI / DB projection
+    // (`agent_status` SSE, `updateAgentRuntime` columns, crash
+    // notifications) since it owns those surfaces.
+    //
+    // Sequence over a typical failure path (retry_attempt is 0-indexed,
+    // matching CM's `handle.initAttempt`):
+    //   runtime_init_timeout (retry_attempt=0, retrying=true) →
+    //   runtime_init_retrying (retry_attempt=1 of N) →
+    //   runtime_init_timeout (retry_attempt=1, retrying=true) →
+    //   ... →
+    //   runtime_init_timeout (retry_attempt=N-1, retrying=false, cooldown_until=…) →
+    //   runtime_init_cooldown (attempts_exhausted = N).
+    // The cooldown path may also fire with retry_attempt=0 if max_retries=0.
+    // The terminal `runtime_exit` follows separately when the daemon
+    // gives up and the child process is gone.
+    z
+      .object({
+        event: z.literal('runtime_init_timeout'),
+        runtime_scope: RuntimeScopeSchema,
+        conversation_id: z.string().min(1),
+        agent_id: z.string().min(1),
+        runtime_generation: z.number().int().positive(),
+        /** Which watchdog tier tripped (mirrors CM's three-tier
+         *  PR-A watchdog: silence between bytes / pre-protocol cap /
+         *  post-protocol stall). Names match CM's `InitTimeoutReason` so
+         *  backend can pass the value straight through to `agent_init_timeout`
+         *  SSE without translation (Cindy `4CJATqU0DdbsGVXW`). */
+        timeout_reason: z.enum(['silence', 'pre_protocol_cap', 'post_protocol']),
+        /** Wall-clock ms between spawn and watchdog firing — only the
+         *  daemon has the precise spawn timestamp, so we ship it on the
+         *  same event rather than asking backend to reconstruct it. */
+        elapsed_ms: z.number().int().nonnegative(),
+        /** The configured timeout value (ms) for the tier that fired —
+         *  varies per driver and may be overridden by daemon config. */
+        timeout_ms: z.number().int().nonnegative(),
+        /** True iff the daemon has already decided to re-spawn after this
+         *  timeout. False means cooldown / give-up — a `runtime_exit`
+         *  follows and no `runtime_init_retrying` will. Lets backend mark
+         *  the projection terminal in a single hop without buffering. */
+        retrying: z.boolean(),
+        /** 0-indexed attempt number that just timed out (first attempt
+         *  is 0). Matches CM's `handle.initAttempt` semantics. */
+        retry_attempt: z.number().int().nonnegative(),
+        /** Total retry budget the daemon will honor before cooldown. */
+        max_retries: z.number().int().nonnegative(),
+        /** Optional: present iff this timeout transition also engaged
+         *  cooldown — wall-clock epoch ms when backend / user may
+         *  attempt a fresh start. Carrying it on the same event keeps the
+         *  cooldown-on-timeout path self-contained; backend never has to
+         *  wait for a follow-up `runtime_init_cooldown` to know whether
+         *  to publish `agent_status:crashed reason=init_cooldown` vs
+         *  `init_timeout`. */
+        cooldown_until: z.number().int().positive().optional(),
+        ts: z.number().int(),
+      })
+      .strict(),
+    z
+      .object({
+        event: z.literal('runtime_init_retrying'),
+        runtime_scope: RuntimeScopeSchema,
+        conversation_id: z.string().min(1),
+        agent_id: z.string().min(1),
+        runtime_generation: z.number().int().positive(),
+        /** The attempt number about to start (= the previous timeout's
+         *  retry_attempt + 1). */
+        retry_attempt: z.number().int().positive(),
+        max_retries: z.number().int().nonnegative(),
+        /** How long the daemon will wait before re-spawning, ms. */
+        delay_ms: z.number().int().nonnegative(),
+        ts: z.number().int(),
+      })
+      .strict(),
+    z
+      .object({
+        event: z.literal('runtime_init_cooldown'),
+        runtime_scope: RuntimeScopeSchema,
+        conversation_id: z.string().min(1),
+        agent_id: z.string().min(1),
+        runtime_generation: z.number().int().positive(),
+        /** Wall-clock epoch ms after which backend / user may attempt a
+         *  fresh start. Daemon will NOT auto-retry past this point. */
+        cooldown_until: z.number().int().positive(),
+        /** Total attempts that failed before cooldown engaged (== max_retries). */
+        attempts_exhausted: z.number().int().nonnegative(),
+        ts: z.number().int(),
+      })
+      .strict(),
+    // ── runtime_compaction_stale (Cindy `-pdNvRYOWip5e9yA` 3c plan
+    //     refinement) ───────────────────────────────────────────────
+    //
+    // Per-handle compaction watchdog (5 min, matches CM
+    // COMPACTION_STALE_MS) fired without observing `compaction_finished`.
+    // CRITICAL: this is observational only — daemon DOES NOT kill the
+    // child or change phase. CM's `recordCompactionStale` preserves
+    // `compacting: true` and only stacks `compactionStale: true` on the
+    // run-state, so the UI can show "still compacting, but stale"
+    // instead of "no longer compacting". Backend maps this 1:1 onto
+    // the existing `compaction_stale` SSE event.
+    //
+    // Non-droppable: backend depends on this to refresh `compactionStale`
+    // in its RunStateCache; dropping would leave the UI showing fresh
+    // compacting state indefinitely. Single implicit reason
+    // (watchdog timeout) — additional reasons would each get their own
+    // strict() variant.
+    z
+      .object({
+        event: z.literal('runtime_compaction_stale'),
+        runtime_scope: RuntimeScopeSchema,
+        conversation_id: z.string().min(1),
+        agent_id: z.string().min(1),
+        /** Ms elapsed since `compaction_started` was observed, at the
+         *  moment the watchdog fired. */
+        elapsed_ms: z.number().int().nonnegative(),
+        ts: z.number().int(),
+      })
+      .strict(),
+    z.object({
+      event: z.literal('runtime_output_dropped'),
+      runtime_scope: RuntimeScopeSchema,
+      conversation_id: z.string().min(1),
+      agent_id: z.string().min(1),
+      dropped_count: z.number().int().nonnegative(),
+      bytes_dropped: z.number().int().nonnegative(),
+      since_ts: z.number().int(),
+    }),
+    z.object({
+      event: z.literal('runtime_output_paused'),
+      runtime_scope: RuntimeScopeSchema,
+      conversation_id: z.string().min(1),
+      agent_id: z.string().min(1),
+    }),
+    z.object({
+      event: z.literal('runtime_output_resumed'),
+      runtime_scope: RuntimeScopeSchema,
+      conversation_id: z.string().min(1),
+      agent_id: z.string().min(1),
+    }),
+    // ── runtime parsed event fanout (locked by Cindy `OQCA05pivtB8nSTC` +
+    //     `C2BZGDbQWfnq-bKJ`) ─────────────────────────────────────────
+    //
+    // `runtime_parsed_event` is the structured runtime projection
+    // surface: each line the driver's `parseLine` recognizes becomes
+    // one of these frames. Production no longer forwards raw child
+    // stdout/stderr by default (`runtime_output` is a legacy/diagnostic
+    // compatibility arm) because tool output is unbounded and can fill
+    // the outbound socket buffer. Backend observability / activity UI /
+    // delivery coordination must use parsed/state events instead.
+    //
+    // Non-droppable: backend's `handleParsedEvent` drives the
+    // AgentRunState lifecycle (thinking / tool_running / compacting /
+    // turn_end) and the `session_events` DB projection. Dropping one
+    // would leave run-state stuck or DB out of sync, neither of which
+    // is recoverable from `runtime_output` alone (only the driver
+    // knows the schema).
+    //
+    // No `raw_line` field: carrying raw bytes here would reintroduce
+    // the same unbounded tool-output channel this split is meant to
+    // avoid. The `parsed` payload is the bounded structured contract.
+    z
+      .object({
+        event: z.literal('runtime_parsed_event'),
+        runtime_scope: RuntimeScopeSchema,
+        conversation_id: z.string().min(1),
+        agent_id: z.string().min(1),
+        runtime_generation: z.number().int().positive(),
+        parsed: ParsedEventSchema,
+        ts: z.number().int(),
+      })
+      .strict(),
+    // `runtime_parsed_event_dropped` is the safety valve when a parsed
+    // event's encoded payload exceeds MAX_FRAME_BYTES. We CANNOT silently
+    // truncate the `parsed` payload (Cindy: "frame 保护不要静默改写任意
+    // ParsedEvent") — that would let backend believe it received a
+    // complete `tool_call` / `text` / `unknown.raw` when it didn't.
+    //
+    // The dropped frame is metadata-only by hard rule (Cindy
+    // `C2BZGDbQWfnq-bKJ`): `parsed_kind` lets backend project a
+    // best-effort run-state hint (e.g. "we know a tool_call happened
+    // even though we lost the input"), `encoded_bytes` lets backend
+    // logs surface the size budget, and `reason` is a single-arm enum.
+    // NO payload — explicitly NO `unknown.raw`, NO tool input, NO text.
+    //
+    // Note: this dropped frame is on the WIRE only. Supervisor
+    // still updates its in-memory AgentRunState from the original
+    // ParsedEvent before encoding — frame-too-large is a broadcast
+    // concern, not a run-state concern (Cindy `C2BZGDbQWfnq-bKJ`).
+    z
+      .object({
+        event: z.literal('runtime_parsed_event_dropped'),
+        runtime_scope: RuntimeScopeSchema,
+        conversation_id: z.string().min(1),
+        agent_id: z.string().min(1),
+        parsed_kind: ParsedEventKindSchema,
+        encoded_bytes: z.number().int().nonnegative(),
+        reason: z.literal('frame_too_large'),
+        ts: z.number().int(),
+      })
+      .strict(),
+    // `runtime_message_stale` (#task:2099) is the authoritative fact axis for a
+    // refused send. Before it, the desktop inferred staleness from the shape of
+    // the agent's command line (`--stale-resolution` / `--anyway` present), which
+    // is a client-side syntax proxy for a server-side verdict: it missed every
+    // retry that omitted the optional reason, reported a pre-emptive `--anyway`
+    // with nothing pending as a conflict, and went blind entirely on runtimes
+    // whose tool-call capture carries no command at all (OpenCode persists only
+    // `{cwd}`).
+    //
+    // The daemon does NOT classify: `extractStaleConflict` reads the backend's
+    // typed `details.subkind === 'message_stale'` and fails closed on a body it
+    // cannot parse, so this frame carries a verdict rather than a guess.
+    //
+    // `conversation_id` is the handle's CURRENT FOCUS target, i.e. the same key
+    // every other activity row of this turn (including the `tool_call` row for the
+    // very `silverhand message send` invocation) is written under. The refused
+    // send's TARGET conversation may differ under an agent-scoped session and is
+    // deliberately NOT carried: the row states that this runtime's send was
+    // refused, and per-conflict triage detail (`stale_event_id`, target, queue
+    // depth) stays in the backend's WARN log — the authority named by
+    // `docs/freshness-boundary-authority-v1.md` §3.2 (whose §6 records this row's
+    // own contract). Adding a field later is
+    // purely additive; retracting one that reached a persisted payload is not.
+    z
+      .object({
+        event: z.literal('runtime_message_stale'),
+        runtime_scope: RuntimeScopeSchema,
+        conversation_id: z.string().min(1),
+        agent_id: z.string().min(1),
+        runtime_generation: z.number().int().positive(),
+        ts: z.number().int(),
+      })
+      .strict(),
+  ])
+  .superRefine((frame, ctx) => {
+    if (frame.event === 'runtime_state' && frame.state.conversationId !== frame.conversation_id) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['state', 'conversationId'],
+        message: 'runtime_state outer conversation must match state.conversationId',
+      });
+    }
+  });
 export type EventFrame = z.infer<typeof EventFrameSchema>;
 
 /**
@@ -3153,11 +3004,7 @@ export type EventFrame = z.infer<typeof EventFrameSchema>;
  * (always) or Event (occasionally); client sends Request only. Treat
  * `event` field's presence as the discriminator over `id`.
  */
-export const AnyFrameSchema = z.union([
-  RequestFrameSchema,
-  ResponseFrameSchema,
-  EventFrameSchema,
-]);
+export const AnyFrameSchema = z.union([RequestFrameSchema, ResponseFrameSchema, EventFrameSchema]);
 export type AnyFrame = z.infer<typeof AnyFrameSchema>;
 
 /**
@@ -3184,7 +3031,8 @@ export const MAX_WORKSPACE_FILE_FRAME_BYTES = 4 * 1024 * 1024;
 
 export function responseFrameBudget(intent: string | undefined, success: boolean): number {
   return success && intent === 'agent_workspace_file_read'
-    ? MAX_WORKSPACE_FILE_FRAME_BYTES : MAX_FRAME_BYTES;
+    ? MAX_WORKSPACE_FILE_FRAME_BYTES
+    : MAX_FRAME_BYTES;
 }
 
 /** Encode an outgoing frame to its NDJSON wire form (single line +
@@ -3193,12 +3041,12 @@ export function responseFrameBudget(intent: string | undefined, success: boolean
  *  emitting an oversized line the peer will reject. */
 export function encodeFrame(frame: AnyFrame, responseIntent?: string): string {
   const line = JSON.stringify(frame);
-  const budget = responseFrameBudget(responseIntent,
-    'result' in frame && !('error' in frame) && !('intent' in frame));
+  const budget = responseFrameBudget(
+    responseIntent,
+    'result' in frame && !('error' in frame) && !('intent' in frame),
+  );
   if (Buffer.byteLength(line, 'utf8') > budget) {
-    throw new Error(
-      `host frame exceeds MAX_FRAME_BYTES budget (${budget})`,
-    );
+    throw new Error(`host frame exceeds MAX_FRAME_BYTES budget (${budget})`);
   }
   return `${line}\n`;
 }
@@ -3225,7 +3073,11 @@ export interface SplitResult {
   overflow: boolean;
 }
 
-export function splitNdjson(buffer: string, chunk: string, maxBytes = MAX_FRAME_BYTES): SplitResult {
+export function splitNdjson(
+  buffer: string,
+  chunk: string,
+  maxBytes = MAX_FRAME_BYTES,
+): SplitResult {
   const combined = buffer + chunk;
   const frames: string[] = [];
   let start = 0;

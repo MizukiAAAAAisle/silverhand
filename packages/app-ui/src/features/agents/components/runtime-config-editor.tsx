@@ -34,6 +34,7 @@ import {
   runtimeChipDisabled,
   runtimeSectionHint,
 } from "../model/runtime-detection-ui";
+import { t } from "@/lib/i18n";
 
 /**
  * Runtime configuration section — one edit affordance covering all four
@@ -232,13 +233,12 @@ export function describeSwitchToast(
 ): { tone: "success" | "warning"; message: string } {
   const label = runtimeCliLabel(runtime);
   if (restartFailures > 0) {
-    const plural = restartFailures === 1 ? "" : "s";
     return {
       tone: "warning",
-      message: `Switched to ${label}, but ${restartFailures} conversation${plural} couldn't restart.`,
+      message: t("agents.switchedPartial", { runtime: label, count: restartFailures }),
     };
   }
-  return { tone: "success", message: `Switched to ${label}` };
+  return { tone: "success", message: t("agents.switched", { runtime: label }) };
 }
 
 interface RuntimeConfigEditorProps {
@@ -352,9 +352,9 @@ export function RuntimeConfigEditor({
 
   const switchErrorMessage = switchMut.error
     ? describeApiError(switchMut.error, {
-        backendUnreachableMessage: "Switch failed: cannot reach the backend.",
-        fallbackMessage: "Failed to switch runtime.",
-        actionLabel: "Switch runtime",
+        backendUnreachableMessage: t("agents.switchFailedCannotReach"),
+        fallbackMessage: t("agents.failedToSwitchRuntime"),
+        actionLabel: t("agents.switchRuntime"),
       })
     : null;
 
@@ -391,9 +391,9 @@ export function RuntimeConfigEditor({
       {editing && patchMut.error ? (
         <div className="text-xs text-error">
           {describeApiError(patchMut.error, {
-            backendUnreachableMessage: "Save failed: cannot reach the backend.",
-            fallbackMessage: "Failed to save runtime configuration.",
-            actionLabel: "Save",
+            backendUnreachableMessage: t("agents.saveFailedCannotReach"),
+            fallbackMessage: t("agents.failedToSaveRuntime"),
+            actionLabel: t("common.save"),
           })}
         </div>
       ) : null}
@@ -438,18 +438,22 @@ function ReadOnlyGrid({ agent }: { agent: AgentDto }): JSX.Element {
   const supportsFastMode = runtimeSupportsFastMode(agent.runtime);
   return (
     <div data-runtime-summary className={RUNTIME_GRID_CLASS}>
-      <ReadOnlyRow label="Runtime" value={runtimeCliLabel(agent.runtime)} />
-      <ReadOnlyRow label="Model" value={agent.model} placeholder="driver default" />
+      <ReadOnlyRow label={t("agents.runtime")} value={runtimeCliLabel(agent.runtime)} />
+      <ReadOnlyRow
+        label={t("agents.model")}
+        value={agent.model}
+        placeholder={t("agents.driverDefault")}
+      />
       {supportsReasoning ? (
         <ReadOnlyRow
-          label="Reasoning"
+          label={t("agents.reasoning")}
           value={agent.reasoning_effort ? reasoningEffortLabel(agent.reasoning_effort) : null}
-          placeholder="driver default"
+          placeholder={t("agents.driverDefault")}
         />
       ) : null}
       {supportsFastMode ? (
         <ReadOnlyRow
-          label="Fast mode"
+          label={t("agents.fastMode")}
           value={
             agent.fast_mode === null || agent.fast_mode === undefined
               ? null
@@ -457,7 +461,7 @@ function ReadOnlyGrid({ agent }: { agent: AgentDto }): JSX.Element {
                 ? "Enabled"
                 : "Disabled"
           }
-          placeholder="driver default"
+          placeholder={t("agents.driverDefault")}
         />
       ) : null}
     </div>
@@ -566,10 +570,10 @@ function EditForm({
           <div className="flex h-5 items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Label htmlFor="rc-runtime" required>
-                Runtime
+                {t("agents.runtime")}
               </Label>
               {detecting ? (
-                <span className="text-xs font-normal text-text-muted">Detecting…</span>
+                <span className="text-xs font-normal text-text-muted">{t("agents.detecting")}</span>
               ) : null}
             </div>
             {hostAvailable ? (
@@ -577,8 +581,8 @@ function EditForm({
                 type="button"
                 onClick={() => void runtimeCatalog.reprobe()}
                 disabled={detecting}
-                aria-label="Recheck installed runtimes"
-                title="Recheck"
+                aria-label={t("agents.recheckInstalledRuntimes")}
+                title={t("agents.recheck")}
                 className="inline-flex size-5 items-center justify-center p-0 text-text-muted transition-colors hover:text-text-primary disabled:cursor-default disabled:opacity-60"
               >
                 <RefreshIcon className={cn("size-3.5", detecting && "animate-spin")} />
@@ -599,7 +603,7 @@ function EditForm({
 
         <div className="flex min-w-0 flex-col gap-1.5">
           <div className="flex h-5 items-center">
-            <Label required>Model</Label>
+            <Label required>{t("agents.model")}</Label>
           </div>
           <ModelPicker
             id="rc-model"
@@ -613,15 +617,15 @@ function EditForm({
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex h-5 items-center">
               <Label htmlFor="rc-reasoning" required>
-                Reasoning
+                {t("agents.reasoning")}
               </Label>
             </div>
             <ChoicePickerSelect
               id="rc-reasoning"
               value={draft.reasoning}
-              placeholder="Choose…"
+              placeholder={t("agents.choose")}
               options={[
-                { value: "__default__", label: "Use driver default" },
+                { value: "__default__", label: t("agents.useDriverDefault") },
                 ...reasoningDisplayOptions.map((v) => ({
                   value: v,
                   label: reasoningEffortLabel(v),
@@ -641,17 +645,17 @@ function EditForm({
           <div className="flex min-w-0 flex-col gap-1.5">
             <div className="flex h-5 items-center">
               <Label htmlFor="rc-fastmode" required>
-                Fast mode
+                {t("agents.fastMode")}
               </Label>
             </div>
             <ChoicePickerSelect
               id="rc-fastmode"
               value={draft.fastMode}
-              placeholder="Choose…"
+              placeholder={t("agents.choose")}
               options={[
-                { value: "__default__", label: "Use codex default" },
-                { value: "true", label: "Enabled" },
-                { value: "false", label: "Disabled" },
+                { value: "__default__", label: t("agents.useCodexDefault") },
+                { value: "true", label: t("agents.enabled") },
+                { value: "false", label: t("agents.disabled") },
               ]}
               onChange={(v) =>
                 onDraft({
@@ -707,8 +711,8 @@ function RuntimeSelect({
           className={contentClass()}
         >
           <Select.Viewport>
-            {targets.map((t) => {
-              const state = runtimeStateByKind.get(t.kind);
+            {targets.map((target) => {
+              const state = runtimeStateByKind.get(target.kind);
               // Disabled ONLY on `detected` + `absent` — a probe gap
               // never traps a runtime the user actually has installed.
               // The final gate is the backend transition; here we just
@@ -720,23 +724,25 @@ function RuntimeSelect({
                 mode !== "detected"
                   ? undefined
                   : state === "absent"
-                    ? "Not detected on this computer"
+                    ? t("agents.notDetectedOnThis")
                     : state === "present_unverified"
-                      ? "Installed, version unverified"
+                      ? t("agents.installedVersionUnverified")
                       : state === "unknown"
-                        ? "Couldn't verify — you can still pick"
+                        ? t("agents.couldntVerifyYouCan")
                         : undefined;
               return (
                 <Select.Item
-                  key={t.kind}
-                  value={t.kind}
+                  key={target.kind}
+                  value={target.kind}
                   disabled={absent}
                   title={title}
                   className={itemClass()}
                 >
-                  <Select.ItemText>{runtimeCliLabel(t.kind)}</Select.ItemText>
+                  <Select.ItemText>{runtimeCliLabel(target.kind)}</Select.ItemText>
                   {absent ? (
-                    <span className="ml-auto text-xs text-text-muted">not installed</span>
+                    <span className="ml-auto text-xs text-text-muted">
+                      {t("agents.notInstalled")}
+                    </span>
                   ) : null}
                 </Select.Item>
               );
@@ -810,7 +816,7 @@ function ChoicePickerSelect({
  *  - Pick a suggestion or type + Enter/blur   → modelChoice='specify'
  *  - Clear the input                          → modelChoice='unset'
  */
-const MODEL_DEFAULT_LABEL = "Use driver default";
+const modelDefaultLabel = () => t("agents.useDriverDefault");
 
 function ModelPicker({
   id,
@@ -825,12 +831,12 @@ function ModelPicker({
 }): JSX.Element {
   const inputValue = draft.modelChoice === "specify" ? draft.modelValue : "";
   const placeholder =
-    draft.modelChoice === "default" ? "Using driver default" : "Choose or type a model…";
-  const items = [MODEL_DEFAULT_LABEL, ...suggestions];
+    draft.modelChoice === "default" ? t("agents.usingDriverDefault") : t("agents.chooseOrTypeA");
+  const items = [modelDefaultLabel(), ...suggestions];
   return (
     <Combobox
       id={id}
-      ariaLabel="Model"
+      ariaLabel={t("agents.model")}
       value={inputValue}
       placeholder={placeholder}
       suggestions={items}
@@ -840,7 +846,7 @@ function ModelPicker({
         // with the label first — skip it here and let onCommit handle the
         // sentinel below (avoids a transient "specify + modelValue='Use
         // driver default'" flicker).
-        if (next === MODEL_DEFAULT_LABEL) return;
+        if (next === modelDefaultLabel()) return;
         onDraft({ ...draft, modelChoice: "specify", modelValue: next });
       }}
       onCommit={(next) => onDraft(modelDraftAfterCommit(draft, next))}
@@ -866,7 +872,7 @@ function ModelPicker({
  *  overwritten). Only `specify` collapsing to empty means the user
  *  cleared their typed value — that is a real transition to unset. */
 export function modelDraftAfterCommit(draft: RuntimeConfigDraft, next: string): RuntimeConfigDraft {
-  if (next === MODEL_DEFAULT_LABEL) {
+  if (next === modelDefaultLabel()) {
     return clearIncompatibleReasoning({
       ...draft,
       modelChoice: "default",

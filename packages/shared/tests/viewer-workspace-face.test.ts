@@ -1,8 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import {
-  ViewerWorkspaceDtoSchema,
-  WorkspaceSchema,
-} from '../src/api/index.js';
+import { ViewerWorkspaceDtoSchema, WorkspaceSchema } from '../src/api/index.js';
 
 /**
  * The workspace boundary's two halves, pinned (#task:2069).
@@ -54,9 +51,7 @@ describe('workspace domain/wire boundary (#task:2069)', () => {
   ];
 
   it('publishes exactly the wire key set — no container word among them', () => {
-    expect(Object.keys(ViewerWorkspaceDtoSchema.shape).sort()).toEqual(
-      [...PUBLISHED_KEYS].sort(),
-    );
+    expect(Object.keys(ViewerWorkspaceDtoSchema.shape).sort()).toEqual([...PUBLISHED_KEYS].sort());
   });
 
   it('publishes the domain shape — the two halves agree key-for-key', () => {

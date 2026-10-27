@@ -95,9 +95,9 @@ export interface NameCodePointClass {
  */
 export const INVISIBLE_CODE_POINTS: NameCodePointClass = {
   id: 'invisible',
-  includes: codePoint =>
-    !inCodePointRanges(NAME_RENDERABLE_RANGES, codePoint)
-    || inCodePointRanges(NAME_DEFAULT_IGNORABLE_RANGES, codePoint),
+  includes: (codePoint) =>
+    !inCodePointRanges(NAME_RENDERABLE_RANGES, codePoint) ||
+    inCodePointRanges(NAME_DEFAULT_IGNORABLE_RANGES, codePoint),
 };
 
 /**
@@ -127,10 +127,10 @@ export const INVISIBLE_CODE_POINTS: NameCodePointClass = {
  */
 export const SEQUENCE_FORMING_EMOJI_PARTS: NameCodePointClass = {
   id: 'sequence_forming_emoji_part',
-  includes: codePoint =>
-    inCodePointRanges(NAME_EMOJI_MODIFIER_RANGES, codePoint)
-    || inCodePointRanges(NAME_ENCLOSING_MARK_RANGES, codePoint)
-    || inCodePointRanges(NAME_REGIONAL_INDICATOR_RANGES, codePoint),
+  includes: (codePoint) =>
+    inCodePointRanges(NAME_EMOJI_MODIFIER_RANGES, codePoint) ||
+    inCodePointRanges(NAME_ENCLOSING_MARK_RANGES, codePoint) ||
+    inCodePointRanges(NAME_REGIONAL_INDICATOR_RANGES, codePoint),
 };
 
 /**

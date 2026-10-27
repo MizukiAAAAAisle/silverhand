@@ -18,6 +18,7 @@ import type { WorkspaceChannelReference } from "@/features/messages/components/c
 import type { ChannelReference } from "@/features/messages/components/channel-ref";
 import { useRelativeTime } from "@/features/messages/hooks/use-relative-time";
 import { type RendererProps, useUserResolver, firstLine } from "./shared";
+import { t } from "@/lib/i18n";
 
 type ContextCardKind = "quoted" | "inherited" | "spawned";
 
@@ -140,8 +141,8 @@ function ContextCardShell({
             onClick={() => setExpanded((v) => !v)}
             className="ml-auto flex size-6 shrink-0 items-center justify-center rounded-(--control-radius) text-text-muted hover:bg-bg-hover hover:text-text-secondary"
             aria-expanded={expanded}
-            aria-label={expanded ? "Collapse context" : "Expand context"}
-            title={expanded ? "Collapse" : "Expand"}
+            aria-label={expanded ? t("messages.collapseContext") : t("messages.expandContext")}
+            title={expanded ? t("messages.collapse") : t("messages.expand")}
             data-context-toggle={expanded ? "collapse" : "expand"}
           >
             <ChevronRightIcon
@@ -226,7 +227,7 @@ export function ThreadAnchorCard(props: RendererProps): JSX.Element {
   );
   const userResolver = useUserResolver();
   if (!meta) {
-    return <ContextCardLegacyFallback kind="quoted" tagLabel="Quoted" {...props} />;
+    return <ContextCardLegacyFallback kind="quoted" tagLabel={t("messages.quoted")} {...props} />;
   }
   return (
     <ContextCardShell
@@ -254,7 +255,7 @@ function threadAnchorModel(
   }
   return {
     kind: "quoted",
-    tagLabel: "Quoted",
+    tagLabel: t("messages.quoted"),
     sourcePrefix: "",
     sourceConversationId: meta.quoted_conversation_id,
     sourceAuthorLabel: authorLabel,
@@ -270,7 +271,9 @@ export function ChildContextCard(props: RendererProps): JSX.Element {
     (props.message.metadata ?? null) as Record<string, unknown> | null,
   );
   if (!meta) {
-    return <ContextCardLegacyFallback kind="inherited" tagLabel="Inherited" {...props} />;
+    return (
+      <ContextCardLegacyFallback kind="inherited" tagLabel={t("messages.inherited")} {...props} />
+    );
   }
   return (
     <ContextCardShell
@@ -287,7 +290,7 @@ export function ChildContextCard(props: RendererProps): JSX.Element {
 function childContextModel(meta: ChildContextMetadata): ContextCardModel {
   return {
     kind: "inherited",
-    tagLabel: "Inherited",
+    tagLabel: t("messages.inherited"),
     sourcePrefix: "from ",
     sourceConversationId: meta.parent_conversation_id,
     sourceAuthorLabel: "",
@@ -303,7 +306,9 @@ export function ChannelContextCard(props: RendererProps): JSX.Element {
     (props.message.metadata ?? null) as Record<string, unknown> | null,
   );
   if (!meta) {
-    return <ContextCardLegacyFallback kind="spawned" tagLabel="Spawned-from" {...props} />;
+    return (
+      <ContextCardLegacyFallback kind="spawned" tagLabel={t("messages.spawnedFrom")} {...props} />
+    );
   }
   return (
     <ContextCardShell
@@ -319,11 +324,11 @@ export function ChannelContextCard(props: RendererProps): JSX.Element {
 
 function channelContextModel(meta: ChannelContextMetadata, content: string): ContextCardModel {
   const agentLabel = meta.created_by_agent_name
-    ? `by ${meta.created_by_agent_name}`
-    : "by an agent";
+    ? t("messages.byAgent", { name: meta.created_by_agent_name })
+    : t("messages.byAnAgent");
   return {
     kind: "spawned",
-    tagLabel: "Spawned-from",
+    tagLabel: t("messages.spawnedFrom"),
     sourcePrefix: "",
     sourceConversationId: meta.source_conversation_id,
     sourceAuthorLabel: agentLabel,

@@ -1,7 +1,15 @@
-export type SettingsSection = "account" | "appearance" | "connection" | "notifications" | "hooks" | "about";
+export type SettingsSection =
+  | "account"
+  | "language"
+  | "appearance"
+  | "connection"
+  | "notifications"
+  | "hooks"
+  | "about";
 
 export const SETTINGS_SECTIONS: ReadonlyArray<SettingsSection> = [
   "account",
+  "language",
   "appearance",
   "connection",
   "notifications",

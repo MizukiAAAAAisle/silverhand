@@ -1,9 +1,12 @@
 import { SkeletonBlock as Block, SkeletonRegion as Region } from "@/components/layout/skeleton";
 import { AVATAR_PX } from "@/components/avatar-scale";
+import { t } from "@/lib/i18n";
 export function AccountSkeleton(): JSX.Element {
   return (
-    <Region label="Loading account" className="px-5 py-5">
-      <h2 className="mb-5 text-base font-semibold text-text-primary">Account</h2>
+    <Region label={t("settings.account.loading")} className="px-5 py-5">
+      <h2 className="mb-5 text-base font-semibold text-text-primary">
+        {t("settings.sections.account")}
+      </h2>
       <div className="max-w-2xl space-y-6">
         <div className="flex gap-3 items-center">
           <div style={{ width: AVATAR_PX["3xl"], height: AVATAR_PX["3xl"] }}>
@@ -15,7 +18,7 @@ export function AccountSkeleton(): JSX.Element {
           </div>
         </div>
         <div className="border-t border-border-subtle pt-5 space-y-2">
-          <p className="text-xs text-text-muted">Display name</p>
+          <p className="text-xs text-text-muted">{t("appShell.displayName")}</p>
           <Block className="h-8 w-full" />
         </div>
         <div className="space-y-3">

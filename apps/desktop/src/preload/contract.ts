@@ -2,12 +2,15 @@ import type {
   AuthLoginInput,
   AuthSignupInput,
   ServerConnectionProfileView,
+  ServerInfo,
 } from "@silverhand/shared";
 import type {
   ConnectionInfo,
   LocalHostInfo,
   ClientAuthState,
   ClientAuthResult,
+  PasswordRecoveryCall,
+  PasswordRecoveryResult,
   BackendProxyRequest,
   BackendProxyResponse,
   BackendUploadRequest,
@@ -38,9 +41,11 @@ export interface DesktopBridge {
   getDesktopBuildConfig(): Promise<DesktopBuildConfig>;
   getBackendInfo(): Promise<DesktopBackendInfo | null>;
   getAuthState(): Promise<ClientAuthState>;
+  getServerInfo(): Promise<ServerInfo>;
   signup(input: AuthSignupInput): Promise<ClientAuthResult>;
   login(input: AuthLoginInput): Promise<ClientAuthResult>;
   logout(): Promise<{ ok: true }>;
+  passwordRecovery(input: PasswordRecoveryCall): Promise<PasswordRecoveryResult>;
   backendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse>;
   backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
   recordEventWsDiagnostic(input: EventWsDiagnostic): Promise<void>;
@@ -86,8 +91,6 @@ export interface DesktopBridge {
     /** Stacks alerts that share it into one group (macOS, Windows). */
     groupId?: string;
     force?: boolean;
-    /** The target is the displayed conversation; a focused desktop window uses sound only. */
-    currentConversation?: boolean;
     notificationId?: string;
   }): Promise<string | undefined>;
   onNotificationClicked(handler: (notificationId: string) => void): () => void;
@@ -108,6 +111,7 @@ export interface DesktopBridge {
   onContextualClose(handler: (reqId: string) => void): () => void;
 
   respondContextualClose(reqId: string, outcome: "closed-panel" | "background-app"): void;
+  setLocale(locale: "en" | "zh"): void;
   savePngExport(input: {
     pngBytes: Uint8Array;
     suggestedName: string;

@@ -173,11 +173,7 @@ describe('title validator: refused (#task:2016)', () => {
     ['', 'empty', 'nothing to address'],
     ['   ', 'empty', 'whitespace only, after trim'],
     ['\u3000', 'empty', 'ideographic space only'],
-    [
-      'a'.repeat(CONVERSATION_TITLE_MAX_CODE_POINTS + 1),
-      'too_long',
-      'one code point over',
-    ],
+    ['a'.repeat(CONVERSATION_TITLE_MAX_CODE_POINTS + 1), 'too_long', 'one code point over'],
     ['👨\u200D👩', 'forbidden_code_point', 'ZWJ sequence'],
     ['👍\u{1F3FB}', 'forbidden_code_point', 'skin-tone modifier'],
     ['1\uFE0F\u20E3', 'forbidden_code_point', 'keycap sequence'],
@@ -226,9 +222,7 @@ describe('title validator: refused (#task:2016)', () => {
     const overflow = parseConversationTitle(astral + '🚀');
     expect(overflow.ok).toBe(false);
     if (!overflow.ok && overflow.issue.kind === 'too_long') {
-      expect(overflow.issue.codePoints).toBe(
-        CONVERSATION_TITLE_MAX_CODE_POINTS + 1,
-      );
+      expect(overflow.issue.codePoints).toBe(CONVERSATION_TITLE_MAX_CODE_POINTS + 1);
     }
   });
 

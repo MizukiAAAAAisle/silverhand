@@ -2,6 +2,7 @@ import { CheckIcon, ClockIcon, DragHandleIcon, SortIcon } from "@/icons";
 import type { SortMode } from "@silverhand/shared";
 import { Button } from "@/components/ui/button";
 import { AppDropdownMenu, AppDropdownMenuItem } from "@/components/menus/app-context-menu";
+import { t } from "@/lib/i18n";
 
 /**
  * Per-list sort-mode entry (#task:1146). A small icon button in a list's
@@ -27,8 +28,8 @@ export function SortModeMenu({
           variant="ghost"
           size="icon"
           className="h-6 w-6"
-          aria-label="Sort"
-          title="Sort"
+          aria-label={t("ui.sort")}
+          title={t("ui.sort")}
         >
           <SortIcon className="size-3.5" />
         </Button>
@@ -39,14 +40,14 @@ export function SortModeMenu({
         trailing={mode === "recent" ? <CheckIcon className="size-3.5 text-accent" /> : undefined}
         onSelect={() => onChange("recent")}
       >
-        Recent
+        {t("ui.recent")}
       </AppDropdownMenuItem>
       <AppDropdownMenuItem
         icon={<DragHandleIcon className="size-3.5" />}
         trailing={mode === "manual" ? <CheckIcon className="size-3.5 text-accent" /> : undefined}
         onSelect={() => onChange("manual")}
       >
-        Manual
+        {t("ui.manual")}
       </AppDropdownMenuItem>
     </AppDropdownMenu>
   );

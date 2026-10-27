@@ -6,6 +6,7 @@ import {
   presenceDotStatus,
   upsertPresence,
 } from "./presence";
+import { t } from "@/lib/i18n";
 
 function dto(
   user_id: string,
@@ -107,7 +108,7 @@ describe("decidePresenceFrameAction", () => {
 
 describe("humanPresenceText", () => {
   it('reads "Online" when online, ignoring last_seen_at', () => {
-    expect(humanPresenceText("online", 123, "2 minutes ago")).toBe("Online");
+    expect(humanPresenceText("online", 123, "2 minutes ago")).toBe(t("common.online"));
   });
 
   it('reads "Last seen X ago" when offline with a recorded last_seen', () => {
@@ -123,6 +124,8 @@ describe("humanPresenceText", () => {
   });
 
   it('treats unknown presence with a last_seen as "Last seen X ago"', () => {
-    expect(humanPresenceText(undefined, 999, "an hour ago")).toBe("Last seen an hour ago");
+    expect(humanPresenceText(undefined, 999, "an hour ago")).toBe(
+      t("common.lastSeen", { time: "an hour ago" }),
+    );
   });
 });

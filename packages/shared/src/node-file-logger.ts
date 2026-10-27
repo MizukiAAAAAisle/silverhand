@@ -169,9 +169,7 @@ const SYSTEM_ALWAYS_WRITE_CATEGORIES = [
 ] as const;
 
 export function createLogLevelControl(
-  initialLevel: SilverhandLogLevel = parseSilverhandLogLevel(
-    process.env[SILVERHAND_LOG_LEVEL_ENV],
-  ),
+  initialLevel: SilverhandLogLevel = parseSilverhandLogLevel(process.env[SILVERHAND_LOG_LEVEL_ENV]),
 ): LogLevelControl {
   let globalLevel = initialLevel;
   const windows = new Map<string, { expiresAt: number; timer: ReturnType<typeof setTimeout> }>();
@@ -190,7 +188,7 @@ export function createLogLevelControl(
 
   return {
     getGlobalLevel: () => globalLevel,
-    setGlobalLevel: level => {
+    setGlobalLevel: (level) => {
       globalLevel = level;
     },
     enableConversationDebug: (conversationId, expiresAt) => {
@@ -203,10 +201,10 @@ export function createLogLevelControl(
       timer.unref?.();
       windows.set(conversationId, { expiresAt, timer });
     },
-    disableConversationDebug: conversationId => {
+    disableConversationDebug: (conversationId) => {
       clearWindow(conversationId);
     },
-    getConversationDebugStatus: conversationId => {
+    getConversationDebugStatus: (conversationId) => {
       purgeExpired(conversationId);
       const existing = windows.get(conversationId);
       return existing
@@ -253,7 +251,7 @@ function makeLogger(
     info: (obj, msg) => write('info', obj, msg),
     warn: (obj, msg) => write('warn', obj, msg),
     error: (obj, msg) => write('error', obj, msg),
-    child: bindings =>
+    child: (bindings) =>
       makeLogger(
         stream,
         filePath,
@@ -263,7 +261,7 @@ function makeLogger(
         alwaysWriteCategories,
       ),
     close: () =>
-      new Promise<void>(resolve => {
+      new Promise<void>((resolve) => {
         stream.end(() => resolve());
       }),
   };
@@ -304,7 +302,12 @@ function safeStringify(line: Record<string, unknown>): string {
   try {
     return JSON.stringify(line, errorReplacer);
   } catch {
-    return JSON.stringify({ ts: line.ts, level: line.level, msg: line.msg, _stringify_error: true });
+    return JSON.stringify({
+      ts: line.ts,
+      level: line.level,
+      msg: line.msg,
+      _stringify_error: true,
+    });
   }
 }
 

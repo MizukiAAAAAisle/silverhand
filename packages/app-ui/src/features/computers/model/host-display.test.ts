@@ -5,7 +5,7 @@ import {
   hostDisplayName,
   isComputerAvailable,
   resolveComputerName,
-  UNKNOWN_COMPUTER_LABEL,
+  unknownComputerLabel,
 } from "./host-display";
 
 function makeHost(partial: Partial<HostDto>): HostDto {
@@ -50,7 +50,7 @@ describe("resolveComputerName", () => {
   });
 
   it("returns the restrained fallback for an unknown/deleted host", () => {
-    expect(resolveComputerName(undefined)).toBe(UNKNOWN_COMPUTER_LABEL);
+    expect(resolveComputerName(undefined)).toBe(unknownComputerLabel());
   });
 });
 

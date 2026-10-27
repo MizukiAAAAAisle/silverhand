@@ -26,6 +26,7 @@ import {
   TASK_STATUS_ICON,
 } from "@/features/tasks/components/task-status-badge";
 import { TaskDropPlaceholder } from "@/features/tasks/components/task-drop-placeholder";
+import { t } from "@/lib/i18n";
 
 /**
  * The task board's five-column kanban BODY — the one authority for column
@@ -51,34 +52,34 @@ interface ColumnSpec {
   iconClass: string;
 }
 
-const COLUMNS: ReadonlyArray<ColumnSpec> = [
+const columnSpecs = (): ReadonlyArray<ColumnSpec> => [
   {
     status: "todo",
-    label: "Todo",
+    label: t("tasks.todo"),
     icon: TASK_STATUS_ICON.todo,
     iconClass: "text-[color:var(--task-status-todo-solid)]",
   },
   {
     status: "in_progress",
-    label: "In progress",
+    label: t("tasks.inProgress"),
     icon: TASK_STATUS_ICON.in_progress,
     iconClass: "text-[color:var(--task-status-in-progress-solid)]",
   },
   {
     status: "in_review",
-    label: "In review",
+    label: t("tasks.inReview"),
     icon: TASK_STATUS_ICON.in_review,
     iconClass: "text-[color:var(--task-status-in-review-solid)]",
   },
   {
     status: "done",
-    label: "Done",
+    label: t("tasks.done"),
     icon: TASK_STATUS_ICON.done,
     iconClass: "text-[color:var(--task-status-done-solid)]",
   },
   {
     status: "closed",
-    label: "Closed",
+    label: t("tasks.closed"),
     icon: TASK_STATUS_ICON.closed,
     iconClass: "text-[color:var(--task-status-closed-solid)]",
   },
@@ -128,7 +129,7 @@ export function TaskBoardColumns({
       // each column's own body, so the board itself never scrolls up/down.
       className="flex min-h-0 flex-1 items-start gap-3 overflow-x-auto overflow-y-hidden p-4 scrollbar-hide"
     >
-      {COLUMNS.map((col) => (
+      {columnSpecs().map((col) => (
         <KanbanColumn
           key={col.status}
           title={col.label}
@@ -266,7 +267,7 @@ function KanbanColumn({
         data-tasks-column-header
         onClick={onToggleCollapse}
         aria-expanded={!collapsed}
-        aria-label={`${collapsed ? "Expand" : "Collapse"} ${title} column`}
+        aria-label={t(collapsed ? "tasks.expandColumn" : "tasks.collapseColumn", { title })}
         className="flex w-full shrink-0 cursor-pointer items-center gap-2 border-b border-border-subtle px-3 py-2 text-left transition-colors hover:bg-bg-hover"
       >
         <Chevron className="size-3.5 shrink-0 text-text-muted" aria-hidden />
@@ -285,16 +286,16 @@ function KanbanColumn({
           className="min-h-0 flex-auto overflow-y-auto p-2 scrollbar-hide"
         >
           {isLoading ? (
-            <div role="status" aria-label="Loading tasks">
+            <div role="status" aria-label={t("tasks.loadingTasks")}>
               <TaskCardsSkeleton />
             </div>
           ) : isError ? (
             <p className="px-2 py-3 text-center text-(length:--text-meta) text-text-muted">
-              Couldn’t load tasks
+              {t("tasks.couldntLoadTasks")}
             </p>
           ) : items.length === 0 && !dragOver ? (
             <p className="px-2 py-3 text-center text-(length:--text-meta) italic text-text-muted">
-              No {title.toLowerCase()} tasks
+              {t("tasks.emptyColumn", { title: title.toLowerCase() })}
             </p>
           ) : (
             <ul className="space-y-1.5">
@@ -365,7 +366,7 @@ function TaskCard({
           type="button"
           draggable={false}
           onClick={onClick}
-          aria-label="Open task detail"
+          aria-label={t("tasks.openTaskDetail")}
           className="absolute inset-0 z-0 rounded-(--card-radius) focus-outline"
         />
         {/* Content layer. `pointer-events-none` so text clicks fall through to
@@ -405,7 +406,11 @@ function TaskCard({
               (shiki 2026-07-23). 稳定 > 自适应. */}
           <div className="mt-1 flex items-center gap-x-2 text-(length:--text-badge) text-text-muted">
             <span className="shrink-0 text-text-secondary">
-              {task.assignee ? task.assignee.name : <span className="italic">unassigned</span>}
+              {task.assignee ? (
+                task.assignee.name
+              ) : (
+                <span className="italic">{t("tasks.unassigned")}</span>
+              )}
             </span>
             {channelLabel !== null ? (
               <span

@@ -256,9 +256,7 @@ describe('QoderDriver.classifyInitProgress', () => {
 describe('QoderDriver.parseLine', () => {
   it('drops Qoder hook frames silently (unmodeled system subtypes)', () => {
     expect(
-      new QoderDriver().parseLine(
-        JSON.stringify({ type: 'system', subtype: 'hook_started' }),
-      ),
+      new QoderDriver().parseLine(JSON.stringify({ type: 'system', subtype: 'hook_started' })),
     ).toEqual([]);
   });
 

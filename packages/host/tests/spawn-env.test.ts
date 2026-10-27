@@ -33,7 +33,7 @@ const BASE_ENV: NodeJS.ProcessEnv = {
 
 describe('daemon spawn env', () => {
   it('materializes final child env locally from typed env_policy and daemon proxy config', () => {
-    const driver = makeDriver(env => ({ ...env, NO_COLOR: '1' }));
+    const driver = makeDriver((env) => ({ ...env, NO_COLOR: '1' }));
     const options = testStartOptions({ runtime: 'codex' });
     options.env_policy = {
       ...options.env_policy,
@@ -61,13 +61,11 @@ describe('daemon spawn env', () => {
     expect(env[SILVERHAND_AGENT_ID_ENV]).toBe('agent-xyz');
     expect(env[SILVERHAND_SERVER_URL_ENV]).toBe('https://remote.example.test');
     expect(env[SILVERHAND_AUTH_TOKEN_ENV]).toBe('tok_test_123');
-    expect(env.PATH).toBe(
-      `/tmp/silverhand-spawn/bin${delimiter}/usr/local/bin:/usr/bin:/bin`,
-    );
+    expect(env.PATH).toBe(`/tmp/silverhand-spawn/bin${delimiter}/usr/local/bin:/usr/bin:/bin`);
   });
 
   it('does not apply proxy env when the runtime is not allowlisted', () => {
-    const driver = makeDriver(env => ({ ...env }));
+    const driver = makeDriver((env) => ({ ...env }));
     const options = testStartOptions({ runtime: 'claude' });
 
     const env = buildDaemonSpawnEnv({
@@ -89,7 +87,7 @@ describe('daemon spawn env', () => {
   });
 
   it('re-applies Silverhand identity env after driver-specific env shaping', () => {
-    const driver = makeDriver(env => ({
+    const driver = makeDriver((env) => ({
       ...env,
       [SILVERHAND_CONVERSATION_ID_ENV]: 'wrong-conversation',
       [SILVERHAND_AGENT_ID_ENV]: 'wrong-agent',
@@ -119,7 +117,7 @@ describe('daemon spawn env', () => {
   });
 
   it('AgentSlot deletes an inherited or driver-injected ambient conversation id', () => {
-    const driver = makeDriver(env => ({
+    const driver = makeDriver((env) => ({
       ...env,
       [SILVERHAND_CONVERSATION_ID_ENV]: 'ambient-from-daemon',
     }));
@@ -147,7 +145,7 @@ describe('daemon spawn env', () => {
   });
 
   it('fails loud when the daemon has no host-local control-plane URL', () => {
-    const driver = makeDriver(env => ({ ...env }));
+    const driver = makeDriver((env) => ({ ...env }));
     const options = testStartOptions({ runtime: 'codex' });
 
     expect(() =>

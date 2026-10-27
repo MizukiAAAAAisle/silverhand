@@ -7,10 +7,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
-import {
-  defaultAppRoot,
-  resolveStandaloneDaemonPaths,
-} from '@silverhand/shared/app-data-layout';
+import { defaultAppRoot, resolveStandaloneDaemonPaths } from '@silverhand/shared/app-data-layout';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 
@@ -66,12 +63,7 @@ export function runtimePidFilePath(
   runtimeScope: RuntimeScope,
 ): string {
   return runtimeScope.kind === 'agent'
-    ? join(
-        rootDir,
-        daemonInstanceId,
-        'agent',
-        `${encodeURIComponent(runtimeScope.agent_id)}.json`,
-      )
+    ? join(rootDir, daemonInstanceId, 'agent', `${encodeURIComponent(runtimeScope.agent_id)}.json`)
     : join(
         rootDir,
         daemonInstanceId,
@@ -81,11 +73,7 @@ export function runtimePidFilePath(
 }
 
 export function writeRuntimePidfile(params: RuntimePidfileWriteParams): string {
-  const filePath = runtimePidFilePath(
-    params.rootDir,
-    params.daemonInstanceId,
-    params.runtimeScope,
-  );
+  const filePath = runtimePidFilePath(params.rootDir, params.daemonInstanceId, params.runtimeScope);
   mkdirSync(dirname(filePath), { recursive: true });
 
   const record: RuntimePidfileRecord = {
@@ -119,11 +107,7 @@ export function unlinkRuntimePidfile(params: {
   daemonInstanceId: string;
   runtimeScope: RuntimeScope;
 }): void {
-  const filePath = runtimePidFilePath(
-    params.rootDir,
-    params.daemonInstanceId,
-    params.runtimeScope,
-  );
+  const filePath = runtimePidFilePath(params.rootDir, params.daemonInstanceId, params.runtimeScope);
   unlinkIfExists(filePath);
 }
 
@@ -225,10 +209,7 @@ export function reconcileRuntimePidfiles(params: {
         if (!record) {
           unlinkIfExists(filePath);
           result.unlinkedCorrupt++;
-          params.logger.warn(
-            { runtime_pidfile: filePath },
-            'runtime pidfile corrupt; unlinked',
-          );
+          params.logger.warn({ runtime_pidfile: filePath }, 'runtime pidfile corrupt; unlinked');
           continue;
         }
 
@@ -324,30 +305,21 @@ export function reconcileRuntimePidfiles(params: {
 
 function readRuntimePidfile(filePath: string): RuntimePidfileRecord | null {
   try {
-    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as Partial<
-      RuntimePidfileRecord
-    >;
-    if (
-      typeof parsed.pid !== 'number' ||
-      !Number.isInteger(parsed.pid) ||
-      parsed.pid <= 0
-    ) {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as Partial<RuntimePidfileRecord>;
+    if (typeof parsed.pid !== 'number' || !Number.isInteger(parsed.pid) || parsed.pid <= 0) {
       return null;
     }
-    if (
-      typeof parsed.started_at !== 'number' ||
-      !Number.isInteger(parsed.started_at)
-    ) {
+    if (typeof parsed.started_at !== 'number' || !Number.isInteger(parsed.started_at)) {
       return null;
     }
     const scope = RuntimeScopeSchema.safeParse(parsed.runtime_scope);
     const legacy = parsed as Partial<RuntimePidfileRecord> & { conv?: unknown };
     const runtimeScope = scope.success
       ? scope.data
-      : typeof legacy.conv === 'string'
-          && legacy.conv.length > 0
-          && typeof parsed.agent === 'string'
-          && parsed.agent.length > 0
+      : typeof legacy.conv === 'string' &&
+          legacy.conv.length > 0 &&
+          typeof parsed.agent === 'string' &&
+          parsed.agent.length > 0
         ? {
             kind: 'conversation' as const,
             conversation_id: legacy.conv,

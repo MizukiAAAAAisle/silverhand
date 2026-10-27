@@ -453,6 +453,14 @@
   box-shadow: var(--poster-shadow);
 }
 
+/* The thread badge heads a list of body-face reply lines; the condensed display
+   face reads as a different voice from the lines it introduces. */
+[data-theme="poster"] [data-panel-pill="thread"] {
+  font-family: inherit;
+  letter-spacing: normal;
+  font-weight: normal;
+}
+
 [data-theme="poster"] [data-panel-pill="schedule-spec"] {
   font-family: var(--font-mono);
   letter-spacing: 0;

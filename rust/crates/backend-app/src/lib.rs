@@ -26,7 +26,7 @@ use silverhand_backend_core::{
     identity_access::auth::{
         EntropySessionTokenMint, HumanSessionAuthenticator, SessionTtl, SystemSessionClock,
     },
-    identity_access::credential::Argon2idPasswordHasher,
+    identity_access::credential::{Argon2idPasswordHasher, RecoveryCodeKey},
     viewer_read_model::presence_grace::GraceWindow,
 };
 use silverhand_backend_filesystem::foundation::{
@@ -281,6 +281,8 @@ pub struct AppConfig {
     /// startup frame (#task:2343), or `None` when no launcher is awaiting a frame. Opaque
     /// — echoed verbatim, never a secret.
     startup_generation: Option<String>,
+    /// SMTP delivery for password recovery; `None` disables recovery.
+    mail: Option<foundation::mail::MailConfig>,
 }
 
 impl AppConfig {
@@ -348,6 +350,7 @@ impl AppConfig {
             log_dir,
             bootstrap_token_path,
             startup_generation,
+            mail: None,
         })
     }
 
@@ -399,6 +402,7 @@ impl AppConfig {
         )?;
         let metrics_listen =
             observability::parse_listen(env::var("SILVERHAND_METRICS_LISTEN").ok().as_deref())?;
+        let mail = foundation::mail::MailConfig::from_env().map_err(ConfigError::Mail)?;
         let console_token_hash = foundation::operator_console::parse_token(
             env::var("SILVERHAND_CONSOLE_TOKEN").ok().as_deref(),
             deployment_profile == DeploymentProfile::RemoteOnly,
@@ -418,8 +422,17 @@ impl AppConfig {
         .map(|mut config| {
             config.metrics_listen = metrics_listen;
             config.console_token_hash = console_token_hash;
+            config.mail = mail;
             config.with_schema_upgrade(allow_schema_upgrade)
         })
+    }
+
+    /// Recovery is offered only by a remote-only server with mail configured.
+    pub(crate) fn recovery_mailer(&self) -> Option<foundation::mail::MailConfig> {
+        match self.deployment_profile {
+            DeploymentProfile::RemoteOnly => self.mail.clone(),
+            DeploymentProfile::Embedded => None,
+        }
     }
 
     pub fn with_schema_upgrade(mut self, allow: bool) -> Self {
@@ -534,6 +547,8 @@ pub enum ConfigError {
     InvalidDisableSignup(String),
     #[error("SILVERHAND_MIGRATE {0:?} must be 0 or 1")]
     InvalidMigrationPermission(String),
+    #[error(transparent)]
+    Mail(foundation::mail::MailConfigError),
 }
 
 #[derive(Debug, Error)]

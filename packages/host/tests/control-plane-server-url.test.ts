@@ -5,10 +5,7 @@ import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
 import { FakeSupervisor } from './_helpers/fake-supervisor.js';
 import { HostClient } from '../src/client/index.js';
 import { computerProxyConfigPath } from '../src/daemon/computer-profile.js';
-import {
-  readDaemonProxyConfig,
-  writeDaemonProxyConfig,
-} from '../src/daemon/proxy-config.js';
+import { readDaemonProxyConfig, writeDaemonProxyConfig } from '../src/daemon/proxy-config.js';
 import { writeHostConfigAtomic } from '../src/daemon/outbound-client.js';
 
 describe('daemon control-plane URL resolution', () => {
@@ -17,7 +14,10 @@ describe('daemon control-plane URL resolution', () => {
 
   afterEach(async () => {
     while (daemons.length) {
-      await daemons.pop()!.stop('test_done').catch(() => undefined);
+      await daemons
+        .pop()!
+        .stop('test_done')
+        .catch(() => undefined);
     }
     while (dirs.length) {
       rmSync(dirs.pop()!, { recursive: true, force: true });
@@ -44,7 +44,7 @@ describe('daemon control-plane URL resolution', () => {
       installSignals: false,
       writeStdoutHandshake: false,
       alsoStderr: false,
-      supervisorFactory: deps => {
+      supervisorFactory: (deps) => {
         controlPlaneServerUrl = deps.controlPlaneServerUrl;
         return new FakeSupervisor({ emit: deps.emit });
       },
@@ -72,7 +72,7 @@ describe('daemon control-plane URL resolution', () => {
       installSignals: false,
       writeStdoutHandshake: false,
       alsoStderr: false,
-      supervisorFactory: deps => {
+      supervisorFactory: (deps) => {
         controlPlaneServerUrl = deps.controlPlaneServerUrl;
         return new FakeSupervisor({ emit: deps.emit });
       },
@@ -135,5 +135,4 @@ describe('daemon control-plane URL resolution', () => {
     });
     expect(readDaemonProxyConfig(expectedPath)).toEqual(written.config);
   });
-
 });

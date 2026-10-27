@@ -160,8 +160,7 @@ Connection failures are reported in the body (not an error). Secrets
     if (typeof server !== 'string' || server.length === 0) {
       throw new CliError({
         code: 'validation_error',
-        message:
-          '`--server <name>` is required: the raw MCP server name to probe.',
+        message: '`--server <name>` is required: the raw MCP server name to probe.',
         retriable: false,
       });
     }
@@ -230,7 +229,7 @@ stdout: { "ok": true, "added": [<names>], "total": <n> }.`,
       current = cur.config.mcpServers;
     }
     if (args.flags.replace !== true) {
-      const collisions = names.filter(name => name in current);
+      const collisions = names.filter((name) => name in current);
       if (collisions.length > 0) {
         throw new CliError({
           code: 'conflict',
@@ -272,8 +271,7 @@ stdout: { "ok": true, "removed": <name>, "remaining": <n> }.`,
     if (typeof server !== 'string' || server.length === 0) {
       throw new CliError({
         code: 'validation_error',
-        message:
-          '`--server <name>` is required: the MCP server name to remove.',
+        message: '`--server <name>` is required: the MCP server name to remove.',
         retriable: false,
       });
     }
@@ -362,8 +360,14 @@ interface AvatarBytes {
 function sniffImageMime(buf: Buffer): string | null {
   if (
     buf.length >= 8 &&
-    buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47 &&
-    buf[4] === 0x0d && buf[5] === 0x0a && buf[6] === 0x1a && buf[7] === 0x0a
+    buf[0] === 0x89 &&
+    buf[1] === 0x50 &&
+    buf[2] === 0x4e &&
+    buf[3] === 0x47 &&
+    buf[4] === 0x0d &&
+    buf[5] === 0x0a &&
+    buf[6] === 0x1a &&
+    buf[7] === 0x0a
   ) {
     return 'image/png';
   }
@@ -510,9 +514,7 @@ async function downloadAvatar(rawUrl: string): Promise<AvatarBytes> {
     }
     throw new CliError({
       code: 'validation_error',
-      message: `--avatar-url download failed: ${
-        err instanceof Error ? err.message : String(err)
-      }`,
+      message: `--avatar-url download failed: ${err instanceof Error ? err.message : String(err)}`,
       retriable: false,
     });
   } finally {
@@ -644,9 +646,9 @@ stdout: the updated AgentProfileDto (same shape as \`profile get\`).`,
     const avatarUrl = flagString(args, 'avatar-url');
     const clearAvatar = flagBool(args, 'clear-avatar') === true;
 
-    const avatarActions =
-      [avatarFile !== undefined, avatarUrl !== undefined, clearAvatar].filter(Boolean)
-        .length;
+    const avatarActions = [avatarFile !== undefined, avatarUrl !== undefined, clearAvatar].filter(
+      Boolean,
+    ).length;
     if (avatarActions > 1) {
       throw new CliError({
         code: 'validation_error',
@@ -695,9 +697,7 @@ stdout: the updated AgentProfileDto (same shape as \`profile get\`).`,
     //    backend is NOT cross-store atomic (avatar blob then text columns, no
     //    spanning txn), but returns the canonical updated profile.
     const { profile } = await client.updateProfile({
-      ...(textInput?.display_name !== undefined
-        ? { display_name: textInput.display_name }
-        : {}),
+      ...(textInput?.display_name !== undefined ? { display_name: textInput.display_name } : {}),
       ...(textInput && 'description' in textInput
         ? { description: textInput.description ?? '' }
         : {}),
@@ -720,10 +720,7 @@ stdout: the updated AgentProfileDto (same shape as \`profile get\`).`,
 
 /** Flat verbs on the `profile` noun — coexist with the `mcp` facet via the
  *  dispatcher's facet-then-flat resolution. */
-export const profileCommands: readonly Command[] = [
-  profileGetCommand,
-  profileUpdateCommand,
-];
+export const profileCommands: readonly Command[] = [profileGetCommand, profileUpdateCommand];
 
 /** Read all of stdin as a UTF-8 string. Fails loudly when stdin is a TTY
  *  (the agent forgot to pipe a body) or empty — mirrors the stdin-only

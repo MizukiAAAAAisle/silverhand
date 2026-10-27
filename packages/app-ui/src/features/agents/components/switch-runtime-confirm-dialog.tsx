@@ -10,6 +10,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { t } from "@/lib/i18n";
 
 /**
  * Confirmation required because switching resets session continuity for
@@ -57,15 +58,15 @@ export function SwitchRuntimeConfirmDialog({
         }}
       >
         <DialogHeader>
-          <DialogTitle>{`Switch to ${label}?`}</DialogTitle>
+          <DialogTitle>{t("agents.switchToTitle", { runtime: label })}</DialogTitle>
         </DialogHeader>
         <div className="rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5">
           <DialogDescription asChild className="text-sm leading-relaxed text-text-primary">
             <ul className="list-disc list-inside space-y-1">
-              <li>Runtime sessions for all conversations are reset.</li>
-              <li>Responses in progress stop.</li>
-              <li>{`Running conversations restart with ${label}.`}</li>
-              <li>Messages and memory are preserved.</li>
+              <li>{t("agents.runtimeSessionsForAll")}</li>
+              <li>{t("agents.responsesInProgressStop")}</li>
+              <li>{t("agents.switchRestart", { runtime: label })}</li>
+              <li>{t("agents.messagesAndMemoryAre")}</li>
             </ul>
           </DialogDescription>
         </div>
@@ -76,10 +77,10 @@ export function SwitchRuntimeConfirmDialog({
         ) : null}
         <DialogFooter>
           <Button variant="cancel" onClick={() => onOpenChange(false)} disabled={pending}>
-            Cancel
+            {t("common.cancel")}
           </Button>
           <Button variant="primary" onClick={onConfirm} disabled={pending}>
-            {pending ? "Switching…" : "Switch runtime"}
+            {pending ? t("agents.switching") : t("agents.switchRuntime")}
           </Button>
         </DialogFooter>
       </DialogContent>

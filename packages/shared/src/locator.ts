@@ -253,10 +253,7 @@ function parseDirectPairLocator(rest: readonly string[]): Locator | null {
  * lone surrogate instead of comparing it, which is the behaviour a coordinate wants at
  * a boundary.
  */
-export function parseLocatorEndpoints(
-  x: string,
-  y: string,
-): LocatorEndpoints | null {
+export function parseLocatorEndpoints(x: string, y: string): LocatorEndpoints | null {
   if (!isHandle(x) || !isHandle(y)) return null;
   if (x === y) return null;
   const ordered = compareEndpointText(x, y) <= 0 ? [x, y] : [y, x];
@@ -334,15 +331,11 @@ function locatorPath(locator: Locator): string {
       const head =
         `workspace/${formatWorkspaceUriSegment(locator.workspace)}` +
         `/${formatConversationUriSegment(locator.channel)}`;
-      return locator.threadRootId === null
-        ? head
-        : `${head}/${locator.threadRootId}`;
+      return locator.threadRootId === null ? head : `${head}/${locator.threadRootId}`;
     }
     case 'direct_pair': {
       const head = `dm/${locator.endpoints[0]}/${locator.endpoints[1]}`;
-      return locator.threadRootId === null
-        ? head
-        : `${head}/${locator.threadRootId}`;
+      return locator.threadRootId === null ? head : `${head}/${locator.threadRootId}`;
     }
   }
 }

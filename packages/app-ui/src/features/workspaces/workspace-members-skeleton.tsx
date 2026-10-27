@@ -1,9 +1,10 @@
 import { SkeletonBlock, SkeletonRegion } from "@/components/layout/skeleton";
 import { AVATAR_PX } from "@/components/avatar-scale";
+import { t } from "@/lib/i18n";
 
 export function WorkspaceMembersSkeleton(): JSX.Element {
   return (
-    <SkeletonRegion label="Loading members">
+    <SkeletonRegion label={t("workspaces.loadingMembers")}>
       <div className="space-y-1">
         {["w-24", "w-20", "w-28"].map((width) => (
           <div

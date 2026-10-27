@@ -6,6 +6,7 @@ import { AgentAvatar } from "@/components/agent-avatar";
 import { UserAvatar } from "@/components/user-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
+import { t } from "@/lib/i18n";
 
 interface AgentPickerProps {
   candidates: AgentDto[];
@@ -56,9 +57,9 @@ export function AgentPicker({
   candidates,
   value,
   onChange,
-  placeholder = "Add a member…",
-  emptyText = "No members available",
-  allSelectedText = "Everyone is already added",
+  placeholder = t("workspaces.addAMember"),
+  emptyText = t("workspaces.noMembersAvailable"),
+  allSelectedText = t("workspaces.everyoneIsAlreadyAdded"),
   selectId,
 }: AgentPickerProps): JSX.Element {
   const memberCandidates = useMemo<MemberPickerCandidate[]>(
@@ -90,9 +91,9 @@ export function MemberPicker({
   candidates,
   value,
   onChange,
-  placeholder = "Add a member…",
-  emptyText = "No members available",
-  allSelectedText = "Everyone is already added",
+  placeholder = t("workspaces.addAMember"),
+  emptyText = t("workspaces.noMembersAvailable"),
+  allSelectedText = t("workspaces.everyoneIsAlreadyAdded"),
   selectId,
 }: MemberPickerProps): JSX.Element {
   const byKey = new Map(candidates.map((c) => [memberKey(c), c]));
@@ -127,7 +128,7 @@ export function MemberPicker({
   return (
     <div className="flex flex-col gap-1.5">
       {selectedKeys.length > 0 ? (
-        <ul className="flex flex-wrap gap-1.5" aria-label="Selected members">
+        <ul className="flex flex-wrap gap-1.5" aria-label={t("workspaces.selectedMembers")}>
           {selectedKeys.map((id) => {
             const candidate = byKey.get(id);
             if (!candidate) {
@@ -141,7 +142,7 @@ export function MemberPicker({
                     displayName={id.slice(0, 8)}
                     handle={null}
                     onRemove={() => removeMember(id)}
-                    ariaRemoveLabel={`Remove ${id.slice(0, 8)}`}
+                    ariaRemoveLabel={t("workspaces.removeNamed", { name: id.slice(0, 8) })}
                     muted
                   />
                 </li>
@@ -176,7 +177,7 @@ export function MemberPicker({
                   displayName={displayName}
                   handle={handle}
                   onRemove={() => removeMember(id)}
-                  ariaRemoveLabel={`Remove @${handle}`}
+                  ariaRemoveLabel={t("workspaces.removeNamed", { name: `@${handle}` })}
                 />
               </li>
             );
@@ -193,7 +194,7 @@ export function MemberPicker({
       >
         <Select.Trigger
           id={selectId}
-          aria-label="Add member"
+          aria-label={t("workspaces.addMember")}
           className="flex w-full items-center justify-between gap-2 rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2.5 py-1.5 text-sm text-text-primary outline-none transition-colors hover:border-(--border-control-hover) focus:border-border-focus disabled:cursor-not-allowed disabled:opacity-60 data-placeholder:text-text-muted"
         >
           <span className="flex min-w-0 items-center gap-1.5">
@@ -317,7 +318,7 @@ function SelectedTag({
         type="button"
         onClick={onRemove}
         aria-label={ariaRemoveLabel}
-        title="Remove member"
+        title={t("workspaces.removeMember")}
         className="flex size-4 shrink-0 items-center justify-center rounded-(--chip-radius) text-text-muted transition-colors hover:text-text-primary focus-outline"
       >
         <CloseIcon className="size-3" aria-hidden />

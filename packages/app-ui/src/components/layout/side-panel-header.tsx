@@ -6,6 +6,7 @@ import {
   type PageBarHandlers,
 } from "@/components/layout/native-page-bar";
 import { ArrowLeftIcon, CloseIcon } from "@/icons";
+import { t } from "@/lib/i18n";
 
 /**
  * The fixed-height header row shared by every right-pane side panel — the agent
@@ -97,7 +98,7 @@ function SidePanelHeaderRow({
       {!compact && onBack ? (
         <button
           type="button"
-          aria-label="Back"
+          aria-label={t("common.back")}
           onClick={onBack}
           className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover focus-outline"
         >
@@ -119,8 +120,8 @@ function SidePanelCloseButton({
   return (
     <button
       type="button"
-      aria-label="Close"
-      title="Close"
+      aria-label={t("common.close")}
+      title={t("common.close")}
       onClick={onClose}
       data-sticker-close
       data-sticker
@@ -137,8 +138,9 @@ function SidePanelCloseButton({
 }
 
 /**
- * The icon + title / subtitle idiom shared by the thread, threads-list, and
- * attachments panels. The title truncates; the subtitle is optional. Pass this
+ * The icon + title + context idiom shared by the thread, threads-list, and
+ * attachments panels: one line, the context muted after the title. The context
+ * is short and stays whole up to a cap; a long title truncates first. Pass this
  * as `SidePanelHeader`'s children.
  */
 export function SidePanelHeaderTitle({
@@ -153,9 +155,11 @@ export function SidePanelHeaderTitle({
   return (
     <>
       {icon}
-      <div className="min-w-0 flex-1 leading-tight">
-        <div className="truncate text-sm font-medium text-text-primary">{title}</div>
-        {subtitle ? <div className="truncate text-xs text-text-muted">{subtitle}</div> : null}
+      <div className="flex min-w-0 flex-1 items-baseline gap-2">
+        <div className="min-w-0 shrink truncate text-sm font-medium text-text-primary">{title}</div>
+        {subtitle ? (
+          <div className="max-w-[45%] shrink-0 truncate text-xs text-text-muted">{subtitle}</div>
+        ) : null}
       </div>
     </>
   );

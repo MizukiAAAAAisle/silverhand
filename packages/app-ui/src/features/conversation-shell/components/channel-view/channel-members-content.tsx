@@ -33,6 +33,7 @@ import {
 import { STATUS_DOT } from "@/components/status-dot";
 import { projectMemberRuntimeStatus } from "@/features/agents/model/member-runtime-status";
 import { PRESENCE_TONE_DOT, projectPresence } from "@/features/agents/model/presence-projection";
+import { t } from "@/lib/i18n";
 
 /** The row's exit action (Leave / Remove). Bare glyph: muted at rest, error ink
  *  on hover, no fill and no box — the row hover is the only colour surface in
@@ -63,11 +64,11 @@ export interface ChannelMembersContentProps {
 function leaveBlockedCopy(reason: ChannelLeaveBlockedReason | null | undefined): string | null {
   switch (reason) {
     case "channel_owner":
-      return "As the owner, you can't leave this channel.";
+      return t("conversationShell.asTheOwnerYou");
     case "last_human_member":
-      return "As the last member, you can't leave this channel.";
+      return t("conversationShell.asTheLastMember");
     case "channel_archived":
-      return "Restore the channel before leaving.";
+      return t("conversationShell.restoreTheChannelBefore");
     default:
       return null;
   }
@@ -221,10 +222,10 @@ export function ChannelMembersContent({
     // there is no cost the user needs told.
     const confirmCopy = isSelf
       ? visibility === "private"
-        ? "You won't be able to rejoin unless you're added back."
-        : "You can rejoin this channel anytime."
+        ? t("conversationShell.youWontBeAble")
+        : t("conversationShell.youCanRejoinThis")
       : member.kind === "human"
-        ? `@${member.name} loses access to this channel and can be added again later.`
+        ? t("conversationShell.removeMemberDetail", { name: member.name })
         : null;
     return (
       <li key={key} className="flex flex-col">
@@ -277,7 +278,7 @@ export function ChannelMembersContent({
               // is 0 in poster (hard-cut poster geometry) and 4px in the warm
               // themes, the same token the row above already consumes.
               <span className="shrink-0 rounded-(--chip-radius) border border-border-subtle px-1 text-(length:--text-badge) text-text-muted">
-                you
+                {t("conversationShell.you")}
               </span>
             ) : null}
           </span>
@@ -291,8 +292,8 @@ export function ChannelMembersContent({
                 type="button"
                 onClick={() => setConfirming(expanded ? null : key)}
                 disabled={leaving}
-                aria-label="Leave channel"
-                title="Leave channel"
+                aria-label={t("conversationShell.leaveChannel")}
+                title={t("conversationShell.leaveChannel")}
                 className={ROW_ACTION}
               >
                 <LeaveIcon className="size-3.5" />
@@ -304,7 +305,7 @@ export function ChannelMembersContent({
                 <button
                   type="button"
                   disabled
-                  aria-label="Leave channel"
+                  aria-label={t("conversationShell.leaveChannel")}
                   title={blockedCopy ?? undefined}
                   className={`${ROW_ACTION} pointer-events-none opacity-40`}
                 >
@@ -316,8 +317,8 @@ export function ChannelMembersContent({
                 type="button"
                 onClick={() => setConfirming(expanded ? null : key)}
                 disabled={removePending}
-                aria-label={`Remove @${member.name} from this channel`}
-                title={`Remove @${member.name} from this channel`}
+                aria-label={t("conversationShell.removeMember", { name: member.name })}
+                title={t("conversationShell.removeMember", { name: member.name })}
                 className={ROW_ACTION}
               >
                 <RemoveMemberIcon className="size-3.5" />
@@ -353,7 +354,7 @@ export function ChannelMembersContent({
                 disabled={leaving || removePending}
                 onClick={() => setConfirming(null)}
               >
-                Cancel
+                {t("common.cancel")}
               </Button>
               <Button
                 variant="destructive-outline"
@@ -367,7 +368,7 @@ export function ChannelMembersContent({
                 {leaving || removePending ? (
                   <SpinnerIcon className="size-3.5 animate-spin" />
                 ) : null}
-                {isSelf ? "Leave" : "Remove"}
+                {isSelf ? t("conversationShell.leave") : t("conversationShell.remove")}
               </Button>
             </div>
           </div>
@@ -382,20 +383,22 @@ export function ChannelMembersContent({
         {membersResult.status === "loading" ? (
           <MembersSkeleton />
         ) : orderedHumans.length === 0 && agents.length === 0 ? (
-          <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">No matches</p>
+          <p className="px-1.5 py-3 text-center text-xs italic text-text-muted">
+            {t("conversationShell.noMatches")}
+          </p>
         ) : (
           // One column when narrow, HUMANS | AGENTS side by side once this
           // surface is wide (rule in `chrome.css`).
           <div data-members-groups>
             {orderedHumans.length > 0 ? (
               <section>
-                <GroupLabel>HUMANS</GroupLabel>
+                <GroupLabel>{t("conversationShell.humans")}</GroupLabel>
                 <ul className="flex flex-col">{orderedHumans.map(renderRow)}</ul>
               </section>
             ) : null}
             {agents.length > 0 ? (
               <section>
-                <GroupLabel>AGENTS</GroupLabel>
+                <GroupLabel>{t("conversationShell.agents")}</GroupLabel>
                 <ul className="flex flex-col">{agents.map(renderRow)}</ul>
               </section>
             ) : null}

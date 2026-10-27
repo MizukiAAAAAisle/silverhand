@@ -12,6 +12,7 @@ import {
 import type { TaskStatus } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-context-menu";
+import { t } from "@/lib/i18n";
 
 /**
  * Small inline status chip for task cards (global section + per-conversation Tasks tab).
@@ -30,22 +31,22 @@ import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-conte
  * the current one — including `closed` (move-to-close) and, on a closed
  * task, the four open statuses (reopen).
  */
-const LABELS: Record<TaskStatus, string> = {
-  todo: "todo",
-  in_progress: "in progress",
-  in_review: "in review",
-  done: "done",
-  closed: "closed",
-};
+const statusLabels = (): Record<TaskStatus, string> => ({
+  todo: t("tasks.badge.todo"),
+  in_progress: t("tasks.badge.inProgress"),
+  in_review: t("tasks.badge.inReview"),
+  done: t("tasks.badge.done"),
+  closed: t("tasks.badge.closed"),
+});
 
 /** Title-case labels for menu/sentence contexts ("Move to In review"). */
-const MOVE_LABELS: Record<TaskStatus, string> = {
-  todo: "Todo",
-  in_progress: "In progress",
-  in_review: "In review",
-  done: "Done",
-  closed: "Closed",
-};
+const moveLabels = (): Record<TaskStatus, string> => ({
+  todo: t("tasks.todo"),
+  in_progress: t("tasks.inProgress"),
+  in_review: t("tasks.inReview"),
+  done: t("tasks.done"),
+  closed: t("tasks.closed"),
+});
 
 const ALL_STATUSES: TaskStatus[] = ["todo", "in_progress", "in_review", "done", "closed"];
 
@@ -53,7 +54,7 @@ const ALL_STATUSES: TaskStatus[] = ["todo", "in_progress", "in_review", "done", 
  *  other surfaces (e.g. the message task tag) render the SAME vocabulary
  *  instead of forking their own label map. */
 export function taskStatusLabel(status: TaskStatus): string {
-  return LABELS[status];
+  return statusLabels()[status];
 }
 
 /**
@@ -104,7 +105,7 @@ export function TaskStatusBadge({
   if (!onChange) {
     return (
       <span data-task-status={status} className={cn(CHIP, className)}>
-        {LABELS[status]}
+        {statusLabels()[status]}
       </span>
     );
   }
@@ -113,8 +114,8 @@ export function TaskStatusBadge({
       <button
         type="button"
         data-task-status={status}
-        aria-label={`Change status (currently ${LABELS[status]})`}
-        title="Change status"
+        aria-label={t("tasks.changeStatusCurrent", { status: statusLabels()[status] })}
+        title={t("tasks.changeStatus")}
         // Stop the click from reaching the card's stretched jump
         // overlay underneath.
         onClick={(e) => e.stopPropagation()}
@@ -124,7 +125,7 @@ export function TaskStatusBadge({
           className,
         )}
       >
-        {LABELS[status]}
+        {statusLabels()[status]}
       </button>
     </StatusPicker>
   );
@@ -197,7 +198,7 @@ export function StatusPicker({
               className="flex w-full items-center rounded-(--floating-item-radius) px-2 py-1.5 text-left hover:bg-bg-hover"
             >
               <span data-task-status={s} className={CHIP}>
-                {LABELS[s]}
+                {statusLabels()[s]}
               </span>
             </button>
           ))}
@@ -234,7 +235,7 @@ export function TaskCardContextMenu({
           icon={<ArrowRightIcon className="size-3.5" />}
           onSelect={() => onStatusChange(s)}
         >
-          Move to {MOVE_LABELS[s]}
+          {t("tasks.moveTo", { status: moveLabels()[s] })}
         </AppContextMenuItem>
       ))}
     </AppContextMenu>

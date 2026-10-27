@@ -1,12 +1,8 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const source = fileURLToPath(
-  new URL('../src/backend-admission.json', import.meta.url),
-);
-const output = fileURLToPath(
-  new URL('../src/backend-admission.generated.ts', import.meta.url),
-);
+const source = fileURLToPath(new URL('../src/backend-admission.json', import.meta.url));
+const output = fileURLToPath(new URL('../src/backend-admission.generated.ts', import.meta.url));
 
 function fail(message) {
   throw new Error(`invalid backend admission contract: ${message}`);
@@ -31,14 +27,8 @@ function render(record) {
   const desktopMinClient = positiveInteger(record, 'desktopMinClient');
   const desktopMinServer = positiveInteger(record, 'desktopMinServer');
   const eventWebSocketPath = nonEmptyString(record, 'eventWebSocketPath');
-  const eventWebSocketSessionCookie = nonEmptyString(
-    record,
-    'eventWebSocketSessionCookie',
-  );
-  const desktopApiEpochHeader = nonEmptyString(
-    record,
-    'desktopApiEpochHeader',
-  );
+  const eventWebSocketSessionCookie = nonEmptyString(record, 'eventWebSocketSessionCookie');
+  const desktopApiEpochHeader = nonEmptyString(record, 'desktopApiEpochHeader');
   if (!eventWebSocketPath.startsWith('/')) {
     fail('eventWebSocketPath must be absolute');
   }

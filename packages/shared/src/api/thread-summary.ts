@@ -80,9 +80,7 @@ export type ThreadSummary = z.infer<typeof ThreadSummarySchema>;
 export const ThreadSummaryInvariantSchema = ThreadSummarySchema.omit({
   viewer_following: true,
 });
-export type ThreadSummaryInvariant = z.infer<
-  typeof ThreadSummaryInvariantSchema
->;
+export type ThreadSummaryInvariant = z.infer<typeof ThreadSummaryInvariantSchema>;
 
 export const ListChannelThreadsResponseSchema = z.object({
   threads: z.array(ThreadSummarySchema),
@@ -90,6 +88,4 @@ export const ListChannelThreadsResponseSchema = z.object({
    *  when the final page has been returned. */
   next_cursor: z.string().nullable(),
 });
-export type ListChannelThreadsResponse = z.infer<
-  typeof ListChannelThreadsResponseSchema
->;
+export type ListChannelThreadsResponse = z.infer<typeof ListChannelThreadsResponseSchema>;

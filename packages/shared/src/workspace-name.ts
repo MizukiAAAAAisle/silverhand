@@ -9,11 +9,7 @@ import {
   parseConversationTitle,
   type ConversationTitleIssue,
 } from './conversation-title.js';
-import {
-  TARGET_SEGMENT_CODEC,
-  URI_SEGMENT_CODEC,
-  type SegmentCodec,
-} from './address-segment.js';
+import { TARGET_SEGMENT_CODEC, URI_SEGMENT_CODEC, type SegmentCodec } from './address-segment.js';
 
 export const WORKSPACE_NAME_MAX_CODE_POINTS = 64;
 
@@ -39,9 +35,7 @@ export type WorkspaceNameResult =
 /** Total keying function for rows that predate the validator. The migration and
  * boot audit must be able to diagnose every stored string, including one that a
  * new write would reject. */
-export function canonicalizeStoredWorkspaceName(
-  raw: string,
-): CanonicalWorkspaceName {
+export function canonicalizeStoredWorkspaceName(raw: string): CanonicalWorkspaceName {
   const canonical = canonicalizeStoredConversationTitle(raw);
   return {
     name: canonical.title,
@@ -88,9 +82,7 @@ export function formatWorkspaceAddressSegment(name: CanonicalWorkspaceName): str
 /** Strict inverse of {@link formatWorkspaceAddressSegment}. Besides the
  * percent codec's own canonicality, the decoded display bytes must already be
  * NFC+trim canonical — aliases such as an encoded leading space are refused. */
-export function parseWorkspaceAddressSegment(
-  segment: string,
-): CanonicalWorkspaceName | null {
+export function parseWorkspaceAddressSegment(segment: string): CanonicalWorkspaceName | null {
   return parseNameSegment(segment, TARGET_SEGMENT_CODEC);
 }
 
@@ -103,17 +95,12 @@ export function formatWorkspaceUriSegment(name: CanonicalWorkspaceName): string 
 }
 
 /** Strict inverse of {@link formatWorkspaceUriSegment}. */
-export function parseWorkspaceUriSegment(
-  segment: string,
-): CanonicalWorkspaceName | null {
+export function parseWorkspaceUriSegment(segment: string): CanonicalWorkspaceName | null {
   return parseNameSegment(segment, URI_SEGMENT_CODEC);
 }
 
 /** One implementation for both carriers; only the escape set differs. */
-function parseNameSegment(
-  segment: string,
-  codec: SegmentCodec,
-): CanonicalWorkspaceName | null {
+function parseNameSegment(segment: string, codec: SegmentCodec): CanonicalWorkspaceName | null {
   const decoded = codec.decode(segment);
   if (decoded === null) return null;
   const parsed = parseWorkspaceName(decoded);

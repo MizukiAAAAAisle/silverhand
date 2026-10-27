@@ -12,6 +12,7 @@ import {
   isComputerAvailable,
 } from "@/features/computers/model/host-display";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 /**
  * Placement computer picker — a Radix `Select` over the caller's already
@@ -37,8 +38,8 @@ export function ComputerPicker({
   availabilityById,
   value,
   onChange,
-  placeholder = "Select a computer",
-  ariaLabel = "Computer",
+  placeholder = t("computers.selectAComputer"),
+  ariaLabel = t("computers.computer"),
 }: {
   id?: string;
   hosts: HostDto[];
@@ -62,7 +63,7 @@ export function ComputerPicker({
         <span className="flex min-w-0 items-center gap-1.5">
           <ComputerIcon className="size-3.5 shrink-0 text-text-muted" />
           <Select.Value
-            placeholder={isEmpty ? "No computers available" : placeholder}
+            placeholder={isEmpty ? t("computers.noComputersAvailable") : placeholder}
             className="truncate"
           />
         </span>

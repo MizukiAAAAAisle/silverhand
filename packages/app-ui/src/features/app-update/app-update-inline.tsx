@@ -4,14 +4,15 @@ import { Button } from "@/components/ui/button";
 import { RefreshIcon, SpinnerIcon } from "@/icons";
 import { appUpdateActions } from "./app-update-store";
 import { AppUpdateProgress, describeAppUpdate } from "./app-update-parts";
+import { t } from "@/lib/i18n";
 
 function inlineStatus(state: AppUpdateState): string | null {
   switch (state.status) {
     case "idle":
-      return state.lastCheckedAt === null ? null : "No newer version is available yet.";
+      return state.lastCheckedAt === null ? null : t("appUpdate.noNewerVersionIs");
     case "downloaded":
     case "scheduled":
-      return `Silverhand ${state.version} is ready. Restart to finish updating.`;
+      return t("appUpdate.readyRestart", { version: state.version });
     default:
       return describeAppUpdate(state);
   }
@@ -35,7 +36,7 @@ export function AppUpdateInline({
   const recheck = (
     <Button type="button" variant="neutral" size="sm" onClick={onRecheck}>
       <RefreshIcon className="size-3.5" />
-      Check again
+      {t("appUpdate.checkAgain")}
     </Button>
   );
 
@@ -59,7 +60,7 @@ export function AppUpdateInline({
               size="sm"
               onClick={() => void appUpdateActions.install("now")}
             >
-              Restart and Install
+              {t("appUpdate.restartAndInstall")}
             </Button>
           ) : (
             <>
@@ -69,7 +70,7 @@ export function AppUpdateInline({
                 size="sm"
                 onClick={() => void appUpdateActions.update()}
               >
-                {state.status === "error" ? "Try Again" : "Update"}
+                {state.status === "error" ? t("appUpdate.tryAgain") : t("common.update")}
               </Button>
               {recheck}
             </>

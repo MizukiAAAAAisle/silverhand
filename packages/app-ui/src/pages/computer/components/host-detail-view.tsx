@@ -116,6 +116,7 @@ import {
   DeleteComputerSection,
 } from "./host-danger-sections";
 import { Banner, HostSection } from "./host-section";
+import { t } from "@/lib/i18n";
 
 /**
  * Lightweight status indicator — colored dot + uppercase text. shiki
@@ -204,7 +205,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
         ) : statusQuery.isError ? (
           <div className="py-6">
             <Banner tone="error">
-              Could not load this computer&rsquo;s status.
+              {t("computers.couldNotLoadThis")}
               {statusQuery.error instanceof Error ? ` (${statusQuery.error.message})` : ""}
             </Banner>
           </div>
@@ -320,7 +321,7 @@ function ConnectionSection({
   };
 
   return (
-    <HostSection title={computerCopy.connectionSectionTitle}>
+    <HostSection title={computerCopy().connectionSectionTitle}>
       <div className="flex flex-col gap-3">
         {minted ? (
           <ConnectionCommandCard
@@ -343,7 +344,7 @@ function ConnectionSection({
             ) : (
               <RefreshIcon className="size-3.5" />
             )}
-            {computerCopy.generateCommand}
+            {computerCopy().generateCommand}
           </Button>
 
           {availability === "available" ? (
@@ -359,14 +360,14 @@ function ConnectionSection({
               ) : (
                 <DisconnectedIcon className="size-3.5" />
               )}
-              {computerCopy.disconnectCurrent}
+              {computerCopy().disconnectCurrent}
             </Button>
           ) : null}
         </div>
 
-        {rotateError ? <p className="text-xs text-error">{computerCopy.rotateFailed}</p> : null}
+        {rotateError ? <p className="text-xs text-error">{computerCopy().rotateFailed}</p> : null}
         {disconnectError ? (
-          <p className="text-xs text-error">{computerCopy.disconnectFailed}</p>
+          <p className="text-xs text-error">{computerCopy().disconnectFailed}</p>
         ) : null}
       </div>
     </HostSection>
@@ -410,7 +411,7 @@ function HostHero({
             value={host.display_label}
             placeholder={host.name}
             fallbackForEdit={host.display_label ?? host.name}
-            ariaLabel="Rename this computer"
+            ariaLabel={t("computers.renameThisComputer")}
             onCommit={onRename}
           />
         </div>
@@ -421,7 +422,7 @@ function HostHero({
           ) : statusLoading ? (
             <span className="inline-flex items-center gap-1.5 border border-transparent px-1 py-0.5 text-(length:--text-badge) text-text-muted">
               <SpinnerIcon className="size-3.75 animate-spin" aria-hidden />
-              <span>Loading…</span>
+              <span>{t("computers.loading")}</span>
             </span>
           ) : null}
           {appManaged ? <ProvenanceChip /> : null}
@@ -437,8 +438,8 @@ function HostHero({
             className="h-auto w-auto border border-transparent px-1 py-0.5"
             onClick={onRefresh}
             disabled={refreshing}
-            aria-label="Refresh host status"
-            title="Refresh"
+            aria-label={t("computers.refreshHostStatus")}
+            title={t("computers.refresh")}
           >
             <RefreshIcon className={cn("size-3.75", refreshing && "animate-spin")} />
           </Button>
@@ -520,7 +521,7 @@ function ProvenanceChip(): JSX.Element {
       data-panel-pill="host-provenance"
       className="inline-flex items-center border border-border-subtle bg-transparent px-2 py-0.5 text-(length:--text-badge) font-semibold uppercase tracking-wider text-text-muted"
     >
-      {computerCopy.appManaged}
+      {computerCopy().appManaged}
     </span>
   );
 }
@@ -535,7 +536,7 @@ function SystemSection({
   createdAt: number;
 }): JSX.Element {
   return (
-    <HostSection title="Info">
+    <HostSection title={t("computers.info")}>
       {/* shiki dogfood `6QIZeGVS8u8yJ137`: one row per field. Inline
           label + value (not stacked) so 4 short facts read as a tight
           key-value list, not a stretched form.
@@ -548,22 +549,22 @@ function SystemSection({
           values pick up `tabular-nums` here so digits line up across
           rows regardless of theme. */}
       <dl data-host-system-list className="flex flex-col gap-2.5">
-        <SystemField label="OS">
+        <SystemField label={t("computers.os")}>
           <span className="text-text-primary">{formatOsShort(snapshot.os)}</span>
           {snapshot.os_arch ? (
             <span className="ml-1 text-text-muted">({snapshot.os_arch})</span>
           ) : null}
         </SystemField>
-        <SystemField label="Daemon version">
+        <SystemField label={t("computers.daemonVersion")}>
           <span className="font-mono text-text-primary">{snapshot.daemon_version}</span>
         </SystemField>
-        <SystemField label="Process id">
+        <SystemField label={t("computers.processId")}>
           <span className="font-mono text-text-primary">{snapshot.daemon_pid}</span>
         </SystemField>
-        <SystemField label="Uptime">
+        <SystemField label={t("computers.uptime")}>
           <span className="text-text-primary">{formatUptime(snapshot.uptime_ms)}</span>
         </SystemField>
-        <SystemField label="Created">
+        <SystemField label={t("computers.created")}>
           <span className="text-text-primary">{formatCreatedAt(createdAt)}</span>
         </SystemField>
       </dl>
@@ -647,7 +648,7 @@ function OfflineSection({
   // precisely BECAUSE it will not come back unattended — printing a
   // wait-and-see promise there would be the one wrong thing to say.
   return (
-    <HostSection title="Info">
+    <HostSection title={t("computers.info")}>
       <Banner tone={view.tone}>
         <span className="font-medium">{view.label}.</span> {view.detail}
       </Banner>
@@ -687,15 +688,15 @@ function RegisteredAgentsSection({
     <HostSection
       title={
         <span className="inline-flex items-baseline gap-2">
-          <span>Agents on this machine</span>
+          <span>{t("computers.agentsOnThisMachine")}</span>
           <span className="text-text-muted">{agents.length}</span>
         </span>
       }
     >
       {agents.length === 0 ? (
-        <p className="text-sm text-text-muted">No agents are registered on this computer yet.</p>
+        <p className="text-sm text-text-muted">{t("computers.noAgentsAreRegistered")}</p>
       ) : (
-        <ul className="flex flex-col gap-2" aria-label="Agents on this machine">
+        <ul className="flex flex-col gap-2" aria-label={t("computers.agentsOnThisMachine")}>
           {agents.map((agent) => {
             const live = liveOnlineByHost.get(agent.agent_id);
             const online: "online" | "offline" =
@@ -759,7 +760,7 @@ function AgentCard({
       <button
         type="button"
         onClick={onOpen}
-        aria-label={`Open ${agent.display_name} profile`}
+        aria-label={t("computers.openProfile", { name: agent.display_name })}
         data-host-agent-card
         className="flex w-full items-center gap-3 rounded-(--row-radius) border-(length:--control-border-width) border-border-subtle bg-bg-floating px-3 py-2.5 text-left transition-colors hover:border-text-primary focus-visible:border-text-primary focus-visible:outline-none"
       >
@@ -774,7 +775,7 @@ function AgentCard({
           <span
             className="inline-flex size-9 shrink-0 items-center justify-center rounded-none bg-bg-elevated text-text-muted"
             aria-hidden
-            title={`${agent.runtime} (unknown runtime)`}
+            title={t("computers.unknownRuntime", { runtime: agent.runtime })}
           >
             <CpuIcon className="size-5" />
           </span>
@@ -806,7 +807,7 @@ function AgentStatusPip({ online }: { online: "online" | "offline" }): JSX.Eleme
   return (
     <span
       role="status"
-      aria-label={online === "online" ? "Online" : "Offline"}
+      aria-label={online === "online" ? t("computers.online") : t("computers.offline")}
       className="inline-flex items-center gap-1.5 text-(length:--text-meta) font-medium uppercase tracking-wider text-text-muted"
     >
       <span
@@ -817,7 +818,7 @@ function AgentStatusPip({ online }: { online: "online" | "offline" }): JSX.Eleme
         )}
         aria-hidden
       />
-      {online === "online" ? "Online" : "Offline"}
+      {online === "online" ? t("computers.online") : t("computers.offline")}
     </span>
   );
 }

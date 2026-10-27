@@ -32,11 +32,7 @@
 
 /** Generic / "no useful hint" MIME values that must NOT short-circuit
  *  the recognition pipeline. */
-const GENERIC_MIME_HINTS = new Set<string>([
-  '',
-  'application/octet-stream',
-  'binary/octet-stream',
-]);
+const GENERIC_MIME_HINTS = new Set<string>(['', 'application/octet-stream', 'binary/octet-stream']);
 
 /** Returns true when `mime` carries no usable type information and the
  *  recognition pipeline should fall through to magic + suffix. */
@@ -125,12 +121,20 @@ export function mimeFromFilename(filename: string): string | null {
  */
 const SAFE_OPEN_EXTS: ReadonlySet<string> = Object.freeze(
   new Set<string>([
-    'html', 'htm',
+    'html',
+    'htm',
     'pdf',
-    'txt', 'log',
-    'md', 'markdown',
-    'json', 'csv',
-    'png', 'jpg', 'jpeg', 'gif', 'webp',
+    'txt',
+    'log',
+    'md',
+    'markdown',
+    'json',
+    'csv',
+    'png',
+    'jpg',
+    'jpeg',
+    'gif',
+    'webp',
   ]),
 );
 

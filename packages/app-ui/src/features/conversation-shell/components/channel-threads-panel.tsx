@@ -1,4 +1,5 @@
 import { ThreadsSkeleton } from "./channel-list-skeletons";
+import { plainTextFromMarkdown } from "@/lib/plain-text-from-markdown";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import { ClockIcon, SpinnerIcon, ThreadIcon } from "@/icons";
@@ -19,6 +20,7 @@ import {
   type ChannelThreadsFilter,
   type ThreadSummary,
 } from "@/features/channels/use-channel-threads";
+import { t } from "@/lib/i18n";
 
 interface ChannelThreadsPanelProps {
   channelId: string;
@@ -35,9 +37,9 @@ type Author = ThreadSummary["root_author"];
 // Unread-first so a dot-driven open reads left-to-right as "the reason you're
 // here, then everything". Labels stay one word — the panel title already says
 // "Threads".
-const THREAD_TABS: { key: ChannelThreadsFilter; label: string }[] = [
-  { key: "followed-unread", label: "Unread" },
-  { key: "all", label: "All" },
+const threadTabs = (): { key: ChannelThreadsFilter; label: string }[] => [
+  { key: "followed-unread", label: t("conversationShell.unread") },
+  { key: "all", label: t("conversationShell.all") },
 ];
 
 /**
@@ -66,7 +68,7 @@ export function ChannelThreadsPanel({
       <SidePanelHeader
         onClose={onClose}
         nativeBar={{
-          title: "Threads",
+          title: t("conversationShell.threads"),
           subtitle: parentTitle ? `#${parentTitle}` : undefined,
           titleAction: null,
           actions: [],
@@ -76,7 +78,7 @@ export function ChannelThreadsPanel({
       >
         <SidePanelHeaderTitle
           icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
-          title="Threads"
+          title={t("conversationShell.threads")}
           subtitle={parentTitle ? `#${parentTitle}` : undefined}
         />
       </SidePanelHeader>
@@ -186,7 +188,7 @@ export function ChannelThreadsContent({
   // "System" with a neutral person square.
   const renderAuthorName = (author: Author): JSX.Element =>
     author === null ? (
-      <span className="font-semibold">System</span>
+      <span className="font-semibold">{t("conversationShell.system")}</span>
     ) : (
       // The name carries its deleted state through the ONE shared primitive
       // (#task:1792 B3) — this compact surface can't drift from the stream / saved
@@ -204,7 +206,7 @@ export function ChannelThreadsContent({
         // so it rides the `title`/`alt` via the shared `authorStateLabel`
         // (#task:1792 B3) — a deleted replier here reads "(deleted account)" on
         // hover exactly as the byline shows the marker, never a bare name.
-        label={p ? authorStateLabel(p) : "System"}
+        label={p ? authorStateLabel(p) : t("conversationShell.system")}
         agentAvatarUrls={agentAvatarUrls}
         humanAvatarUrls={humanAvatarUrls}
       />
@@ -220,7 +222,7 @@ export function ChannelThreadsContent({
           normal loading state, not a contradiction of the header dot (the two
           are independent reads that converge). */}
       <div className="flex shrink-0 items-center gap-1.5 py-2">
-        {THREAD_TABS.map((t) => {
+        {threadTabs().map((t) => {
           const on = t.key === tab;
           const count = t.key === "followed-unread" ? unread.threads.length : all.threads.length;
           return (
@@ -249,25 +251,23 @@ export function ChannelThreadsContent({
           <ThreadsSkeleton />
         ) : isError ? (
           <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
-            <p className="text-sm text-text-primary">Couldn’t load threads</p>
-            <p className="text-xs text-text-muted">
-              The thread index isn’t available yet. Try again shortly.
-            </p>
+            <p className="text-sm text-text-primary">{t("conversationShell.couldntLoadThreads")}</p>
+            <p className="text-xs text-text-muted">{t("conversationShell.theThreadIndexIsnt")}</p>
           </div>
         ) : threads.length === 0 ? (
           tab === "followed-unread" ? (
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
               <ThreadIcon className="size-6 text-text-muted/50" />
-              <p className="text-sm text-text-primary">All caught up</p>
-              <p className="text-xs text-text-muted">Threads you follow have no unread replies.</p>
+              <p className="text-sm text-text-primary">{t("conversationShell.allCaughtUp")}</p>
+              <p className="text-xs text-text-muted">
+                {t("conversationShell.threadsYouFollowHave")}
+              </p>
             </div>
           ) : (
             <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center">
               <ThreadIcon className="size-6 text-text-muted/50" />
-              <p className="text-sm text-text-primary">No threads yet</p>
-              <p className="text-xs text-text-muted">
-                Reply to a message to start a thread — it’ll show up here.
-              </p>
+              <p className="text-sm text-text-primary">{t("conversationShell.noThreadsYet")}</p>
+              <p className="text-xs text-text-muted">{t("conversationShell.replyToAMessage")}</p>
             </div>
           )
         ) : (
@@ -341,7 +341,7 @@ function ThreadRow({
           <span className="line-clamp-2 wrap-break-word text-sm text-text-primary">
             {renderAuthorName(summary.root_author)}
             <span className="font-semibold">{": "}</span>
-            {summary.root_preview}
+            {plainTextFromMarkdown(summary.root_preview)}
           </span>
         </span>
 
@@ -364,7 +364,7 @@ function ThreadRow({
                 {overflow > 0 ? (
                   <span
                     data-avatar-ground
-                    className="flex size-4.5 shrink-0 items-center justify-center rounded-none text-(length:--text-badge) font-medium text-text-muted"
+                    className="flex size-4.5 shrink-0 items-center justify-center rounded-(--avatar-radius) text-(length:--text-badge) font-medium text-text-muted"
                   >
                     +{overflow}
                   </span>
@@ -380,10 +380,12 @@ function ThreadRow({
                 <span
                   data-thread-unread="sticker"
                   className="shrink-0 min-w-4 rounded-(--pill-radius) bg-(--unread) px-1 text-center text-(length:--text-badge) font-semibold leading-4 text-text-on-accent"
-                  title={`${unreadCount} new`}
-                  aria-label={`${unreadCount} new`}
+                  title={t("conversationShell.unreadNew", { count: unreadCount })}
+                  aria-label={t("conversationShell.unreadNew", { count: unreadCount })}
                 >
-                  {unreadCount > 99 ? "99+" : unreadCount} new
+                  {t("conversationShell.unreadNew", {
+                    count: unreadCount > 99 ? "99+" : unreadCount,
+                  })}
                 </span>
               ) : (
                 <span

@@ -1,4 +1,5 @@
 import type { ChannelSourceStatus, PickerItem } from "./composer-picker";
+import { t } from "@/lib/i18n";
 
 /** A candidate as both pickers show it; the face is the renderer's to draw. */
 export interface PickerRowView {
@@ -58,7 +59,11 @@ export function pickerViewOf({
 
   const rows = items.map((item, i): PickerRowView => {
     const section =
-      i === 0 && hasInSection ? "In this channel" : i === boundary ? "Other channels" : undefined;
+      i === 0 && hasInSection
+        ? t("messages.inThisChannel")
+        : i === boundary
+          ? t("messages.otherChannels")
+          : undefined;
     const key = rowKey(item);
     if (item.kind === "channel") {
       return {
@@ -88,9 +93,9 @@ export function pickerViewOf({
     more: hiddenCount > 0 ? `+${hiddenCount} more` : null,
     status:
       channelStatus === "loading"
-        ? { loading: true, label: "Loading channels" }
+        ? { loading: true, label: t("messages.loadingChannels") }
         : channelStatus === "partial_error"
-          ? { loading: false, label: "Some channels unavailable" }
+          ? { loading: false, label: t("messages.someChannelsUnavailable") }
           : null,
   };
 }

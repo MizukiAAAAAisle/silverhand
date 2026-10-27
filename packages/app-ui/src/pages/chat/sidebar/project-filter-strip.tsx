@@ -9,6 +9,7 @@ import { OptionRow } from "@/features/tasks/components/task-filter-bar";
 import { useRovingList } from "@/features/tasks/model/task-filter-keyboard";
 import { useCoarsePointer } from "@/navigation/layout";
 import type { WorkspaceItem } from "./workspaces-panel";
+import { t } from "@/lib/i18n";
 
 /**
  * The Recent list's project filter: a strip of chips, and once the chips overflow,
@@ -71,11 +72,11 @@ export function ProjectFilterStrip(props: {
       <div
         ref={stripRef}
         role="radiogroup"
-        aria-label="Filter by project"
+        aria-label={t("chat.filterByProject")}
         className="scrollbar-hide flex min-w-0 flex-1 gap-1 overflow-x-auto mask-[linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] pr-4"
       >
         <FilterChip
-          label="All"
+          label={t("chat.all")}
           selected={props.value === null}
           onSelect={() => props.onChange(null)}
         />
@@ -141,8 +142,8 @@ function ProjectPicker(props: {
           type="button"
           variant="ghost"
           size="icon"
-          aria-label="All projects"
-          title="All projects"
+          aria-label={t("chat.allProjects")}
+          title={t("chat.allProjects")}
           className={cn("size-7 shrink-0", open && "bg-bg-hover text-text-primary")}
         >
           <ChevronDownIcon className="size-4" />
@@ -169,7 +170,7 @@ function ProjectPicker(props: {
               aria-expanded={open}
               aria-controls={listId}
               aria-activedescendant={optionId(roving.activeIndex)}
-              placeholder="Search projects…"
+              placeholder={t("chat.searchProjects")}
               className="w-full bg-transparent text-xs text-text-primary outline-none placeholder:text-text-muted"
             />
           </div>
@@ -199,13 +200,13 @@ function ProjectPicker(props: {
                     <span className="truncate">{option.name}</span>
                   </span>
                 ) : (
-                  "All"
+                  t("chat.all")
                 )}
               </OptionRow>
             ))}
             {filtered.length === 0 ? (
               <p className="px-2 py-3 text-center text-(length:--text-meta) italic text-text-muted">
-                No matches
+                {t("chat.noMatches")}
               </p>
             ) : null}
           </div>

@@ -31,6 +31,7 @@ import {
 import { CONVERSATION_MEMBERS_KEY_PREFIX } from "@/features/conversations/use-conversation-members";
 import { clearSettingsSection } from "@/features/settings/model/settings-section";
 import { usersKey } from "@/features/users/hooks";
+import { serverEnvironmentKey } from "@/features/session/server-environment";
 
 function clearViewerLocalState(): void {
   agentStreamCache.clear();
@@ -41,9 +42,7 @@ function clearViewerLocalState(): void {
 
 const meKey = ["me"] as const;
 
-export type SetupRequired = RegistrationRequired & {
-  signup_enabled: boolean;
-};
+export type SetupRequired = RegistrationRequired;
 
 export interface BackendUnreachable {
   backend_unreachable: true;
@@ -170,14 +169,11 @@ export function getHydratedViewer(qc: QueryClient): UserDto | null {
  *
  * The mapping is intentionally narrow:
  *   - `authenticated`        → `UserDto` (the `state.user` object)
- *   - `backend_unreachable`  → `BackendUnreachable` (NO `signup_enabled`)
- *   - `unauthenticated`      → `SetupRequired` (`signup_enabled` from IPC)
+ *   - `backend_unreachable`  → `BackendUnreachable`
+ *   - `unauthenticated`      → `SetupRequired`
  *
- * The `backend_unreachable` arm intentionally drops `signup_enabled`
- * because the main process didn't successfully read it from the
- * unreachable server. Letting it leak through would re-introduce the
- * "default to disabled / push wrong CTA" footgun Cindy 5d-fixup P1-2
- * called out.
+ * Server features are not part of the session; they come from
+ * `useServerEnvironment`.
  */
 export function mapAuthStateToViewer(state: ClientAuthState): ViewerState {
   if (state.status === "authenticated") return state.user;
@@ -203,18 +199,24 @@ export function mapAuthStateToViewer(state: ClientAuthState): ViewerState {
       server_api_epoch: state.server_api_epoch,
     };
   }
-  return {
-    registration_required: true,
-    suggested_name: "",
-    signup_enabled: state.signup_enabled,
-  };
+  return { registration_required: true, suggested_name: "" };
+}
+
+/** A signed-in viewer survives losing the server: the read fails instead, so the
+ *  app keeps its content and the status banner reports the connection. */
+export async function readViewer(previous: ViewerState | undefined): Promise<ViewerState> {
+  const state = await getPlatform().client.getAuthState();
+  if (state.status === "backend_unreachable" && previous !== undefined && "id" in previous) {
+    throw new ApiError(0, "Network Error", state.message, "backend_unreachable");
+  }
+  return mapAuthStateToViewer(state);
 }
 
 export function useViewerUser() {
+  const qc = useQueryClient();
   const query = useQuery({
     queryKey: meKey,
-    queryFn: async (): Promise<ViewerState> =>
-      mapAuthStateToViewer(await getPlatform().client.getAuthState()),
+    queryFn: () => readViewer(qc.getQueryData<ViewerState>(meKey)),
     staleTime: 30 * 1000,
   });
   useEffect(() => {
@@ -291,7 +293,11 @@ export function clearLoggedOutSession(qc: QueryClient): Promise<void> {
 
   // clear() removes the observed me query without publishing a new result.
   // Keep that query attached so App leaves the shell and reads signed-out policy.
-  qc.removeQueries({ predicate: (query) => query.queryKey[0] !== meKey[0] });
+  // The server environment describes the server, not the signed-out account.
+  qc.removeQueries({
+    predicate: (query) =>
+      query.queryKey[0] !== meKey[0] && query.queryKey[0] !== serverEnvironmentKey[0],
+  });
   qc.getMutationCache().clear();
   return qc.resetQueries({ queryKey: meKey, exact: true });
 }

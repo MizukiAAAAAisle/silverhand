@@ -8,6 +8,8 @@
  * tests inject in-memory doubles.
  */
 
+import { nativeCopy } from "../shell/native-copy.js";
+
 export type AttachmentSaveResult =
   | { ok: true; path: string }
   | { ok: false; canceled: true }
@@ -47,7 +49,7 @@ export async function handleAttachmentSave(
   const safeName = sanitizeAttachmentFilename(filenameRaw);
   if (!safeName) return { ok: false, reason: "invalid_filename" };
   const result = await deps.showSaveDialog({
-    title: "Save attachment",
+    title: nativeCopy().saveAttachment,
     defaultPath: safeName,
   });
   if (result.canceled || !result.filePath) {

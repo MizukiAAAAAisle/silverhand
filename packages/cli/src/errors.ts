@@ -357,9 +357,7 @@ interface BlockingTaskRow {
   assignee_name: string | null;
 }
 
-function readBlockingTasks(
-  details: Record<string, unknown> | undefined,
-): BlockingTaskRow[] | null {
+function readBlockingTasks(details: Record<string, unknown> | undefined): BlockingTaskRow[] | null {
   if (!details) return null;
   const raw = details['blocking_tasks'];
   if (!Array.isArray(raw)) return null;
@@ -374,8 +372,7 @@ function readBlockingTasks(
       task_number: num,
       status,
       title: typeof e['title'] === 'string' ? e['title'] : '',
-      assignee_name:
-        typeof e['assignee_name'] === 'string' ? e['assignee_name'] : null,
+      assignee_name: typeof e['assignee_name'] === 'string' ? e['assignee_name'] : null,
     });
   }
   return out;
@@ -443,9 +440,7 @@ function safeParseErrorBody(bodyText: string): ParsedErrorBody | null {
       // Accept either `{error: {code, message, details?}}` or a flat
       // `{code, message, details?}`.
       const inner =
-        obj.error && typeof obj.error === 'object'
-          ? (obj.error as Record<string, unknown>)
-          : obj;
+        obj.error && typeof obj.error === 'object' ? (obj.error as Record<string, unknown>) : obj;
       const code = typeof inner.code === 'string' ? inner.code : undefined;
       // `{error: "<sentence>", code?}` is what `internal/*` routes actually
       // send — the message IS the `error` field there. Reading only
@@ -470,7 +465,9 @@ function safeParseErrorBody(bodyText: string): ParsedErrorBody | null {
   return null;
 }
 
-function isZodError(err: unknown): err is { errors: Array<{ path: Array<string | number>; message: string }> } {
+function isZodError(
+  err: unknown,
+): err is { errors: Array<{ path: Array<string | number>; message: string }> } {
   return (
     !!err &&
     typeof err === 'object' &&
@@ -480,7 +477,9 @@ function isZodError(err: unknown): err is { errors: Array<{ path: Array<string |
   );
 }
 
-function formatZodError(err: { errors: Array<{ path: Array<string | number>; message: string }> }): string {
+function formatZodError(err: {
+  errors: Array<{ path: Array<string | number>; message: string }>;
+}): string {
   const first = err.errors[0];
   if (!first) return 'request rejected: invalid input';
   const path = first.path.length > 0 ? first.path.join('.') : '<root>';

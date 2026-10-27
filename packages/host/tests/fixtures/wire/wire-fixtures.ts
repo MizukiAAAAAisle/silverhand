@@ -2092,6 +2092,27 @@ const RUNTIME_START_ERROR_FIXTURES: WireFixture[] = [
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_start' },
   },
+  {
+    name: 'response/runtime_start-error-runtime_binary_missing',
+    description: 'The runtime CLI is not on PATH. The message is a fixed daemon template naming only the runtime.',
+    frame: enc({
+      id: 'req-runtime-start-1',
+      error: { code: 'runtime_binary_missing', message: 'Pi is not installed on this computer.' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_start' },
+  },
+  {
+    name: 'response/runtime_start-error-runtime_version_unsupported',
+    description: 'The probed CLI version parses below the driver floor. An unknown version is not refused.',
+    frame: enc({
+      id: 'req-runtime-start-1',
+      error: {
+        code: 'runtime_version_unsupported',
+        message: 'Grok Build 1.0.23 is not supported. Update to 1.0.24 or newer.',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_start' },
+  },
 ];
 // `runtime_deliver` is the sole delivery command and may take the SPAWN arm,
 // which runs the same daemon-side path resolver as `runtime_start`. Pin the
@@ -2144,6 +2165,27 @@ const RUNTIME_DELIVER_ERROR_FIXTURES: WireFixture[] = [
         code: 'registry_unavailable',
         message:
           'daemon not attached to a control plane; cannot resolve the authenticated computer id',
+      },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
+  },
+  {
+    name: 'response/runtime_deliver-error-runtime_binary_missing',
+    description: 'The runtime CLI is not on PATH. The message is a fixed daemon template naming only the runtime.',
+    frame: enc({
+      id: 'req-runtime-deliver-1',
+      error: { code: 'runtime_binary_missing', message: 'Pi is not installed on this computer.' },
+    }),
+    kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },
+  },
+  {
+    name: 'response/runtime_deliver-error-runtime_version_unsupported',
+    description: 'The probed CLI version parses below the driver floor. An unknown version is not refused.',
+    frame: enc({
+      id: 'req-runtime-deliver-1',
+      error: {
+        code: 'runtime_version_unsupported',
+        message: 'Grok Build 1.0.23 is not supported. Update to 1.0.24 or newer.',
       },
     }),
     kind: { kind: 'response_error_typed', intent: 'runtime_deliver' },

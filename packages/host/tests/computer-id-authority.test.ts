@@ -31,7 +31,10 @@ describe('runDaemon wiring — resolveComputerId authority', () => {
 
   afterEach(async () => {
     while (daemons.length) {
-      await daemons.pop()!.stop('test_done').catch(() => undefined);
+      await daemons
+        .pop()!
+        .stop('test_done')
+        .catch(() => undefined);
     }
     while (dirs.length) {
       rmSync(dirs.pop()!, { recursive: true, force: true });
@@ -54,7 +57,7 @@ describe('runDaemon wiring — resolveComputerId authority', () => {
       installSignals: false,
       writeStdoutHandshake: false,
       alsoStderr: false,
-      supervisorFactory: factoryDeps => {
+      supervisorFactory: (factoryDeps) => {
         deps = factoryDeps.runtimeStartResolveDeps;
         return new FakeSupervisor({ emit: factoryDeps.emit });
       },
@@ -80,9 +83,7 @@ describe('runDaemon wiring — resolveComputerId authority', () => {
     // returned host_id 'local' (or a daemon_id) here instead of throwing.
     expect(returned).toBeUndefined();
     expect(thrown).toBeInstanceOf(RuntimeStartResolveError);
-    expect((thrown as RuntimeStartResolveError).code).toBe(
-      'registry_unavailable',
-    );
+    expect((thrown as RuntimeStartResolveError).code).toBe('registry_unavailable');
   });
 
   it('after host_outbound_attach → returns the real authenticated host id', async () => {
@@ -116,7 +117,10 @@ describe('runDaemon wiring — post-attach ready re-announce (#task:1719)', () =
   const dirs: string[] = [];
   afterEach(async () => {
     while (daemons.length > 0)
-      await daemons.pop()!.stop('test_done').catch(() => undefined);
+      await daemons
+        .pop()!
+        .stop('test_done')
+        .catch(() => undefined);
     while (dirs.length > 0) rmSync(dirs.pop()!, { recursive: true, force: true });
   });
 
@@ -141,8 +145,7 @@ describe('runDaemon wiring — post-attach ready re-announce (#task:1719)', () =
       installSignals: false,
       writeStdoutHandshake: false,
       alsoStderr: false,
-      supervisorFactory: factoryDeps =>
-        new FakeSupervisor({ emit: factoryDeps.emit }),
+      supervisorFactory: (factoryDeps) => new FakeSupervisor({ emit: factoryDeps.emit }),
     });
     daemons.push(daemon);
 
@@ -156,7 +159,7 @@ describe('runDaemon wiring — post-attach ready re-announce (#task:1719)', () =
     });
     let buffer = '';
     socket.setEncoding('utf8');
-    socket.on('data', chunk => {
+    socket.on('data', (chunk) => {
       buffer += String(chunk);
       let idx: number;
       while ((idx = buffer.indexOf('\n')) >= 0) {
@@ -207,8 +210,7 @@ describe('runDaemon wiring — post-attach ready re-announce (#task:1719)', () =
       installSignals: false,
       writeStdoutHandshake: false,
       alsoStderr: false,
-      supervisorFactory: factoryDeps =>
-        new FakeSupervisor({ emit: factoryDeps.emit }),
+      supervisorFactory: (factoryDeps) => new FakeSupervisor({ emit: factoryDeps.emit }),
     });
     daemons.push(daemon);
 
@@ -220,7 +222,7 @@ describe('runDaemon wiring — post-attach ready re-announce (#task:1719)', () =
     });
     let buffer = '';
     socket.setEncoding('utf8');
-    socket.on('data', chunk => {
+    socket.on('data', (chunk) => {
       buffer += String(chunk);
       let idx: number;
       while ((idx = buffer.indexOf('\n')) >= 0) {
@@ -249,7 +251,7 @@ describe('runDaemon wiring — post-attach ready re-announce (#task:1719)', () =
     }
 
     // Grace window: no second ready may appear for a failed attach.
-    await new Promise(resolve => setTimeout(resolve, 300));
+    await new Promise((resolve) => setTimeout(resolve, 300));
     expect(readyEvents).toHaveLength(1);
     socket.destroy();
   });
@@ -259,6 +261,6 @@ async function waitFor(predicate: () => boolean, timeoutMs = 3_000): Promise<voi
   const deadline = Date.now() + timeoutMs;
   while (!predicate()) {
     if (Date.now() > deadline) throw new Error('waitFor timed out');
-    await new Promise(resolve => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 10));
   }
 }

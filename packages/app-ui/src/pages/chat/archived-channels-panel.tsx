@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/date-filter-select";
 import { ArchivedListSkeleton } from "./archived-list-skeleton";
 import { FloatingPaneChrome, PaneHeader, PaneShell } from "../../components/layout/pane-shell";
+import { t } from "@/lib/i18n";
 
 /** Archived-view filter selection. Lifted to App so it survives pane
  *  switches for the app session (shiki #task:1259) — NOT persisted, so a
@@ -118,7 +119,7 @@ export function ArchivedChannelsPanel({
       <FloatingPaneChrome>
         <PaneHeader
           icon={<ArchiveIcon className="size-3.5" />}
-          title="Archived"
+          title={t("common.archived")}
           count={workspaceRows.length + channels.length}
           trailing={
             <div className="ml-auto">
@@ -133,7 +134,7 @@ export function ArchivedChannelsPanel({
           className="shrink-0 border-b border-border-subtle px-4 py-3"
         >
           <div className="flex flex-wrap items-end gap-3">
-            <FilterBlock label="Project" className="w-full sm:w-72">
+            <FilterBlock label={t("chat.project")} className="w-full sm:w-72">
               <WorkspaceFilterSelect
                 value={workspaceFilter}
                 workspaces={workspaces}
@@ -142,11 +143,11 @@ export function ArchivedChannelsPanel({
                 showArchivedSuffix
               />
             </FilterBlock>
-            <FilterBlock label="Archived date" className="w-full sm:w-48">
+            <FilterBlock label={t("chat.archivedDate")} className="w-full sm:w-48">
               <DateFilterSelect
                 value={dateFilter}
                 onChange={setDateFilter}
-                ariaLabel="Archived date filter"
+                ariaLabel={t("chat.archivedDateFilter")}
               />
             </FilterBlock>
           </div>
@@ -158,7 +159,7 @@ export function ArchivedChannelsPanel({
          * reaching anything archived inside it. */}
         {workspaceRows.length > 0 ? (
           <section>
-            <SectionLabel text="Projects" />
+            <SectionLabel text={t("chat.projects")} />
             <ul className="space-y-2">
               {workspaceRows.map((workspace) => (
                 <ArchivedWorkspaceRow
@@ -185,7 +186,7 @@ export function ArchivedChannelsPanel({
           <ArchivedListSkeleton />
         ) : channels.length > 0 ? (
           <section>
-            <SectionLabel text="Channels" />
+            <SectionLabel text={t("chat.channels")} />
             <ul className="space-y-2">
               {channels.map((item) => (
                 <ArchivedChannelRow
@@ -209,11 +210,7 @@ export function ArchivedChannelsPanel({
           </section>
         ) : workspaceRows.length === 0 ? (
           <EmptyState
-            text={
-              hasFilters
-                ? "No archived projects or channels match these filters"
-                : "Nothing archived"
-            }
+            text={hasFilters ? t("chat.noArchivedProjectsOr") : t("chat.nothingArchived")}
           />
         ) : null}
       </div>
@@ -248,7 +245,7 @@ function ArchivedWorkspaceRow({
 }): JSX.Element {
   const archivedAt = workspace.archived_at
     ? dayjs(workspace.archived_at).format("YYYY-MM-DD HH:mm")
-    : "Unknown archive date";
+    : t("chat.unknownArchiveDate");
 
   return (
     <li>
@@ -272,7 +269,9 @@ function ArchivedWorkspaceRow({
             <span className="block truncate text-sm font-medium text-text-primary">
               {archivedWorkspaceRowLabel(workspace)}
             </span>
-            <span className="mt-1 block text-xs text-text-muted">Archived {archivedAt}</span>
+            <span className="mt-1 block text-xs text-text-muted">
+              {t("chat.archivedAt", { date: archivedAt })}
+            </span>
           </span>
         </button>
         {workspace.owner_agent_id === null ? (
@@ -280,8 +279,8 @@ function ArchivedWorkspaceRow({
             type="button"
             onClick={onSettings}
             className="m-3 ml-0 inline-flex size-7 shrink-0 items-center justify-center self-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover focus-outline"
-            aria-label={`Settings for ${workspace.name}`}
-            title="Project settings"
+            aria-label={t("chat.settingsFor", { name: workspace.name })}
+            title={t("chat.projectSettings")}
           >
             <SettingsIcon className="size-3.5" />
           </button>
@@ -294,11 +293,11 @@ function ArchivedWorkspaceRow({
           }}
           disabled={restorePending}
           className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label={`Restore ${archivedWorkspaceRowLabel(workspace)}`}
-          title="Restore project"
+          aria-label={t("chat.restoreNamed", { name: archivedWorkspaceRowLabel(workspace) })}
+          title={t("chat.restoreProject")}
         >
           <UnarchiveIcon className="size-3.5" />
-          Restore
+          {t("chat.restore")}
         </button>
       </CollectionItemCard>
     </li>
@@ -318,7 +317,7 @@ function ArchivedChannelRow({
 }): JSX.Element {
   const archivedAt = item.channel.archived_at
     ? dayjs(item.channel.archived_at).format("YYYY-MM-DD HH:mm")
-    : "Unknown archive date";
+    : t("chat.unknownArchiveDate");
 
   return (
     <li>
@@ -339,13 +338,15 @@ function ArchivedChannelRow({
               <span className="font-medium text-text-primary">
                 {archivedRowWorkspaceLabel(item)}
               </span>
-              {item.workspace.archived_at !== null ? <span>archived project</span> : null}
+              {item.workspace.archived_at !== null ? (
+                <span>{t("chat.archivedProject")}</span>
+              ) : null}
             </span>
             <span className="mt-1 block truncate text-sm font-medium text-text-primary">
               {item.channel.title}
             </span>
             <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-text-muted">
-              <span>Archived {archivedAt}</span>
+              <span>{t("chat.archivedAt", { date: archivedAt })}</span>
             </span>
           </span>
         </button>
@@ -357,11 +358,11 @@ function ArchivedChannelRow({
           }}
           disabled={restorePending}
           className="m-3 ml-0 inline-flex shrink-0 items-center gap-1.5 self-center rounded-(--control-radius) border-(length:--control-border-width) border-border bg-bg-base px-2.5 py-1.5 text-xs text-text-secondary transition-colors hover:border-(--border-control-hover) hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-          aria-label={`Restore ${item.channel.title}`}
-          title="Restore channel"
+          aria-label={t("chat.restoreNamed", { name: item.channel.title })}
+          title={t("chat.restoreChannel")}
         >
           <UnarchiveIcon className="size-3.5" />
-          Restore
+          {t("chat.restore")}
         </button>
       </CollectionItemCard>
     </li>

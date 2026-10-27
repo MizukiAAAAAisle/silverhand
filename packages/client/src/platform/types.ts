@@ -5,11 +5,17 @@ import type {
   ProfileSaveWithTestResult,
   ClearProfileResult,
 } from "../connection/types.js";
-import type { ClientAuthState, ClientAuthResult } from "../session/types.js";
+import type {
+  ClientAuthState,
+  ClientAuthResult,
+  PasswordRecoveryCall,
+  PasswordRecoveryResult,
+} from "../session/types.js";
 import type {
   AuthSignupInput,
   AuthLoginInput,
   ServerConnectionProfileView,
+  ServerInfo,
 } from "@silverhand/shared";
 import type {
   BackendProxyRequest,
@@ -23,10 +29,13 @@ import type { LocalHostCapability } from "../platform/local-host.js";
 export interface ClientAdapter {
   getConnectionPolicy(): Promise<ConnectionPolicy>;
   getConnectionInfo(): Promise<ConnectionInfo | null>;
+  /** Anonymous `/api/server/info` from the selected server. */
+  getServerInfo(): Promise<ServerInfo>;
   getAuthState(): Promise<ClientAuthState>;
   signup(input: AuthSignupInput): Promise<ClientAuthResult>;
   login(input: AuthLoginInput): Promise<ClientAuthResult>;
   logout(): Promise<{ ok: true }>;
+  passwordRecovery(input: PasswordRecoveryCall): Promise<PasswordRecoveryResult>;
   backendRequest(input: BackendProxyRequest): Promise<BackendProxyResponse>;
   backendUpload(input: BackendUploadRequest): Promise<BackendProxyResponse>;
   recordEventWsDiagnostic(input: EventWsDiagnostic): Promise<void>;
@@ -54,8 +63,6 @@ export interface NotificationCapability {
     /** Stacks alerts that share it into one group (macOS, Windows). */
     groupId?: string;
     force?: boolean;
-    /** The target is the displayed conversation; a focused desktop window uses sound only. */
-    currentConversation?: boolean;
     notificationId?: string;
   }): Promise<void>;
   onNotificationClicked(handler: (notificationId: string) => void): () => void;
@@ -80,6 +87,14 @@ export interface FileCapability {
   sharePngExport?(input: {
     pngBytes: Uint8Array;
   }): Promise<{ ok: true } | { ok: false; canceled: true } | { ok: false; error: string }>;
+  /** Shows a rendered image in a native sheet with a share action; resolves
+   * when the sheet closes, with whether a share completed. */
+  previewPngExport?(input: {
+    pngBytes: Uint8Array;
+    title: string;
+    shareLabel: string;
+    closeLabel: string;
+  }): Promise<{ shared: boolean }>;
   savePngExport(input: {
     pngBytes: Uint8Array;
     suggestedName: string;
@@ -119,13 +134,33 @@ export interface AppUpdateCapability {
   onShowDialog(handler: () => void): () => void;
 }
 
+/** One action in a native context menu; `icon` is SVG markup on a 24px grid. */
+export interface ContextMenuItem {
+  id: string;
+  label: string;
+  icon: string;
+}
+export interface ContextMenu {
+  /** Where it was asked for, in viewport points; the menu opens beside it. */
+  point: { x: number; y: number };
+  /** A row of emoji above the actions. */
+  reactions: { emoji: string; label: string }[];
+  /** Groups of actions, divided from each other. */
+  sections: ContextMenuItem[][];
+}
+export type ContextMenuChoice = { kind: "item"; id: string } | { kind: "react"; emoji: string };
+/** A context menu the platform draws above everything on screen, native
+ * overlays included. The UI owns the actions and every string. */
+export interface ContextMenuCapability {
+  /** Null when it was dismissed without a choice. */
+  show(menu: ContextMenu): Promise<ContextMenuChoice | null>;
+}
+
 /** A native avatar editor over the shared part library. The UI owns storage: it
  *  passes the starting config and uploads what comes back. */
 export interface AvatarMakerCapability {
   /** Null when the person closes the editor without choosing. */
-  edit(input: {
-    config: { parts: Record<string, number>; bg: number };
-  }): Promise<{
+  edit(input: { config: { parts: Record<string, number>; bg: number } }): Promise<{
     config: { parts: Record<string, number>; bg: number };
     pngBytes: Uint8Array<ArrayBuffer>;
   } | null>;
@@ -147,10 +182,14 @@ export interface ClientPlatform {
   titlebar?: TitlebarCapability;
   pageBar?: PageBarCapability;
   composer?: ComposerCapability;
+  selectionBar?: SelectionBarCapability;
   banner?: BannerCapability;
   avatarMaker?: AvatarMakerCapability;
+  contextMenu?: ContextMenuCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
+  /** Native chrome (menus, tabs, sheets) follows the language the page resolved. */
+  setLocale?(locale: "en" | "zh"): void;
   /** The store page this build is installed from, offered when the server requires a newer app. */
   storeUrl?: string;
   /** The running build's release version; omitted where the host has none. */
@@ -192,13 +231,19 @@ export interface TitlebarState {
   /** The window frame behind the panes is dark, so the bars and status bar
    *  over it take the dark appearance. */
   dark: boolean;
+  /** The page's own header buttons, where the bar carries them in place of
+   *  the page (beside a vertical tab bar). */
+  actions: PageBarItem[];
 }
 export type TitlebarSearchKey = "up" | "down" | "tab" | "backtab" | "enter" | "escape";
 export type TitlebarEvent =
   | { kind: "toggleSidebar" }
   | { kind: "searchFocus" }
+  /** Search was asked for where no native field shows; the page opens its own. */
+  | { kind: "searchOpen" }
   | { kind: "searchQuery"; query: string }
-  | { kind: "searchKey"; key: TitlebarSearchKey };
+  | { kind: "searchKey"; key: TitlebarSearchKey }
+  | { kind: "action"; id: string };
 /** A native window titlebar with a search field. Results stay in the shared UI. */
 export interface TitlebarCapability {
   /** Shows the titlebar with this state; null removes it. */
@@ -283,7 +328,7 @@ export interface ComposerMenuItem {
   icon: string;
   pick?: "photos" | "files";
 }
-/** The compact layout's composer, drawn natively over the page. The shared
+/** The composer, drawn natively over the page. The shared
  * UI keeps the draft, the send and every string; native edits the text and
  * reports it. `key` names the draft: native starts a new one empty until
  * `setText`. iOS decodes each field by name (`SilverhandClientPlugin.swift`). */
@@ -305,6 +350,10 @@ export interface ComposerState {
   /** The agents at work here, on a line above the composer; a tap comes back
    * as `activity`. Absent while none runs. */
   activity?: ComposerActivity;
+  /** The pane it belongs to, in viewport points, where panes stand side by
+   * side; each pane's composer shows at once. Absent spans the screen and
+   * replaces any other. `bottom` is the pane's end, up from the viewport's. */
+  frame?: { left: number; width: number; bottom: number };
 }
 /** One line for the agents running: up to three faces, the first agent's
  * name and state, and how long it has run, which native counts from `since`
@@ -345,7 +394,18 @@ export type ComposerEvent =
   | { kind: "add"; key: string; id: string }
   | { kind: "pick"; key: string; id: string }
   | { kind: "activity"; key: string; id: string }
-  | { kind: "files"; key: string; files: { name: string; type: string; base64: string }[] };
+  | { kind: "files"; key: string; files: { name: string; type: string; base64: string }[] }
+  /** Distances up from the bottom of the window to the composer's top: at
+   * rest, at the height its text gives it (the keyboard included), and as
+   * drawn; `picker` is the room the candidate list takes over it. */
+  | {
+      kind: "metrics";
+      key: string;
+      rest: number;
+      reserve: number;
+      overlay: number;
+      picker: number;
+    };
 export interface ComposerCapability {
   /** Shows the composer for draft `state.key`. */
   sync(state: ComposerState): Promise<void>;
@@ -354,6 +414,30 @@ export interface ComposerCapability {
   /** Replaces the text of draft `key`; `caret` counts UTF-16 units. */
   setText(input: { key: string; text: string; caret: number; focus: boolean }): Promise<void>;
   subscribe(handler: (event: ComposerEvent) => void): Promise<() => void>;
+}
+/** The compact layout's message-selection actions, drawn natively in the
+ * composer's place while messages are selected; the composer steps aside
+ * until the bar is removed. The page keeps the selection and every string.
+ * `key` names the pane the selection belongs to. */
+export interface SelectionBarState {
+  key: string;
+  /** How many are selected, as the page words it. */
+  count: string;
+  cancelLabel: string;
+  copyLabel: string;
+  saveLabel: string;
+  /** False while nothing is selected: only Cancel acts. */
+  enabled: boolean;
+  /** The image is rendering: Save shows it is at work. */
+  busy: boolean;
+}
+export type SelectionBarEvent = { kind: "cancel" | "copy" | "save"; key: string };
+export interface SelectionBarCapability {
+  /** Shows the bar for pane `state.key`. */
+  sync(state: SelectionBarState): Promise<void>;
+  /** Removes the bar, if it still shows pane `key`. */
+  remove(key: string): Promise<void>;
+  subscribe(handler: (event: SelectionBarEvent) => void): Promise<() => void>;
 }
 /** A notice native draws over its bars; a newer one replaces the one showing. */
 export interface BannerNotice {

@@ -102,17 +102,12 @@ stdout: { "schedule": ScheduleDto }`,
   async run({ env, client, args }) {
     const title = flagString(args, 'title');
     const message = flagString(args, 'message');
-    const kind = flagString(args, 'kind') as
-      | 'once'
-      | 'interval'
-      | 'cron'
-      | undefined;
+    const kind = flagString(args, 'kind') as 'once' | 'interval' | 'cron' | undefined;
     if (!title) {
       throw new CliError({
         code: 'validation_error',
         subkind: 'missing_required_flag',
-        message:
-          'schedule create requires --title <text>; use a short label for the schedules UI',
+        message: 'schedule create requires --title <text>; use a short label for the schedules UI',
         retriable: false,
         details: { command: 'schedule create', flag: 'title' },
       });
@@ -143,17 +138,13 @@ stdout: { "schedule": ScheduleDto }`,
     // applies to it (#task:2021 P4-4) — including the one correction, which for a
     // schedule is usually exactly what the caller meant: wake me where I am. The
     // raw token travels verbatim; whether it resolves is the backend's answer.
-    const targetConversation = requireTargetFlag(
-      flagString(args, 'target-conversation'),
-      env,
-      {
-        command: 'silverhand schedule create',
-        flag: 'target-conversation',
-        because:
-          'a fire needs ONE explicit conversation destination; your runtime ' +
-          'scope determines which session executes it, not a default target.',
-      },
-    );
+    const targetConversation = requireTargetFlag(flagString(args, 'target-conversation'), env, {
+      command: 'silverhand schedule create',
+      flag: 'target-conversation',
+      because:
+        'a fire needs ONE explicit conversation destination; your runtime ' +
+        'scope determines which session executes it, not a default target.',
+    });
 
     let input: ScheduleCreateInput;
     if (kind === 'once') {
@@ -238,14 +229,10 @@ Flags:
 stdout: ScheduleListOutput JSON.`,
   flags: ['status', 'limit'] as const,
   async run({ client, args }) {
-    const status = flagString(args, 'status') as
-      | ScheduleListStatusFilter
-      | undefined;
+    const status = flagString(args, 'status') as ScheduleListStatusFilter | undefined;
     if (
       status &&
-      !['pending', 'firing', 'active', 'done', 'cancelled', 'failed', 'all'].includes(
-        status,
-      )
+      !['pending', 'firing', 'active', 'done', 'cancelled', 'failed', 'all'].includes(status)
     ) {
       throw new CliError({
         code: 'validation_error',
@@ -286,8 +273,4 @@ stdout: { "schedule": ScheduleDto }`,
   },
 };
 
-export const scheduleCommands: readonly Command[] = [
-  createCommand,
-  listCommand,
-  cancelCommand,
-];
+export const scheduleCommands: readonly Command[] = [createCommand, listCommand, cancelCommand];

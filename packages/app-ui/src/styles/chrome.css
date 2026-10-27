@@ -236,12 +236,111 @@ html[data-theme] [data-sonner-toast][data-styled="true"] [data-button][data-disa
 }
 
 .system-activity-cluster {
+  container: activity-strip / inline-size;
   margin-block: 7px;
   margin-inline-start: 54px;
   margin-inline-end: 16px;
   max-width: 85%;
   padding-inline-start: 10px;
   border-inline-start: var(--activity-cluster-rule, 1px solid var(--border-subtle));
+}
+
+.system-activity-cluster [data-activity-row] {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.system-activity-cluster [data-activity-row] > [data-system-event-row="1"] {
+  min-width: 0;
+}
+.system-activity-cluster [data-activity-fold-toggle] {
+  flex-shrink: 0;
+  font-size: var(--text-badge);
+  color: var(--text-muted);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.system-activity-cluster [data-activity-fold-toggle]:hover {
+  color: var(--text-secondary);
+}
+/* Indented on the row body, not the history box, so the hover times stay in
+   the same column. */
+/* The opened history is a plain list under the line: who did what, in muted
+   text. The line above names the task and carries the status sticker, so the
+   history repeats neither. Its dots keep their width unpainted, so each name
+   starts under the name above. */
+.system-activity-cluster [data-activity-history] {
+  margin-block: 0 4px;
+  font-size: var(--text-meta);
+  color: var(--text-muted);
+}
+.system-activity-cluster [data-activity-history] :is([data-task-ref], [data-activity-time]) {
+  display: none;
+}
+.system-activity-cluster [data-activity-history] [data-task-event-dot] {
+  visibility: hidden;
+}
+.system-activity-cluster [data-activity-history] [data-system-event-row="1"] > * {
+  padding-block: 0;
+  font-size: inherit;
+}
+.system-activity-cluster
+  [data-activity-history]
+  :is([data-task-event-actor], [data-task-event-verb], [data-task-event-arrow]) {
+  font-weight: 400;
+  color: inherit;
+}
+.system-activity-cluster [data-activity-history] [data-task-event-status][data-task-event-status] {
+  border: 0;
+  padding: 0;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 400;
+  letter-spacing: normal;
+  text-transform: none;
+  color: inherit;
+  opacity: 1;
+}
+
+/* A narrow strip keeps a task line on one line: the line names the task and
+   its state, and who did what moves to the opened history. */
+@container activity-strip (max-width: 419px) {
+  [data-activity-fold]
+    > [data-activity-row]
+    :is([data-task-event-actor], [data-task-event-verb], [data-task-event-arrow]) {
+    display: none;
+  }
+  [data-activity-fold] > [data-activity-row] [data-system-event-row="1"] > * {
+    flex-wrap: nowrap;
+  }
+  [data-activity-fold] > [data-activity-row] [data-task-ref] {
+    min-width: 0;
+    flex-shrink: 1;
+  }
+}
+
+/* The time sits in the avatar column, right-aligned where a continuation
+   row's hover time sits (cluster inset 54px + 10px padding, rail ends 40px in). */
+.system-activity-cluster [data-activity-time] {
+  position: absolute;
+  inset-block: 0;
+  right: calc(100% + 24px);
+  display: flex;
+  align-items: center;
+  white-space: nowrap;
+  user-select: none;
+  font-size: var(--text-badge);
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 150ms;
+}
+.system-activity-cluster [data-activity-row]:hover [data-activity-time] {
+  opacity: 1;
+}
+@media (pointer: coarse) {
+  .system-activity-cluster [data-activity-time] {
+    display: none;
+  }
 }
 
 .system-activity-cluster [data-system-event-row="1"] > * {

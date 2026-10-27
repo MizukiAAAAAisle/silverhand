@@ -26,6 +26,7 @@ import { useWorkspaceAttentionModes } from "@/features/attention/hooks";
 import { channelNodeBadge } from "../model/sidebar-row-badges";
 import { sortModeOf } from "@/lib/viewer-sort";
 import { collapsedRevealRows, excludeStarredChannels } from "@/features/workspaces/home-grouping";
+import { t } from "@/lib/i18n";
 
 interface ChannelNode {
   id: string;
@@ -177,13 +178,13 @@ export function WorkspaceChannels({
   if (isLoading && items.length === 0) {
     return (
       <li>
-        <SidebarRowsSkeleton label="Loading channels" nested />
+        <SidebarRowsSkeleton label={t("chat.loadingChannels")} nested />
       </li>
     );
   }
 
   if (ordered.length === 0) {
-    return <SidebarEmptyRow>No channels</SidebarEmptyRow>;
+    return <SidebarEmptyRow>{t("chat.noChannels")}</SidebarEmptyRow>;
   }
 
   const rowProps = {
@@ -306,7 +307,7 @@ function WorkspaceChannelRow({
   );
 
   return (
-    <AppContextMenu trigger={row} touchLongPress={!draggable}>
+    <AppContextMenu trigger={row}>
       <ChannelRowMenuItems
         channelId={channel.id}
         title={channel.title}

@@ -1,4 +1,5 @@
 import { BrowserWindow, ClipboardItem, clipboard, dialog, nativeImage } from "electron";
+import { nativeCopy } from "../shell/native-copy.js";
 import type { GuardedIpcRegistrar } from "./guarded-ipc.js";
 
 // ── Selection export pipeline ─────────────────────────────────────────
@@ -38,9 +39,9 @@ export function registerSelectionExportIpcHandlers(ipc: GuardedIpcRegistrar): vo
       const safeName = sanitizeExportFilename(input?.suggestedName, ".png");
       const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
       const result = await dialog.showSaveDialog(win!, {
-        title: "Save image",
+        title: nativeCopy().saveImage,
         defaultPath: safeName,
-        filters: [{ name: "PNG Image", extensions: ["png"] }],
+        filters: [{ name: nativeCopy().pngImage, extensions: ["png"] }],
       });
       if (result.canceled || !result.filePath) {
         return { ok: false, canceled: true };

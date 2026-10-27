@@ -8,6 +8,7 @@ import { iconMarkup, nativeActionBar, useNativeBar } from "@/components/layout/n
 import { ProfileHeaderContent } from "@/features/profile/profile-header-content";
 import { usePresenceById, presenceDotStatus, humanPresenceText } from "@/features/users/presence";
 import { useHumanAvatar } from "./use-human-avatar";
+import { t } from "@/lib/i18n";
 
 export function HumanHeader({
   user,
@@ -26,12 +27,12 @@ export function HumanHeader({
   // A full page on compact iOS: the bar names the section and carries Message;
   // the identity is the profile's own hero.
   const [memberBar, memberHandlers] = nativeActionBar(
-    { title: "Members", titleAction: null, tabs: null, addTabs: null },
+    { title: t("profile.members"), titleAction: null, tabs: null, addTabs: null },
     [
       onMessage
         ? {
             id: "message",
-            label: `Message @${user.name}`,
+            label: t("agents.messageAgent", { name: user.name }),
             icon: iconMarkup(MessageIcon),
             run: onMessage,
           }
@@ -54,8 +55,8 @@ export function HumanHeader({
         onMessage ? (
           <ProfileHeaderAction
             compact={compact}
-            label="Message"
-            title={`Message @${user.name}`}
+            label={t("profile.message")}
+            title={t("agents.messageAgent", { name: user.name })}
             onClick={onMessage}
           >
             <MessageIcon className="size-3.5" />
@@ -80,7 +81,15 @@ export function HumanHeader({
         subtitle: humanPresenceText(presence?.presence, null, "") || undefined,
         titleAction: null,
         actions: onMessage
-          ? [[{ id: "message", label: `Message @${user.name}`, icon: iconMarkup(MessageIcon) }]]
+          ? [
+              [
+                {
+                  id: "message",
+                  label: t("agents.messageAgent", { name: user.name }),
+                  icon: iconMarkup(MessageIcon),
+                },
+              ],
+            ]
           : [],
         tabs: null,
         addTabs: null,

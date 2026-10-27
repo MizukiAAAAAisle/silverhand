@@ -8,6 +8,7 @@ import { TaskStatusBadge } from "@/features/tasks/components/task-status-badge";
 import { HoverPopover } from "./hover-popover";
 import { useRelativeTime } from "../hooks/use-relative-time";
 import type { TaskSummaryDto, TaskStatus } from "@silverhand/shared";
+import { t } from "@/lib/i18n";
 
 interface TaskRefProps {
   taskNumber: number;
@@ -34,7 +35,7 @@ export function TaskRefStaticChip({
   return (
     <span
       className="inline-flex max-w-55 items-center gap-1 rounded-(--chip-radius) font-medium text-accent"
-      title={`Task #${task.task_number} ${task.title}`}
+      title={t("messages.taskTitled", { number: task.task_number, title: task.title })}
       data-task-ref={String(taskNumber)}
       data-task-ref-state="resolved"
     >
@@ -65,7 +66,7 @@ export function TaskRef({ taskNumber, bare = false }: TaskRefProps): JSX.Element
   }
 
   const label = `#${task.task_number} ${task.title}`;
-  const tooltip = `Task ${label}`;
+  const tooltip = t("messages.taskLabel", { label });
 
   const chipContent = (
     <>
@@ -171,11 +172,11 @@ function TaskPopoverBody({
       <p className="wrap-break-word text-xs font-medium text-text-primary">{task.title}</p>
       <p className="flex items-center gap-1.5 text-(length:--text-meta) text-text-muted">
         <span className="shrink-0 text-text-secondary">
-          {task.assignee ? task.assignee.name : <em>unassigned</em>}
+          {task.assignee ? task.assignee.name : <em>{t("messages.unassigned")}</em>}
         </span>
         {channelLabel !== null ? (
           <span className="min-w-0 truncate text-text-secondary" title={channelLabel}>
-            in {channelLabel}
+            {t("messages.inChannel", { channel: channelLabel })}
           </span>
         ) : null}
         <span className="inline-flex shrink-0 items-center gap-1" title={absolute}>

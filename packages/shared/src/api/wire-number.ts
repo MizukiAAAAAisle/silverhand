@@ -4,11 +4,7 @@ import { z } from 'zod';
  * name a persisted sequence coordinate. This is the one numeric authority used
  * by task/schedule request bodies; callers must move to a decimal string before
  * this ceiling can ever be widened. */
-export const PositiveJsSafeIntegerSchema = z
-  .number()
-  .int()
-  .positive()
-  .max(Number.MAX_SAFE_INTEGER);
+export const PositiveJsSafeIntegerSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);
 
 /** Canonical positive decimal query grammar. Query numbers are deliberately
  * narrower than JSON numbers: ASCII base-10 only, no sign, exponent, whitespace,
@@ -17,5 +13,5 @@ export const PositiveJsSafeIntegerSchema = z
 export const CanonicalPositiveIntegerQuerySchema = z
   .string()
   .regex(/^[1-9][0-9]*$/)
-  .transform(raw => Number(raw))
+  .transform((raw) => Number(raw))
   .pipe(PositiveJsSafeIntegerSchema);

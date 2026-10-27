@@ -25,6 +25,7 @@ import {
   useViewerUser,
 } from "@/features/session/hooks";
 import { useUsers } from "@/features/users/hooks";
+import { t } from "@/lib/i18n";
 import "./me-shell.css";
 
 /** The compact Me tab: who you are, how active you have been, then the
@@ -69,14 +70,14 @@ export function MeShell(): JSX.Element {
 
         <PaneHeader
           icon={<UserIcon className="size-3.5" />}
-          title="Me"
+          title={t("me.me")}
           backdrop={Boolean(avatarObjectUrl)}
           trailing={
             <button
               type="button"
               className="glass-surface glass-round focus-outline"
               onClick={editProfile}
-              aria-label="Edit profile"
+              aria-label={t("me.editProfile")}
             >
               <ProfileEditIcon size={20} />
             </button>
@@ -84,7 +85,7 @@ export function MeShell(): JSX.Element {
           nativeActions={[
             {
               id: "edit",
-              label: "Edit profile",
+              label: t("me.editProfile"),
               icon: iconMarkup(ProfileEditIcon),
               run: editProfile,
             },
@@ -104,19 +105,19 @@ export function MeShell(): JSX.Element {
           <div className="me-tiles">
             <MeTile
               icon={<MembersIcon size={18} />}
-              title="Members"
+              title={t("me.members")}
               count={memberCount}
               onClick={() => nav.toMembers()}
             />
             <MeTile
               icon={<ComputerIcon size={18} />}
-              title="Computers"
+              title={t("me.computers")}
               count={computerCount}
               onClick={() => nav.toComputers()}
             />
             <MeTile
               icon={<SettingsIcon size={18} />}
-              title="Settings"
+              title={t("me.settings")}
               onClick={() => nav.toSettings()}
             />
           </div>
@@ -136,7 +137,7 @@ function MeHero({
   const name = user.display_name || user.name;
 
   return (
-    <section aria-label="Profile" className="me-hero">
+    <section aria-label={t("me.profile")} className="me-hero">
       <UserAvatar
         size={AVATAR_PX.profileCompact}
         avatarObjectUrl={avatarObjectUrl}

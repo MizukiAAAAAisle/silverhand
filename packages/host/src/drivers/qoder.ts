@@ -1,9 +1,5 @@
 import { readFileSync } from 'node:fs';
-import {
-  type Driver,
-  type DriverSpawnContext,
-  type ParsedEvent,
-} from './index.js';
+import { type Driver, type DriverSpawnContext, type ParsedEvent } from './index.js';
 import {
   classifyStreamJsonInitProgress,
   encodeStreamJsonUserMessage,
@@ -80,23 +76,21 @@ function queueStatusEvent(line: string): ParsedEvent | null {
 
   const details: string[] = [];
   if (
-    typeof frame.queue_count === 'number'
-    && Number.isInteger(frame.queue_count)
-    && frame.queue_count >= 0
+    typeof frame.queue_count === 'number' &&
+    Number.isInteger(frame.queue_count) &&
+    frame.queue_count >= 0
   ) {
     details.push(`queue size ${frame.queue_count}`);
   }
   if (
-    typeof frame.wait_time_ms === 'number'
-    && Number.isFinite(frame.wait_time_ms)
-    && frame.wait_time_ms >= 0
+    typeof frame.wait_time_ms === 'number' &&
+    Number.isFinite(frame.wait_time_ms) &&
+    frame.wait_time_ms >= 0
   ) {
     const seconds = Math.round(frame.wait_time_ms / 1000);
     const minutes = Math.floor(seconds / 60);
     const remainingSeconds = seconds % 60;
-    details.push(
-      `estimated wait ${minutes > 0 ? `${minutes}m ` : ''}${remainingSeconds}s`,
-    );
+    details.push(`estimated wait ${minutes > 0 ? `${minutes}m ` : ''}${remainingSeconds}s`);
   }
 
   const suffix = details.length > 0 ? ` (${details.join(', ')})` : '';

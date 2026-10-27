@@ -35,8 +35,10 @@ import { ThreadReplyPreview, visibleThreadReplyRows } from "./thread-reply-previ
 import { ReactionPicker } from "./reaction-picker";
 import { useToggleReaction } from "@/features/channels/reaction-hooks";
 import { useMessageLayoutMode } from "../hooks/use-message-layout-mode";
+import { useCoarsePointer } from "@/navigation/layout";
 import { MessageTaskTag } from "./message-task-tag";
 import { AttachmentList } from "./message-attachments";
+import { t } from "@/lib/i18n";
 
 // Idempotent — the reply badge's "{time} ago" label uses dayjs.fromNow().
 // Other modules (useRelativeTime) extend the same plugin; re-extending is a
@@ -184,7 +186,7 @@ export interface MessageItemProps {
   onToggleSelected?: (msg: CachedMessage) => void;
   /** Right-click → Copy markdown menu item. Hidden when undefined. */
   onCopyMarkdown?: (msg: CachedMessage) => void;
-  /** Right-click → Share… menu item. Hidden when undefined; the
+  /** Right-click → Share menu item. Hidden when undefined; the
    *  parent only passes this in once the export pipeline is live so
    *  the user never sees a half-baked Share entry (Cindy review). */
   onShare?: (msg: CachedMessage) => void;
@@ -230,8 +232,9 @@ export interface MessageItemProps {
  *   earns persistent space.
  *
  * Layout: respects `useMessageLayoutMode`. In `'user-right'` mode the
- * current user's messages flush right; in `'all-left'` everything is
- * left-aligned.
+ * current user's messages flush right with no avatar or byline (the bubble
+ * already says who wrote them; their time is hover-revealed); in `'all-left'`
+ * everything is left-aligned.
  */
 /**
  * The message row's HOOKS-FREE classifier boundary (#task:1792, Cindy). It runs
@@ -388,7 +391,13 @@ function ActorMessageItem({
         canMutate={canMutateLinkedTask}
       />
     ) : null;
-  const [hover, setHover] = useState(false);
+  const [pointerHover, setHover] = useState(false);
+  // WebKit on touch screens follows a scroll or tap with compatibility
+  // events typed "mouse" at the finger's last spot, so the event type cannot
+  // tell a finger from a mouse; a touch-first device gets no hover at all and
+  // reaches the same actions through the long-press menu.
+  const coarsePointer = useCoarsePointer();
+  const hover = pointerHover && !coarsePointer;
   // React-driven focus-within: tracking it as state and OR-ing into
   // the visibility class is more reliable than relying on Tailwind's
   // `focus-within:` utility, which generates a same-specificity rule
@@ -434,7 +443,7 @@ function ActorMessageItem({
   const replyBadgeLabel =
     threadReplyCount === undefined
       ? ""
-      : `${threadReplyCount} ${threadReplyCount === 1 ? "Reply" : "Replies"}`;
+      : `${threadReplyCount} ${threadReplyCount === 1 ? t("messages.reply") : t("messages.replies")}`;
 
   // P1 (#task:1073): when the enriched summary is present, the badge upgrades
   // to avatars + count + last-reply time. `repliers.length > 0` guards the
@@ -461,9 +470,9 @@ function ActorMessageItem({
   // enriched chip appends the last-reply time, the fallback stays bare.
   const replyBadgeTitle =
     threadUnreadCount > 0
-      ? `${replyBadgeLabel} ${threadUnreadCount} new — jump to first unread`
+      ? t("messages.replyBadgeUnread", { label: replyBadgeLabel, count: threadUnreadCount })
       : enrichedReply
-        ? `${replyBadgeLabel} last reply ${replyRelativeTime}`
+        ? t("messages.replyBadgeLast", { label: replyBadgeLabel, time: replyRelativeTime })
         : replyBadgeLabel;
   // Thread repliers now arrive as the SAME server-authoritative
   // {@link MessageAuthorDto} the byline uses (#task:1791/#task:1792), so their
@@ -596,7 +605,7 @@ function ActorMessageItem({
   const threadUnreadNode =
     threadUnreadCount > 0 ? (
       <span className="shrink-0 whitespace-nowrap font-medium text-(--unread)">
-        {threadUnreadCount > 99 ? "99+" : threadUnreadCount} new
+        {t("messages.newCount", { count: threadUnreadCount > 99 ? "99+" : threadUnreadCount })}
       </span>
     ) : null;
   // The badge and the preview lines are ONE object when there are lines to head
@@ -715,13 +724,52 @@ function ActorMessageItem({
     />
   ) : null;
 
+  /* Continuation rail — occupies the avatar column's exact WIDTH (`w-8`)
+     so the body lands on the same text baseline as the group head's, but
+     only ONE body line of HEIGHT: a taller rail would pad the row back out
+     and undo the tightening that makes a run read as one block. The line box
+     is taken off the same Appearance token `.markdown-body` uses (see
+     `[data-message-continuation-rail]` in chrome.css), so it still matches the
+     body's first line at any font-size slider value.
+
+     It carries THIS row's own clock time, revealed on row hover. An own
+     right-aligned message shows it too, beside the bubble: alignment and the
+     bubble already say who wrote it, so it has no avatar or byline. Driven by
+     the row's `hover` state rather than a `group-hover:` variant — Tailwind's
+     variant ties with the base opacity class and loses in the compiled sheet.
+     Only opacity animates, so the time stays in the a11y tree throughout. */
+  const hoverTime = (
+    <time
+      data-message-continuation-rail
+      dateTime={new Date(message.created_at).toISOString()}
+      title={timeTooltip}
+      className={
+        // Either side, the time hugs the text it labels; beside a bubble it
+        // drops by the bubble's padding to sit on its first line.
+        "w-8 shrink-0 select-none text-right text-(length:--text-badge) text-text-muted transition-opacity " +
+        (alignRight && bodyNode ? "pt-2 " : "") +
+        (hover ? "opacity-100" : "opacity-0")
+      }
+    >
+      {continuationTimeLabel}
+    </time>
+  );
+
   const row = (
     <div
       id={`msg-${message.id}`}
       data-message-row
       data-search-active={searchActive || undefined}
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      onPointerEnter={(event) => {
+        if (event.pointerType === "mouse") {
+          setHover(true);
+        }
+      }}
+      onPointerLeave={(event) => {
+        if (event.pointerType === "mouse") {
+          setHover(false);
+        }
+      }}
       onClickCapture={
         // shiki `0eolIYXZmVVYAjrM`: when MessageList is in selection
         // mode, clicking anywhere on the row toggles selection — not
@@ -768,35 +816,8 @@ function ActorMessageItem({
       {selectionMode && committed ? (
         <SelectionCheckbox checked={selected} onChange={() => onToggleSelected?.(message)} />
       ) : null}
-      {continuesPrevious ? (
-        /* Continuation rail — occupies the avatar column's exact WIDTH (`w-8`)
-           so the body lands on the same text baseline as the group head's, but
-           only ONE body line of HEIGHT: a taller rail would pad the row back
-           out and undo the tightening that makes a run read as one block. The
-           line box is taken off the same Appearance token `.markdown-body`
-           uses (see `[data-message-continuation-rail]` in chrome.css), so it
-           still matches the body's first line at any font-size slider value.
-
-           It carries THIS row's own clock time, revealed on row hover: the
-           time is never lost to grouping, it just stops competing for
-           attention on every line. Driven by the row's `hover` state rather
-           than a `group-hover:` variant — same reason as the action controls
-           below, Tailwind's variant ties with the base opacity class and loses
-           in the compiled sheet. Only opacity animates, so the time stays in
-           the a11y tree throughout rather than being `aria-hidden` while
-           invisible. */
-        <time
-          data-message-continuation-rail
-          dateTime={new Date(message.created_at).toISOString()}
-          title={timeTooltip}
-          className={
-            "w-8 shrink-0 select-none text-(length:--text-badge) text-text-muted transition-opacity " +
-            (alignRight ? "text-left " : "text-right ") +
-            (hover ? "opacity-100" : "opacity-0")
-          }
-        >
-          {continuationTimeLabel}
-        </time>
+      {alignRight ? null : continuesPrevious ? (
+        hoverTime
       ) : (
         <Avatar
           presentation={presentation}
@@ -831,15 +852,21 @@ function ActorMessageItem({
         // there stays as wide as its code. `badgeHeadsPreview` remains that
         // side's one exception: a root heading a reply cluster fills the cap so
         // every root in the cluster reads at one width.
+        //
+        // The own side also stops short of the other side's text edge: a row
+        // spends avatar + gap (2.75rem) on its leading side, so leaving that
+        // twice keeps an own bubble from starting left of where others' text
+        // starts. 85% still binds on wide panes; this binds on a phone.
         columnClassName={
-          "min-w-0 max-w-[85%]" + (!alignRight || badgeHeadsPreview ? " w-full" : "")
+          (alignRight ? "min-w-0 max-w-[min(85%,calc(100%-5.5rem))]" : "min-w-0 max-w-[85%]") +
+          (!alignRight || badgeHeadsPreview ? " w-full" : "")
         }
         /* A continuation row states neither author nor time in the content
            column: the group head already named the author, and this row's own
            time sits in the hover rail beside it. Both null ⇒ MessageRowContent
            drops the whole header element (#task:1737). */
-        author={continuesPrevious ? null : authorNode}
-        timestamp={continuesPrevious ? null : timestampNode}
+        author={continuesPrevious || alignRight ? null : authorNode}
+        timestamp={continuesPrevious || alignRight ? null : timestampNode}
         taskTag={taskTag}
         body={bodyNode}
         attachments={attachmentsNode}
@@ -847,6 +874,9 @@ function ActorMessageItem({
         trailing={trailingNode}
         threadPreview={threadPreviewNode}
       />
+      {/* Own messages sit on the right edge; their time shows on the bubble's
+          leading side, where a reversed row puts what follows the column. */}
+      {alignRight ? hoverTime : null}
 
       {/* Frame-corner action controls (Save + Thread) — absolutely
           pinned to the top-right of the framed message row (mirrored
@@ -907,8 +937,8 @@ function ActorMessageItem({
               trigger={
                 <button
                   type="button"
-                  title="React"
-                  aria-label="React"
+                  title={t("messages.react")}
+                  aria-label={t("messages.react")}
                   className="flex items-center rounded-sm text-text-muted transition-colors hover:text-text-primary focus-outline"
                 >
                   <AddReactionIcon className="size-3.5" />
@@ -919,7 +949,7 @@ function ActorMessageItem({
           {onStartThread && threadReplyCount === undefined && canParticipate ? (
             <ActionButton
               icon={<ThreadIcon className="size-3.5" />}
-              label="Thread"
+              label={t("messages.thread2")}
               onClick={() => onStartThread(message)}
               alwaysVisible
               hovered={hover}
@@ -928,7 +958,7 @@ function ActorMessageItem({
           {onSave ? (
             <ActionButton
               icon={<BookmarkIcon className={"size-3.5 " + (saved ? "fill-current" : "")} />}
-              label={saved ? "Saved" : "Save"}
+              label={saved ? t("messages.saved") : t("common.save")}
               active={saved}
               onClick={() => onSave(message)}
               alwaysVisible
@@ -949,6 +979,14 @@ function ActorMessageItem({
       onToggleSave={committed && onSave ? () => onSave(message) : undefined}
       onShare={committed && onShare ? () => onShare(message) : undefined}
       onUnfollowThread={committed && onUnfollowThread ? () => onUnfollowThread(message) : undefined}
+      onReact={
+        committed && canReact
+          ? (emoji) => toggleReaction.mutate({ target: reactionTarget, emoji, remove: false })
+          : undefined
+      }
+      onReplyInThread={
+        committed && onStartThread && canParticipate ? () => onStartThread(message) : undefined
+      }
     />
   );
 }
@@ -1002,7 +1040,7 @@ function Avatar({
             event.preventDefault();
             onNavigateAgent(liveAgent.id);
           }}
-          className="mt-0.5 rounded-none transition-[filter] duration-100 hover:brightness-90 focus-outline"
+          className="mt-0.5 rounded-(--avatar-radius) transition-[filter] duration-100 hover:brightness-90 focus-outline"
         >
           {avatar}
         </button>
@@ -1024,7 +1062,7 @@ function Avatar({
             event.preventDefault();
             onNavigateHuman(liveHuman.id);
           }}
-          className="mt-0.5 rounded-none transition-[filter] duration-100 hover:brightness-90 focus-outline"
+          className="mt-0.5 rounded-(--avatar-radius) transition-[filter] duration-100 hover:brightness-90 focus-outline"
         >
           {avatar}
         </button>
@@ -1187,7 +1225,7 @@ function SelectionCheckbox({
       type="button"
       role="checkbox"
       aria-checked={checked}
-      aria-label={checked ? "Deselect message" : "Select message"}
+      aria-label={checked ? t("messages.deselectMessage") : t("messages.selectMessage")}
       onClick={onChange}
       className={
         "mt-1.5 inline-flex size-4 shrink-0 items-center justify-center rounded-(--control-radius) border transition-colors focus-outline " +

@@ -12,6 +12,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
     "typecheck": "tsc --noEmit",
     "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist/cli.js --minify=${SILVERHAND_MINIFY:-false} --banner:js='import{createRequire}from\"node:module\";const require=createRequire(import.meta.url);'",
     "start": "tsx src/cli.ts",

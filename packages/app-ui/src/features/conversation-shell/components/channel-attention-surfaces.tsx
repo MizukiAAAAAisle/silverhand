@@ -14,6 +14,7 @@ import {
   useWorkspaceAttentionPreference,
 } from "@/features/attention/hooks";
 import { resolveWorkspaceMuteToggle } from "@/features/attention/attention-mode";
+import { t } from "@/lib/i18n";
 
 /**
  * The context-menu surfaces of the two Attention write aggregates (#task:1227
@@ -29,19 +30,19 @@ import { resolveWorkspaceMuteToggle } from "@/features/attention/attention-mode"
  * The internal vocabulary (eligibility / ambient / tier / suppressor) never
  * surfaces; the user sees only the three labels below (§3 / §13.5).
  */
-export const ATTENTION_OPTIONS: {
+export const attentionOptions = (): {
   mode: ChannelAttentionMode;
   label: string;
   Icon: IconComponent;
-}[] = [
-  { mode: "all", label: "All messages", Icon: BellRingIcon },
-  { mode: "mentions", label: "Mentions only", Icon: BellPlusIcon },
-  { mode: "mute", label: "Mute", Icon: BellOffIcon },
+}[] => [
+  { mode: "all", label: t("conversationShell.allMessages"), Icon: BellRingIcon },
+  { mode: "mentions", label: t("conversationShell.mentionsOnly"), Icon: BellPlusIcon },
+  { mode: "mute", label: t("conversationShell.mute"), Icon: BellOffIcon },
 ];
 
 /** The glyph for a channel's current tier; the plain bell before it is known. */
 export function attentionIcon(mode: ChannelAttentionMode | undefined): IconComponent {
-  return ATTENTION_OPTIONS.find((option) => option.mode === mode)?.Icon ?? BellIcon;
+  return attentionOptions().find((option) => option.mode === mode)?.Icon ?? BellIcon;
 }
 
 /**
@@ -78,7 +79,7 @@ export function ChannelAttentionMenuItems({
 
   return (
     <>
-      {ATTENTION_OPTIONS.map((o) => (
+      {attentionOptions().map((o) => (
         <AppContextMenuItem
           key={o.mode}
           icon={<o.Icon className="size-3.5" />}
@@ -97,7 +98,7 @@ export function ChannelAttentionMenuItems({
               checked row above. Not an action and not a second control — the
               suppressor is flipped on the workspace, which is where it applies. */}
           <AppContextMenuItem icon={null} disabled>
-            Muted by project
+            {t("conversationShell.mutedByProject")}
           </AppContextMenuItem>
         </>
       ) : null}

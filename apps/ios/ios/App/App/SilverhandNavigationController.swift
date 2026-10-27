@@ -17,8 +17,11 @@ enum NavigationItemStyle {
 //   header gets the navigation bar and a tab strip under it (`PageBar`);
 // - compact on iPhone Duo: the tab bar stands on a side edge as the vertical
 //   bar, and takes the page's Back and header actions (`PageBar`);
-// - wide (iPad, open iPhone Duo): no tab bar or vertical bar; the navigation
-//   bar is the window titlebar (`Titlebar`) and the page shows its own rail.
+// - wide on iPad: no tab bar; the navigation bar is the window titlebar
+//   (`Titlebar`) and the page shows its own rail;
+// - wide on an open iPhone Duo: the vertical bar stays in place of the rail,
+//   and takes the titlebar's search and sidebar toggle above its tabs; there
+//   is no titlebar row.
 //
 // When the page on screen changes, its bars cross-fade as the page beneath
 // them slides.
@@ -29,8 +32,12 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   let content = SilverhandViewController()
   let titlebar = Titlebar()
   let pageBar = PageBar()
-  let composer = ComposerView()
+  /// One per pane showing a conversation, by draft key.
+  private(set) var composers: [String: ComposerView] = [:]
+  var onComposerEvent: (([String: Any]) -> Void)?
+  private var composerTopLimit: CGFloat = 0
   let banner = BannerView()
+  let selectionBar = SelectionBarView()
   var onIntent: (([String: Any]) -> Void)?
 
   // Shared navigation state, as last synced from the page.
@@ -70,38 +77,28 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     tabBar.standardAppearance = appearance
     tabBar.scrollEdgeAppearance = appearance
-    let titles = ["Chats", "Activity", "Tasks", "Me"]
+    // Asset names; the visible titles come from `NativeCopy`.
+    let glyphs = ["Chats", "Activity", "Tasks", "Me"]
+    let labels = NativeCopy.tabTitles
     // Each tab is a navigation stack of one page, whose navigation bar
     // carries the page's bars. Pages are pushed and popped in the web view.
-    viewControllers = titles.enumerated().map { index, title in
+    viewControllers = glyphs.enumerated().map { index, glyph in
       let stack = UINavigationController(rootViewController: PageHost())
       stack.setNavigationBarHidden(true, animated: false)
       stack.navigationBar.prefersLargeTitles = true
       stack.interactivePopGestureRecognizer?.isEnabled = false
       if #available(iOS 26.0, *) { stack.interactiveContentPopGestureRecognizer?.isEnabled = false }
       stack.tabBarItem = UITabBarItem(
-        title: title, image: UIImage(named: "Navigation" + title),
-        selectedImage: UIImage(named: "Navigation" + title + "Selected"))
+        title: labels[index], image: UIImage(named: "Navigation" + glyph),
+        selectedImage: UIImage(named: "Navigation" + glyph + "Selected"))
       stack.tabBarItem.tag = index
       return stack
     }
     if let first = page(0) { attachContent(to: first) }
     hideBar(true, animated: false)
-    if #available(iOS 27.1, *) {
-      registerForTraitChanges([UITraitHorizontalSizeClass.self]) { (self: Self, _) in
-        self.setNeedsUpdateOfVerticalBarConfiguration()
-      }
-    }
   }
 
   // MARK: Bars
-
-  // A wide window shows the wide layout, whose titlebar and navigation rail
-  // stand in for the vertical bar, as Safari does on an open iPhone Duo.
-  @available(iOS 27.1, *)
-  override var preferredVerticalBarBehavior: UIVerticalBarBehavior {
-    traitCollection.horizontalSizeClass == .regular ? .disabled : .automatic
-  }
 
   @available(iOS 27.1, *)
   override var childForPreferredVerticalBarBehavior: UIViewController? { nil }
@@ -136,7 +133,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       if !session.isEmpty { hideBar(!visible || blocked, animated: false) }
     }
     applyBars()
-    composer.publishMetrics()
+    for composer in composers.values { composer.publishMetrics() }
   }
 
   enum Bars: Equatable {
@@ -214,7 +211,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// the swipe with the bars back as they were.
   func setBackProgress(_ progress: CGFloat?) {
     guard let stack = selectedViewController as? UINavigationController else { return }
-    composer.setBackProgress(progress)
+    for composer in composers.values { composer.setBackProgress(progress) }
+    selectionBar.setBackProgress(progress)
     guard let progress else {
       endSwipe()
       return
@@ -269,7 +267,11 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   private func publishBarMetrics(in stack: UINavigationController) {
     let top = view.safeAreaInsets.top
     let bottom: CGFloat
-    if verticalBarEdge != nil {
+    if verticalBarEdge != nil, titlebar.state != nil {
+      // The panes' own 48pt headers clear the display's corners by their own
+      // padding, so they need only a small gap above.
+      bottom = view.safeAreaInsets.top + 10
+    } else if verticalBarEdge != nil {
       bottom = verticalBarTop + PageAccessory.titleHeight
     } else if !stack.isNavigationBarHidden {
       bottom = stack.navigationBar.frame.maxY
@@ -277,8 +279,10 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     } else {
       bottom = top + navigationBarHeight
     }
-    content.publishBarMetrics(bottom: bottom, tabs: PageAccessory.tabsHeight)
-    composer.topLimit = bottom + (pageBar.accessory.window == nil ? 0 : pageBar.accessory.height)
+    content.publishBarMetrics(
+      bottom: bottom, tabs: PageAccessory.tabsHeight, vertical: verticalBarEdge != nil)
+    composerTopLimit = bottom + (pageBar.accessory.window == nil ? 0 : pageBar.accessory.height)
+    for composer in composers.values { composer.topLimit = composerTopLimit }
   }
 
   /// Draws `bars` into the page's navigation item. A page's bar keeps what
@@ -298,7 +302,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     if #available(iOS 26.0, *) { item.subtitle = nil }
     item.largeTitleDisplayMode = .never
     if case .titlebar = bars {
-      titlebar.apply(to: item, width: view.bounds.width, enabled: !blocked)
+      titlebar.apply(
+        to: item, width: view.bounds.width, vertical: verticalBarEdge != nil, enabled: !blocked)
     }
   }
 
@@ -345,7 +350,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   /// The wide layout's dark window frame darkens the navigation bars alone.
   private func applyChromeStyle() {
     var dark = darkTheme
-    if case .titlebar(let state) = bars { dark = dark || state.dark }
+    // Beside the vertical bar the page is one canvas, without the dark frame.
+    if case .titlebar(let state) = bars, verticalBarEdge == nil { dark = dark || state.dark }
     if let applied = appliedStyle, applied == (darkTheme, dark) { return }
     appliedStyle = (darkTheme, dark)
     overrideUserInterfaceStyle = darkTheme ? .dark : .light
@@ -385,7 +391,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       presentedViewController?.dismiss(animated: false)
       banner.dismiss()
     }
-    composer.setBlocked(blocked)
+    for composer in composers.values { composer.setBlocked(blocked) }
+    selectionBar.isHidden = blocked
     if let index = names.firstIndex(of: call.getString("tab") ?? ""), let host = page(index) {
       selectedIndex = index
       attachContent(to: host)
@@ -428,18 +435,16 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
         else { return }
         let scroller = self.mainScroller(in: root)
         host.setContentScrollView(self.visible ? scroller : nil, for: .bottom)
-        // A declared header's bar and tab strip dissolve the page's content
-        // as it scrolls beneath them. A bar of glass capsules alone (its
-        // title one too), over a page's own backdrop, or a Tab root's large
+        // A declared header's bar dissolves the page's content as it scrolls
+        // beneath it; the view tabs under the bar stay their own capsules,
+        // outside the effect. A page's own backdrop or a Tab root's large
         // title lets the page show through instead, under the page's own
         // wash. The wide layout's titlebar has its own row above the page,
         // so nothing scrolls beneath it.
         let page = self.pageBar.state != nil
         let clear =
           self.titlebar.state != nil
-          || self.pageBar.state.map {
-            $0.titleIcon != nil || $0.backdrop || ($0.largeTitle && $0.back == nil)
-          } ?? false
+          || self.pageBar.state.map { $0.backdrop || ($0.largeTitle && $0.back == nil) } ?? false
         host.setContentScrollView(page ? scroller : nil, for: .top)
         for view in [root, scroller].compactMap({ $0 }) { view.topEdgeEffect.isHidden = clear }
         self.pageBar.accessory.observe(page ? scroller : nil)
@@ -471,11 +476,19 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     // The page resets its bars whenever its layout changes, while the
     // composer is a page's own and leaves with it; only a lost session takes
     // it with the bars.
-    composer.remove()
+    removeComposer(key: nil)
+    removeSelectionBar(key: nil)
     banner.dismiss()
   }
 
   // MARK: Tab items
+
+  /// Redraws tab titles after the page reports its language.
+  func applyLocale() {
+    for (stack, title) in zip(viewControllers ?? [], NativeCopy.tabTitles) {
+      stack.tabBarItem.title = title
+    }
+  }
 
   func badges(_ call: CAPPluginCall) {
     guard let owner = call.getString("session"), !invalidatedSessions.contains(owner) else {
@@ -561,10 +574,13 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     return tap
   }()
 
-  @objc private func pageTapped() { composer.endEditing() }
+  private var editingComposer: ComposerView? { composers.values.first { $0.isEditing } }
+
+  @objc private func pageTapped() { editingComposer?.endEditing() }
 
   func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
-    recognizer !== pageTap || composer.endsEditing(at: recognizer.location(in: view))
+    recognizer !== pageTap
+      || editingComposer?.endsEditing(at: recognizer.location(in: view)) == true
   }
 
   func gestureRecognizer(
@@ -584,8 +600,9 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
 
   @objc private func pageTouched(_ touch: UILongPressGestureRecognizer) {
     switch touch.state {
-    case .began: composer.holdFocus(true, at: touch.location(in: view))
-    case .ended, .cancelled, .failed: composer.holdFocus(false, at: .zero)
+    case .began: editingComposer?.holdFocus(true, at: touch.location(in: view))
+    case .ended, .cancelled, .failed:
+      for composer in composers.values { composer.holdFocus(false, at: .zero) }
     default: break
     }
   }
@@ -599,10 +616,54 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       web.addGestureRecognizer(pageTap)
       web.addGestureRecognizer(pageTouch)
     }
-    composer.presenter = self
+    // A screen-wide composer is the page's only one: a new draft replaces it.
+    if state.frame == nil {
+      for (key, other) in composers where key != state.key {
+        other.remove()
+        composers[key] = nil
+      }
+    }
+    let composer = composers[state.key] ?? makeComposer()
+    composers[state.key] = composer
     composer.install(in: view)
     composer.setBlocked(blocked)
+    composer.setSteppedAside(selectionBar.state != nil)
     composer.apply(state)
+  }
+
+  private func makeComposer() -> ComposerView {
+    let composer = ComposerView()
+    composer.onEvent = { [weak self] event in self?.onComposerEvent?(event) }
+    composer.presenter = self
+    composer.topLimit = composerTopLimit
+    return composer
+  }
+
+  /// Removes the composer for draft `key`; without a key, every one.
+  func removeComposer(key: String?) {
+    for (candidate, composer) in composers where key == nil || candidate == key {
+      composer.remove()
+      composers[candidate] = nil
+    }
+  }
+
+  func setComposerText(key: String, text: String, caret: Int, focus: Bool) {
+    composers[key]?.setText(key: key, text: text, caret: caret, focus: focus)
+  }
+
+  func showSelectionBar(_ state: SelectionBarState) {
+    selectionBar.install(in: view)
+    selectionBar.isHidden = blocked
+    selectionBar.apply(state)
+    for composer in composers.values { composer.setSteppedAside(true) }
+  }
+
+  /// Removes the selection bar if it shows pane `key`, or whatever it shows
+  /// without one; the composer comes back.
+  func removeSelectionBar(key: String?) {
+    guard selectionBar.state != nil, key == nil || selectionBar.state?.key == key else { return }
+    selectionBar.remove()
+    for composer in composers.values { composer.setSteppedAside(false) }
   }
 
   func tabBarController(

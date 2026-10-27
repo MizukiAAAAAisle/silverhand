@@ -12,6 +12,7 @@ import { ReactionChipRow } from "./reaction-chip-row";
 import type { ChannelReference } from "./channel-ref";
 import type { WorkspaceChannelReference } from "./conversation-ref";
 import type { StaticTaskRefSummary } from "./task-ref";
+import { t } from "@/lib/i18n";
 
 /**
  * Static, NON-interactive renderer for the image-export pipeline.
@@ -259,7 +260,7 @@ function ScreenshotRow({
           continuesPrevious ? null : safePresentation ? (
             <AuthorName presentation={safePresentation} className="font-bold text-text-primary" />
           ) : (
-            <span className="font-bold text-text-primary">system</span>
+            <span className="font-bold text-text-primary">{t("messages.system")}</span>
           )
         }
         timestamp={

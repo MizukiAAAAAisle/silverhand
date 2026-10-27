@@ -9,6 +9,7 @@ import {
   TaskIcon,
 } from "@/icons";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { t } from "@/lib/i18n";
 
 /**
  * Top-level app sections. Outer to the channels/sessions sidebars —
@@ -42,6 +43,12 @@ interface NavRailProps {
   dots?: Partial<Record<AppSection, boolean>>;
   /** Shown above Settings while an app update awaits the user. */
   update?: { label: string; onClick: () => void } | null;
+  /** Hover of a section button; drives the hidden sidebar's peek. */
+  onHoverSection?: (section: AppSection) => void;
+  onHoverEnd?: () => void;
+  /** A sidebar is peeking: it already names the section, and the shortcut
+   *  tooltip would sit on top of its rows. */
+  peeking?: boolean;
 }
 
 interface NavItem {
@@ -54,19 +61,24 @@ interface NavItem {
   shortcut: number;
 }
 
-const ITEMS: NavItem[] = [
-  { id: "chat", label: "Chat", icon: <ChatsIcon className="size-[18px]" />, shortcut: 1 },
+const navItems = (): NavItem[] => [
+  { id: "chat", label: t("ui.chat"), icon: <ChatsIcon className="size-[18px]" />, shortcut: 1 },
   {
     id: "activity",
-    label: "Activity",
+    label: t("ui.activity"),
     icon: <ActivityIcon className="size-[18px]" />,
     shortcut: 2,
   },
-  { id: "tasks", label: "Tasks", icon: <TaskIcon className="size-[18px]" />, shortcut: 3 },
-  { id: "members", label: "Members", icon: <MembersIcon className="size-[18px]" />, shortcut: 4 },
+  { id: "tasks", label: t("ui.tasks"), icon: <TaskIcon className="size-[18px]" />, shortcut: 3 },
+  {
+    id: "members",
+    label: t("ui.members"),
+    icon: <MembersIcon className="size-[18px]" />,
+    shortcut: 4,
+  },
   {
     id: "computers",
-    label: "Computers",
+    label: t("ui.computers"),
     icon: <ComputerIcon className="size-[18px]" />,
     shortcut: 5,
   },
@@ -97,25 +109,43 @@ export function deriveNavRailDots(input: {
   };
 }
 
-export function NavRail({ current, onChange, dots, update }: NavRailProps): JSX.Element {
+export function NavRail({
+  current,
+  onChange,
+  dots,
+  update,
+  onHoverSection,
+  onHoverEnd,
+  peeking = false,
+}: NavRailProps): JSX.Element {
   const settingsSelected = current === "settings";
   return (
     <nav
-      aria-label="App sections"
+      aria-label={t("ui.appSections")}
+      onPointerLeave={(event) => {
+        if (event.pointerType !== "touch") {
+          onHoverEnd?.();
+        }
+      }}
       className="nav-rail flex h-full w-(--nav-rail-width) shrink-0 flex-col items-center gap-2"
     >
       <TooltipProvider>
-        {ITEMS.map((item) => {
+        {navItems().map((item) => {
           const selected = item.id === current;
           const hasDot = dots?.[item.id] === true;
           return (
-            <Tooltip key={item.id}>
+            <Tooltip key={item.id} open={peeking ? false : undefined}>
               <TooltipTrigger asChild>
                 <button
                   type="button"
                   aria-label={item.label}
                   aria-current={selected ? "page" : undefined}
                   onClick={() => onChange(item.id)}
+                  onPointerEnter={(event) => {
+                    if (event.pointerType !== "touch") {
+                      onHoverSection?.(item.id);
+                    }
+                  }}
                   className="nav-rail__item flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors"
                 >
                   {item.icon}
@@ -152,10 +182,15 @@ export function NavRail({ current, onChange, dots, update }: NavRailProps): JSX.
 
       <button
         type="button"
-        title="Settings"
-        aria-label="Settings"
+        title={t("ui.settings")}
+        aria-label={t("ui.settings")}
         aria-current={settingsSelected ? "page" : undefined}
         onClick={() => onChange("settings")}
+        onPointerEnter={(event) => {
+          if (event.pointerType !== "touch") {
+            onHoverSection?.("settings");
+          }
+        }}
         className={`nav-rail__item ${update ? "" : "mt-auto "}flex size-(--nav-rail-width) shrink-0 items-center justify-center transition-colors`}
       >
         <SettingsIcon className="size-[18px]" />

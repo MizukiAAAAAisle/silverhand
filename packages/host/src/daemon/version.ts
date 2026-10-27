@@ -1,8 +1,4 @@
-import {
-  HOST_PROTOCOL_VERSION,
-  KNOWN_CAPABILITIES_V1,
-  type HelloResult,
-} from '../protocol.js';
+import { HOST_PROTOCOL_VERSION, KNOWN_CAPABILITIES_V1, type HelloResult } from '../protocol.js';
 import { DEFAULT_DAEMON_IDENTITY, type DaemonIdentity } from './identity.js';
 
 declare const __SILVERHAND_DAEMON_VERSION__: string | undefined;
@@ -17,9 +13,7 @@ declare const __SILVERHAND_DAEMON_VERSION__: string | undefined;
  * dev label rather than a stale hand-written release number.
  */
 export const DAEMON_VERSION =
-  typeof __SILVERHAND_DAEMON_VERSION__ === 'string'
-    ? __SILVERHAND_DAEMON_VERSION__
-    : '0.0.0-dev';
+  typeof __SILVERHAND_DAEMON_VERSION__ === 'string' ? __SILVERHAND_DAEMON_VERSION__ : '0.0.0-dev';
 
 /**
  * Construct a `HelloResult` payload bound to a specific daemon

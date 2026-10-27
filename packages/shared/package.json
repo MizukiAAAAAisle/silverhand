@@ -21,6 +21,8 @@
     "./app-data-layout": "./src/app-data-layout.ts"
   },
   "scripts": {
+    "fmt": "oxfmt .",
+    "fmt:check": "oxfmt --check .",
     "generate:backend-admission": "node scripts/generate-backend-admission.mjs",
     "check:backend-admission": "node scripts/generate-backend-admission.mjs --check",
     "generate:daemon-admission": "node scripts/generate-daemon-admission.mjs",

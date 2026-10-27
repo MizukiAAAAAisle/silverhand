@@ -88,11 +88,7 @@ export async function indexAgentWorkspaces(
     // report it ONLY if it is a usable cwd on this computer right now.
     let bundleDir: string;
     try {
-      bundleDir = resolveAgentWorkspaceBundleDir(
-        params.agent_id,
-        workspaceId,
-        deps,
-      );
+      bundleDir = resolveAgentWorkspaceBundleDir(params.agent_id, workspaceId, deps);
     } catch (err) {
       // An unsafe id segment cannot form a bundle coordinate. Degrade this
       // entry to unresolved (→ agent_dir null); never fabricate a path. Any

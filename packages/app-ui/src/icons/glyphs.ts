@@ -19,6 +19,7 @@ import {
   CalendarClock,
   Camera,
   Check,
+  CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
@@ -48,6 +49,7 @@ import {
   Hourglass,
   IdCard,
   Inbox,
+  Languages,
   Info,
   Layers,
   Link2,
@@ -119,6 +121,7 @@ export const CameraIcon = icon("camera", Camera);
 export const UploadIcon = icon("upload", Upload);
 export const CancelledIcon = icon("cancelled", Ban);
 export const CheckIcon = icon("check", Check);
+export const CheckAllIcon = icon("check-all", CheckCheck);
 export const ChevronDownIcon = icon("chevron-down", ChevronDown);
 export const ChevronLeftIcon = icon("chevron-left", ChevronLeft);
 export const ChevronRightIcon = icon("chevron-right", ChevronRight);
@@ -336,6 +339,7 @@ export const FolderOpenIcon = icon("folder-open", [
 export const GeneralSettingsIcon = icon("general-settings", Settings2);
 export const GlobeIcon = icon("globe", Globe);
 export const HashIcon = icon("hash", Hash);
+export const LanguageIcon = icon("language", Languages);
 export const HistoryIcon = icon("history", RotateCcwClock);
 export const InboxIcon = icon("inbox", Inbox);
 export const InfoIcon = icon("info", Info);

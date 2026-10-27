@@ -111,16 +111,7 @@ export class GrokDriver implements Driver {
   readonly initPostProtocolMs = 60_000;
   private readonly acp = new AcpClient(new GrokAcpAdapter());
 
-  bindRuntimeVersion(version: string | null): void {
-    const match = version?.match(/^(\d+)\.(\d+)\.(\d+)(?:\b|$)/);
-    if (
-      !match ||
-      Number(match[1]) < 1 ||
-      (Number(match[1]) === 1 && Number(match[2]) === 0 && Number(match[3]) < 24)
-    ) {
-      throw new Error('Grok Build 1.0.24 or newer is required.');
-    }
-  }
+  readonly minimumVersion = '1.0.24';
 
   buildArgs(ctx: DriverSpawnContext): string[] {
     return ['agent', '--no-leader', 'stdio'];

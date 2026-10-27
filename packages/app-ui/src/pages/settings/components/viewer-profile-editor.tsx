@@ -15,6 +15,7 @@ import {
   useUploadAvatar,
   useViewerAvatarObjectUrl,
 } from "../../../features/session/hooks";
+import { t } from "@/lib/i18n";
 
 export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
   const update = useUpdateProfile();
@@ -85,13 +86,19 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
             onMake={() => setMakerOpen(true)}
             makeIcon={<AvatarMakerGlyph />}
             disabled={upload.isPending}
-            ariaLabel={hasAvatar ? "Change avatar" : "Add avatar"}
+            ariaLabel={
+              hasAvatar ? t("settings.profile.changeAvatar") : t("settings.profile.addAvatar")
+            }
             className="border border-border-subtle"
           >
             <span data-avatar-ground className="grid size-full place-items-center">
               {avatarObjectUrl ? (
                 // eslint-disable-next-line jsx-a11y/img-redundant-alt
-                <img src={avatarObjectUrl} alt="Your avatar" className="size-full object-cover" />
+                <img
+                  src={avatarObjectUrl}
+                  alt={t("settings.profile.yourAvatar")}
+                  className="size-full object-cover"
+                />
               ) : (
                 <UserIcon className="size-7 text-text-muted" />
               )}
@@ -129,7 +136,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
         className="flex flex-col gap-4 border-t border-border-subtle pt-5"
       >
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={nameFieldId}>Display Name</Label>
+          <Label htmlFor={nameFieldId}>{t("appShell.displayName")}</Label>
           <Input
             id={nameFieldId}
             value={nameValue}
@@ -155,7 +162,7 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
             disabled={!canSave}
           >
             {update.isPending ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
-            Save Profile
+            {t("settings.profile.save")}
           </Button>
           {saveError ? (
             <p role="alert" className="text-xs text-error">
@@ -176,18 +183,18 @@ export function ViewerProfileEditor({ user }: { user: UserDto }): JSX.Element {
 export function formatProfileSaveError(err: unknown): string {
   if (err instanceof ApiError) {
     if (err.kind === "backend_unreachable") {
-      return "Server unreachable. Check the connection and try again.";
+      return t("settings.profile.unreachable");
     }
     switch (err.status) {
       case 400:
-        return "This display name was rejected. Try a different one.";
+        return t("settings.profile.nameRejected");
       case 401:
-        return "Sign-in expired. Reload the app and try again.";
+        return t("settings.profile.signInExpired");
       default:
-        return `Failed to save profile (HTTP ${err.status}).`;
+        return t("settings.profile.saveFailedStatus", { status: err.status });
     }
   }
-  return "Failed to save profile.";
+  return t("settings.profile.saveFailed");
 }
 
 /**
@@ -200,28 +207,28 @@ export function formatAvatarMutationError(err: unknown): string {
     const code = parseErrorCode(err.body);
     switch (code) {
       case "avatar_too_large":
-        return "Avatar must be 5 MB or smaller.";
+        return t("settings.profile.avatarTooLarge");
       case "avatar_unsupported_type":
-        return "Avatar must be a PNG, JPEG, GIF, or WEBP image.";
+        return t("settings.profile.avatarType");
       case "avatar_missing":
-        return "Avatar file is empty.";
+        return t("settings.profile.avatarEmpty");
       case "avatar_storage_failed":
-        return "Storage backend failed to write the avatar. Try again.";
+        return t("settings.profile.avatarStorage");
       default:
         break;
     }
     switch (err.status) {
       case 401:
-        return "Sign-in expired. Reload the app and try again.";
+        return t("settings.profile.signInExpired");
       case 403:
-        return "You no longer have permission to edit this profile.";
+        return t("settings.profile.noPermission");
       case 404:
-        return "This profile no longer exists.";
+        return t("settings.profile.gone");
       default:
-        return `Failed to update avatar (HTTP ${err.status}).`;
+        return t("settings.profile.avatarFailedStatus", { status: err.status });
     }
   }
-  return "Failed to update avatar.";
+  return t("settings.profile.avatarFailed");
 }
 
 function parseErrorCode(body: string): string | null {

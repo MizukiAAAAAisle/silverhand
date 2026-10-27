@@ -25,6 +25,7 @@ import {
 } from "@/features/session/hooks";
 import { useConversationMembers } from "@/features/conversations/use-conversation-members";
 import { useNav } from "@/router";
+import { t } from "@/lib/i18n";
 
 // ── Member strip ────────────────────────────────────────────────────────
 
@@ -157,7 +158,7 @@ export function MemberStrip({
                 aria-label={presence ? `@${agent.name}, ${presence.a11yLabel}` : `@${agent.name}`}
                 data-member-chip="agent"
                 data-member-id={member.agent_id}
-                className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle bg-bg-floating p-0 transition-transform hover:scale-105 focus-outline"
+                className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-(--avatar-radius) border border-border-subtle bg-bg-floating p-0 transition-transform hover:scale-105 focus-outline"
               >
                 <AgentAvatar
                   runtime={agent.runtime}
@@ -238,11 +239,11 @@ function HumanMemberChip({
         // dot below is positioned half-outside the bottom-right corner
         // (translate-x/y-1/2), and clipping the button would cut it off — the
         // exact bug where the human online badge was occluded but the agent's
-        // (whose button never clipped) showed fine. The square `rounded-none`
+        // (whose button never clipped) showed fine. The avatar-radius
         // img already fills the box exactly via object-cover, so nothing needs
         // clipping. Mirrors the agent chip above.
         data-avatar-ground
-        className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle p-0 transition-transform hover:scale-105 focus-outline"
+        className="relative inline-flex size-6 shrink-0 items-center justify-center rounded-(--avatar-radius) border border-border-subtle p-0 transition-transform hover:scale-105 focus-outline"
       >
         {avatarObjectUrl ? (
           // eslint-disable-next-line jsx-a11y/img-redundant-alt
@@ -288,12 +289,12 @@ function MemberOverflowChip({
     <button
       type="button"
       onClick={onOpenMembers}
-      aria-label={`+${overflow.length} more members`}
-      title="Members"
+      aria-label={t("conversationShell.moreMembers", { count: overflow.length })}
+      title={t("conversationShell.members")}
       data-member-chip="overflow"
       data-member-total={totalVisible}
       data-avatar-ground
-      className="inline-flex size-6 shrink-0 items-center justify-center rounded-none border border-border-subtle p-0 text-(length:--text-badge) font-semibold text-text-muted transition-transform hover:scale-105 focus-outline"
+      className="inline-flex size-6 shrink-0 items-center justify-center rounded-(--avatar-radius) border border-border-subtle p-0 text-(length:--text-badge) font-semibold text-text-muted transition-transform hover:scale-105 focus-outline"
     >
       +{overflow.length}
     </button>

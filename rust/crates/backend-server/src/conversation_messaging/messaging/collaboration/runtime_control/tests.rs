@@ -14,7 +14,8 @@ use silverhand_backend_core::{
     conversation_messaging::messaging::collaboration::{
         ClearSessionOutcome, ClearSessionProviderRefusal, CliSessionId, HardStopRuntimeOutcome,
         HardStopRuntimeProviderRefusal, RuntimeControlPort, RuntimePlacementRefusal,
-        RuntimeSeatTarget, RuntimeStartTarget, StartRuntimeOutcome, StartRuntimeProviderRefusal,
+        RuntimeSeatTarget, RuntimeStartTarget, RuntimeUnavailable, RuntimeUnavailableReason,
+        StartRuntimeOutcome, StartRuntimeProviderRefusal,
     },
     foundation::identity::UserId,
 };
@@ -25,7 +26,7 @@ use tracing_subscriber::fmt::MakeWriter;
 
 use super::{CLEAR_SESSION_PATH, HARD_STOP_PATH, START_PATH, router};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum ProviderMode {
     Success,
     Placement(RuntimePlacementRefusal),
@@ -86,11 +87,11 @@ impl RuntimeControlPort for Provider {
         _target: &RuntimeStartTarget,
     ) -> Result<Result<StartRuntimeOutcome, StartRuntimeProviderRefusal>, Self::Error> {
         self.calls.lock().unwrap().push("start");
-        match self.mode {
+        match &self.mode {
             ProviderMode::Placement(refusal) => {
-                Ok(Err(StartRuntimeProviderRefusal::Placement(refusal)))
+                Ok(Err(StartRuntimeProviderRefusal::Placement(*refusal)))
             }
-            ProviderMode::StartRefusal(refusal) => Ok(Err(refusal)),
+            ProviderMode::StartRefusal(refusal) => Ok(Err(refusal.clone())),
             _ => Ok(Ok(StartRuntimeOutcome)),
         }
     }
@@ -212,6 +213,18 @@ fn provider_mode(kind: &str) -> ProviderMode {
         "start_shutting_down" => {
             ProviderMode::StartRefusal(StartRuntimeProviderRefusal::ShuttingDown)
         }
+        "start_runtime_binary_missing" => ProviderMode::StartRefusal(
+            StartRuntimeProviderRefusal::RuntimeUnavailable(RuntimeUnavailable {
+                reason: RuntimeUnavailableReason::BinaryMissing,
+                message: "Pi is not installed on this computer.".into(),
+            }),
+        ),
+        "start_runtime_version_unsupported" => ProviderMode::StartRefusal(
+            StartRuntimeProviderRefusal::RuntimeUnavailable(RuntimeUnavailable {
+                reason: RuntimeUnavailableReason::VersionUnsupported,
+                message: "Grok Build 1.0.23 is not supported. Update to 1.0.24 or newer.".into(),
+            }),
+        ),
         "clear_timeout" => ProviderMode::ClearRefusal(ClearSessionProviderRefusal::Timeout),
         "clear_in_progress" => ProviderMode::ClearRefusal(ClearSessionProviderRefusal::InProgress),
         unknown => panic!("fixture names an unknown provider mode: {unknown}"),

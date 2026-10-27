@@ -17,10 +17,11 @@ use axum::{
 use serde::Serialize;
 use silverhand_backend_core::{
     foundation::identity::UserId,
-    viewer_read_model::favorites::{FavoriteRow, FavoritesReadPort},
+    viewer_read_model::favorites::{DirectPairFavoriteRow, FavoriteRow, FavoritesReadPort},
 };
 
 use super::wire::ViewerSortStateDto;
+use crate::conversation_messaging::direct_pairs::counterpart_dto_value;
 
 pub const FAVORITES_PATH: &str = "/api/favorites";
 
@@ -67,6 +68,11 @@ where
                     .into_iter()
                     .map(FavoriteRowDto::from)
                     .collect(),
+                direct_pairs: favorites
+                    .direct_pairs
+                    .iter()
+                    .map(DirectPairFavoriteRowDto::from)
+                    .collect(),
                 viewer_sort: ViewerSortStateDto::from(favorites.viewer_sort),
             }),
         )
@@ -87,6 +93,7 @@ where
 #[derive(Serialize)]
 struct ListFavoritesBody {
     items: Vec<FavoriteRowDto>,
+    direct_pairs: Vec<DirectPairFavoriteRowDto>,
     viewer_sort: ViewerSortStateDto,
 }
 
@@ -120,6 +127,30 @@ impl From<FavoriteRow> for FavoriteRowDto {
             // concrete count (0 when caught up).
             unread_count: Some(row.unread_count),
             visibility: row.visibility.as_str(),
+        }
+    }
+}
+
+/// `DirectPairFavoriteRowDto`.
+#[derive(Serialize)]
+struct DirectPairFavoriteRowDto {
+    favorite_key: String,
+    conversation_id: String,
+    counterpart: serde_json::Value,
+    starred_at: i64,
+    created_at: i64,
+    unread_count: i64,
+}
+
+impl From<&DirectPairFavoriteRow> for DirectPairFavoriteRowDto {
+    fn from(row: &DirectPairFavoriteRow) -> Self {
+        Self {
+            favorite_key: row.favorite_key.clone(),
+            conversation_id: row.entity_id.as_str().to_owned(),
+            counterpart: counterpart_dto_value(&row.counterpart),
+            starred_at: row.starred_at,
+            created_at: row.created_at,
+            unread_count: row.unread_count,
         }
     }
 }

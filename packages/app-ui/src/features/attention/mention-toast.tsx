@@ -11,6 +11,7 @@ import { loadAvatarBlobUrl } from "@/features/identity/avatar-blob-cache";
 import { AuthorAvatarView, AuthorName } from "@/features/messages/components/author-avatar-view";
 import { presentAuthor } from "@/features/messages/model/author-presentation";
 import { useAuthorAvatarObjectUrls } from "@/features/messages/hooks/author-avatar-hooks";
+import { t } from "@/lib/i18n";
 
 /** A mention, read off a notification's payload and the sender it resolves to. */
 export interface MentionToastContent {
@@ -97,7 +98,7 @@ function MentionToast({
             )}
             {conversationTitle ? (
               <span className="min-w-0 shrink truncate text-text-muted">
-                in #{conversationTitle}
+                {t("attention.inChannel", { channel: conversationTitle })}
               </span>
             ) : null}
           </span>
@@ -110,7 +111,7 @@ function MentionToast({
       </button>
       <button
         type="button"
-        aria-label="Dismiss"
+        aria-label={t("attention.dismiss")}
         onClick={onDismiss}
         className="absolute -top-1.5 -left-1.5 flex size-5 items-center justify-center rounded-full border border-border bg-bg-floating text-text-muted opacity-0 transition-opacity group-hover:opacity-100 hover:text-text-primary focus-visible:opacity-100"
       >

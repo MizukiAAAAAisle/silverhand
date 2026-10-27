@@ -1,9 +1,13 @@
-import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
 import {
-  defaultAppRoot,
-  resolveStandaloneDaemonPaths,
-} from '@silverhand/shared/app-data-layout';
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname } from 'node:path';
+import { defaultAppRoot, resolveStandaloneDaemonPaths } from '@silverhand/shared/app-data-layout';
 
 import { HelloResultSchema, type HelloResult } from '../protocol.js';
 

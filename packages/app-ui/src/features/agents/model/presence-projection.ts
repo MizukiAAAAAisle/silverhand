@@ -1,6 +1,7 @@
 import type { ConversationAgentStatus } from "@silverhand/shared";
 import type { GlobalPresence } from "../hooks/hooks";
 import type { AgentSlotScopeKind, MemberRuntimeStatus } from "./member-runtime-status";
+import { t } from "@/lib/i18n";
 
 /**
  * THE ONE PLACE A PRESENCE NATIVE STATE BECOMES WORDS (#task:2128).
@@ -102,11 +103,11 @@ function display(
 function projectGlobalPresence(presence: GlobalPresence): PresenceDisplay {
   switch (presence) {
     case "online":
-      return display("Online", "online", "This agent is online.");
+      return display(t("agents.online"), "online", t("agents.thisAgentIsOnline"));
     case "away":
-      return display("Away", "away", "This agent is away.");
+      return display(t("agents.away"), "away", t("agents.thisAgentIsAway"));
     case "offline":
-      return display("Offline", "offline", "This agent is offline.");
+      return display(t("agents.offline"), "offline", t("agents.thisAgentIsOffline"));
   }
 }
 
@@ -115,13 +116,13 @@ function projectConversationPresence(runtime: MemberRuntimeStatus): PresenceDisp
     case "unknown":
       return null;
     case "not_here":
-      return display("Not here", "membership", "Not a member of this channel.");
+      return display(t("agents.notHere"), "membership", t("agents.notAMemberOf"));
     case "no_session":
       // A member with no slot row: in this channel there is nothing running, so
       // the honest IM word is Offline — not Away, which needs a live-but-idle
       // session. This is the deliberate split from #2123's code, where both this
       // and `session·idle` read `Idle` (@Alice #task:2128 baseline).
-      return display("Offline", "offline", "This channel has no live session.");
+      return display(t("agents.offline"), "offline", t("agents.thisChannelHasNo"));
     case "session":
       return projectSession(runtime.status, runtime.scope);
   }
@@ -133,18 +134,18 @@ function projectSession(
 ): PresenceDisplay {
   switch (status) {
     case "active":
-      return display("Online", "online", sessionSentence(scope, "is online"));
+      return display(t("agents.online"), "online", sessionSentence(scope, "online"));
     case "starting":
-      return display("Connecting…", "online", sessionSentence(scope, "is starting"), {
+      return display(t("agents.connecting"), "online", sessionSentence(scope, "starting"), {
         pulse: true,
       });
     case "idle":
-      return display("Away", "away", sessionSentence(scope, "is idle"));
+      return display(t("agents.away"), "away", sessionSentence(scope, "idle"));
     case "crashed":
       // Label folds into Offline (no fourth word), tone stays `failed`, and the
       // accessible name keeps the fault the word drops.
-      return display("Offline", "failed", sessionSentence(scope, "failed"), {
-        a11yLabel: "Offline — session failed",
+      return display(t("agents.offline"), "failed", sessionSentence(scope, "failed"), {
+        a11yLabel: t("agents.offlineSessionFailed"),
       });
   }
 }
@@ -158,11 +159,9 @@ function projectSession(
  * (`, shared across every channel,`) whose closing comma is sentence structure,
  * and a comma at the end of a string constant reads as a typo to the next reader.
  */
-function sessionSentence(scope: AgentSlotScopeKind, predicate: string): string {
-  switch (scope) {
-    case "conversation":
-      return `This channel's session ${predicate}.`;
-    case "agent":
-      return `This agent's one session, shared across every channel, ${predicate}.`;
-  }
+function sessionSentence(
+  scope: AgentSlotScopeKind,
+  state: "online" | "starting" | "idle" | "failed",
+): string {
+  return t(`agents.sessionState.${scope}.${state}`);
 }

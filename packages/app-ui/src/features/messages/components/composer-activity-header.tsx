@@ -22,6 +22,7 @@ import {
   activityStatusLabel,
   selectActiveRunStates,
 } from "../model/composer-activity";
+import { t } from "@/lib/i18n";
 
 // ── Time helpers ─────────────────────────────────────────────────────────
 
@@ -136,12 +137,13 @@ export function ComposerActivityHeader({
             type="button"
             onClick={() => setExpanded(false)}
             aria-expanded
-            aria-label="Collapse run details"
+            aria-label={t("messages.collapseRunDetails")}
             className="flex h-8 w-full min-w-0 items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-elevated/50"
           >
             <SpinnerIcon className="size-3 shrink-0 animate-spin text-accent" />
             <span className="font-medium text-text-secondary">
-              Running{active.length > 1 ? ` ${active.length} agents` : ""}
+              Running
+              {active.length > 1 ? ` ${active.length} agents` : ""}
             </span>
             <span className="min-w-0 flex-1" />
             <ChevronUpIcon className="size-3 shrink-0 text-text-muted/60" />
@@ -159,7 +161,7 @@ export function ComposerActivityHeader({
             }
           }}
           aria-expanded={false}
-          aria-label={`${subjectName} is running — expand run details`}
+          aria-label={t("messages.runningExpand", { name: subjectName })}
           title={`${subjectName}: ${snippet}`}
           className="flex h-8 w-full min-w-0 cursor-pointer items-center gap-2 px-3 text-xs text-text-secondary transition-colors hover:bg-bg-elevated/50"
         >
@@ -169,8 +171,8 @@ export function ComposerActivityHeader({
               e.stopPropagation();
               openAgentActivity(subject.agentId);
             }}
-            title={`Open ${subjectName}'s activity`}
-            aria-label={`Open ${subjectName}'s activity`}
+            title={t("messages.openActivity", { name: subjectName })}
+            aria-label={t("messages.openActivity", { name: subjectName })}
             className="shrink-0 cursor-pointer focus-outline"
           >
             <AgentAvatar
@@ -192,7 +194,7 @@ export function ComposerActivityHeader({
               e.stopPropagation();
               openAgentActivity(subject.agentId);
             }}
-            title={`Open ${subjectName}'s activity`}
+            title={t("messages.openActivity", { name: subjectName })}
             className="shrink-0 cursor-pointer font-medium text-accent outline-none focus-visible:underline"
           >
             {subjectName}
@@ -301,8 +303,8 @@ function ActivityDetailRow({
         <button
           type="button"
           onClick={() => onOpenActivity(state.agentId)}
-          title={`Open ${name}'s activity`}
-          aria-label={`Open ${name}'s activity`}
+          title={t("messages.openActivity", { name })}
+          aria-label={t("messages.openActivity", { name })}
           className="block shrink-0 cursor-pointer focus-outline"
         >
           <AgentAvatar
@@ -318,7 +320,7 @@ function ActivityDetailRow({
           <button
             type="button"
             onClick={() => onOpenActivity(state.agentId)}
-            title={`Open ${name}'s activity`}
+            title={t("messages.openActivity", { name })}
             className="shrink-0 cursor-pointer font-medium text-accent outline-none focus-visible:underline"
           >
             {name}

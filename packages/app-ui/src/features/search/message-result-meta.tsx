@@ -7,6 +7,7 @@ import { ChannelIcon } from "@/components/channel-icon";
 import { WorkspaceIcon } from "@/components/workspace-icon";
 import { AuthorAvatarView, AuthorName } from "@/features/messages/components/author-avatar-view";
 import { presentAuthor } from "@/features/messages/model/author-presentation";
+import { t } from "@/lib/i18n";
 
 /**
  * Shared message-result meta line: workspace icon + channel sticker + sender +
@@ -23,7 +24,7 @@ export function MessageResultMeta({
   humanAvatarUrls: Map<string, string | null>;
 }): JSX.Element {
   const presentation = result.message.author ? presentAuthor(result.message.author) : null;
-  const senderName = presentation?.label ?? "System";
+  const senderName = presentation?.label ?? t("search.system");
   const place = result.conversation;
 
   return (

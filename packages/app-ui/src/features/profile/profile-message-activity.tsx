@@ -17,6 +17,7 @@ import {
   profileMessageCountsOptions,
   type ProfileMessageSubject,
 } from "./message-counts";
+import { t } from "@/lib/i18n";
 
 /** `compact` drops the section title, the period picker, the legend and the
  * frame, and fits the last weeks to the width: a glanceable summary whose
@@ -88,14 +89,14 @@ function MessageActivitySection({
           className="flex min-h-40 items-center justify-center gap-3 text-xs text-text-muted"
           role="status"
         >
-          <span>Message activity unavailable.</span>
+          <span>{t("profile.messageActivityUnavailable")}</span>
           <button
             type="button"
             className="text-text-primary underline underline-offset-2 focus-outline"
             onClick={() => void Promise.all(queries.map((query) => query.refetch()))}
             disabled={isFetching}
           >
-            Retry
+            {t("common.retry")}
           </button>
         </div>
       ) : data ? (
@@ -106,13 +107,18 @@ function MessageActivitySection({
                 {total.toLocaleString()}
               </span>
               <span className="text-[13px] text-text-muted">
-                {total === 1 ? "message" : "messages"} in the last year
+                {t("profile.messagesLastYearSuffix", { count: total })}
               </span>
             </p>
           ) : (
             <p className="mb-5 text-xs text-text-muted">
-              {total.toLocaleString()} {total === 1 ? "message" : "messages"}{" "}
-              {year === "recent" ? "in the last year" : `in ${year}`}
+              {year === "recent"
+                ? t("profile.messagesLastYear", { count: total, total: total.toLocaleString() })
+                : t("profile.messagesInYear", {
+                    count: total,
+                    total: total.toLocaleString(),
+                    year,
+                  })}
             </p>
           )}
           <MessageActivityCalendar
@@ -127,7 +133,7 @@ function MessageActivitySection({
         <div
           className="flex min-h-40 flex-col justify-center gap-4"
           role="status"
-          aria-label="Loading message activity"
+          aria-label={t("profile.loadingMessageActivity")}
         >
           <div className="h-3 w-40 animate-pulse rounded-(--control-radius) bg-bg-elevated" />
           <div className="h-28 animate-pulse rounded-(--control-radius) bg-bg-elevated" />
@@ -137,19 +143,19 @@ function MessageActivitySection({
   );
 
   if (mode === "compact") {
-    return <section aria-label="Message activity">{content}</section>;
+    return <section aria-label={t("profile.messageActivity")}>{content}</section>;
   }
 
   return (
     <ProfileSection
-      title="Message activity"
+      title={t("profile.messageActivity")}
       headerSlot={
         <Select.Root
           value={String(year)}
           onValueChange={(value) => setYear(value === "recent" ? "recent" : Number(value))}
         >
           <Select.Trigger
-            aria-label="Message activity period"
+            aria-label={t("profile.messageActivityPeriod")}
             className={cn(FILTER_SELECT_TRIGGER_CLASS, "w-auto")}
           >
             <Select.Value />
@@ -165,7 +171,7 @@ function MessageActivitySection({
               className={FILTER_SELECT_CONTENT_CLASS}
             >
               <Select.Viewport className="p-1">
-                <FilterSelectItem value="recent">Last year</FilterSelectItem>
+                <FilterSelectItem value="recent">{t("profile.lastYear")}</FilterSelectItem>
                 {years.map((value) => (
                   <FilterSelectItem key={value} value={String(value)}>
                     {value}

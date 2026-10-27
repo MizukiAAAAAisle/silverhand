@@ -1,4 +1,3 @@
-import { useSidebarBranchDrag } from "@/components/layout/sidebar-branch-drag";
 import { useState, type ReactElement, type JSX } from "react";
 import { LeaveIcon } from "@/icons";
 import { AppContextMenu, AppContextMenuItem } from "@/components/menus/app-context-menu";
@@ -6,6 +5,7 @@ import { useWorkspaceMemberLists } from "@/features/workspaces/hooks";
 import { canLeaveWorkspace } from "@/features/workspaces/workspace-permissions";
 import { LeaveWorkspaceConfirmDialog } from "@/features/workspaces/leave-workspace-confirm-dialog";
 import { WorkspaceMuteMenuItem } from "../../../features/conversation-shell/components/channel-attention-surfaces";
+import { t } from "@/lib/i18n";
 
 /**
  * The container row's right-click menu — the container species' menu, mounted on
@@ -41,7 +41,6 @@ export function WorkspaceContextMenu({
    *  Leaving an archived workspace routes through Settings instead. */
   leaveWorkspace?: { id: string; name: string } | null;
 }): JSX.Element {
-  const branchDrag = useSidebarBranchDrag();
   const [confirmingLeave, setConfirmingLeave] = useState(false);
 
   // A row with no capability at all would render an empty menu, so it gets no
@@ -50,7 +49,7 @@ export function WorkspaceContextMenu({
 
   return (
     <>
-      <AppContextMenu trigger={trigger} touchLongPress={!branchDrag}>
+      <AppContextMenu trigger={trigger}>
         {muteWorkspaceId ? <WorkspaceMuteMenuItem workspaceId={muteWorkspaceId} /> : null}
         {leaveWorkspace ? (
           <WorkspaceLeaveMenuItem
@@ -93,7 +92,7 @@ function WorkspaceLeaveMenuItem({
 
   return (
     <AppContextMenuItem icon={<LeaveIcon className="size-3.5" />} onSelect={onSelect}>
-      Leave project
+      {t("chat.leaveProject")}
     </AppContextMenuItem>
   );
 }

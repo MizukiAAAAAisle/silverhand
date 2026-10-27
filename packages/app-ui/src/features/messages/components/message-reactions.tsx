@@ -10,6 +10,7 @@ import {
   reactionChipCountLabel,
   reactionRowClass,
 } from "./reaction-chip-row";
+import { t } from "@/lib/i18n";
 
 export interface MessageReactionsProps {
   message: MessageDto;
@@ -73,8 +74,8 @@ export function MessageReactions({
             <button
               type="button"
               data-reaction-add
-              aria-label="Add reaction"
-              title="Add reaction"
+              aria-label={t("messages.addReaction")}
+              title={t("messages.addReaction")}
               className="flex h-4.5 items-center rounded-(--chip-radius) bg-(--chip-bg) px-2 text-text-muted transition-colors hover:bg-(--chip-bg-hover) hover:text-text-primary focus-outline"
             >
               <AddReactionIcon className="size-3.5" />
@@ -121,8 +122,8 @@ function ReactionChip({
             aria-pressed={agg.viewer_reacted}
             aria-label={
               countLabel +
-              (agg.viewer_reacted ? ", you reacted" : "") +
-              `, click to ${agg.viewer_reacted ? "remove" : "add"}`
+              (agg.viewer_reacted ? t("messages.youReacted") : "") +
+              (agg.viewer_reacted ? t("messages.clickToRemove") : t("messages.clickToAdd"))
             }
             onClick={onClick}
             className={chipClass + " focus-outline"}
@@ -132,7 +133,7 @@ function ReactionChip({
         ) : (
           <div
             data-reaction-chip
-            aria-label={countLabel + (agg.viewer_reacted ? ", you reacted" : "")}
+            aria-label={countLabel + (agg.viewer_reacted ? t("messages.youReacted") : "")}
             className={chipClass}
           >
             {inner}

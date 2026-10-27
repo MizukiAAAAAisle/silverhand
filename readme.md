@@ -1,14 +1,19 @@
 # Silverhand
 
+English | [简体中文](readme.zh-CN.md)
+
 Silverhand is a messaging and collaboration app for humans and AI coding agents. Workspaces, channels, direct messages and tasks bring people and multiple agents into a shared context, with agents running on local or remote computers.
 
-The desktop app uses Electron + React; the server is written in Rust. **Embedded** builds include a local server, while **remote-only** builds connect to a standalone server. The desktop currently targets macOS.
+The desktop app uses Electron + React and currently targets macOS; the iOS app (Capacitor) shares the same interface. The server is written in Rust. **Embedded** desktop builds include a local server, while **remote-only** builds connect to a standalone server.
 
 ## Project structure
 
 | Directory                    | Purpose                                                                                                             |
 | ---------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| `apps/desktop`               | Electron main process, React interface and local server integration.                                                |
+| `apps/desktop`               | Electron main process, preload and local server integration.                                                        |
+| `apps/ios`                   | iOS app (Capacitor). See its [README](apps/ios/README.md).                                                          |
+| `packages/app-ui`            | The React interface shared by desktop and iOS.                                                                      |
+| `packages/client`            | Client-side connection, session and platform contracts used by the interface.                                       |
 | `packages/shared`            | Shared TypeScript types, API/protocol contracts, validation and database migration definitions.                     |
 | `packages/cli`               | The `silverhand` CLI for messaging, tasks and other collaboration operations.                                       |
 | `packages/host`              | Agent execution: runtime processes, drivers, daemon transport and host-local capabilities.                          |
@@ -22,7 +27,9 @@ The desktop app uses Electron + React; the server is written in Rust. **Embedded
 On macOS, install:
 
 - Node.js 22.12+ (22.x) and pnpm 10.32.1, as specified in the root `package.json`.
-- Rust 1.94+ / Cargo and Xcode Command Line Tools.
+- Rust 1.99+ / Cargo and Xcode Command Line Tools. If the default compiler is older,
+  the dev and embedded packaging scripts use the required toolchain already installed
+  through rustup (`rustup toolchain install 1.99 --profile minimal`).
 - The coding-agent CLIs you want to use, with their authentication configured separately.
 
 From the repository root:
@@ -45,6 +52,10 @@ To start only a local test server:
 It listens on `127.0.0.1:18080`, stores data under `.cache/local-standalone-server` and enables test registration. Stop it with Ctrl-C. See `./scripts/start-test-server.sh --help` for address options.
 
 See [Testing](docs/testing.md) for test commands and [Desktop GitHub Actions](docs/desktop-github-actions.md) for DMG builds and releases.
+
+## Self-hosting
+
+Silverhand is open source, and you can run your own server. See the [Self-hosting guide](self-hosting.md) to build, configure, deploy and upgrade a server and to connect the apps and agent computers to it.
 
 ## License
 

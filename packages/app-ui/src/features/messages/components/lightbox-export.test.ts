@@ -102,25 +102,45 @@ function actions(node: unknown): Array<Record<string, unknown>> {
   return [...(props.label ? [props] : []), ...actions(props.children)];
 }
 
-it.each([true, false])(
-  "retains an actual Download beside mobile Share or desktop Copy (share=%s)",
-  async (share) => {
-    h.nativeShare = share;
-    const download = vi.fn();
-    const tree = Lightbox({
-      open: true,
-      onOpenChange: vi.fn(),
-      src: "blob:preview",
-      alt: "image",
-      onDownload: download,
-    });
-    const buttons = actions(tree);
-    expect(buttons.map((button) => button.label)).toEqual([share ? "Share" : "Copy", "Download"]);
-    await (buttons[1]!.onClick as () => Promise<void>)();
-    expect(download).toHaveBeenCalledOnce();
-    h.nativeShare = true;
-  },
-);
+// Contract replaced 2026-10-27: upstream 258d8093 makes Share/Download mutually
+// exclusive and demotes the share/copy action whenever a Download is offered.
+// The previous "both buttons at once" assertion belonged to the superseded
+// local mobile surface.
+it("offers Share alone when a native share target exists", () => {
+  h.nativeShare = true;
+  const download = vi.fn();
+  const tree = Lightbox({
+    open: true,
+    onOpenChange: vi.fn(),
+    src: "blob:preview",
+    alt: "image",
+    onDownload: download,
+  });
+  const buttons = actions(tree);
+  expect(buttons.map((button) => button.label)).toEqual(["Share"]);
+  expect(buttons[0]!.rank).toBe("primary");
+  expect(download).not.toHaveBeenCalled();
+  h.nativeShare = true;
+});
+
+it("offers Copy plus Download, with Copy demoted, when there is no native share", async () => {
+  h.nativeShare = false;
+  const download = vi.fn();
+  const tree = Lightbox({
+    open: true,
+    onOpenChange: vi.fn(),
+    src: "blob:preview",
+    alt: "image",
+    onDownload: download,
+  });
+  const buttons = actions(tree);
+  expect(buttons.map((button) => button.label)).toEqual(["Copy", "Download"]);
+  expect(buttons[0]!.rank).toBe("secondary");
+  expect(buttons[1]!.rank).toBe("primary");
+  await (buttons[1]!.onClick as () => Promise<void>)();
+  expect(download).toHaveBeenCalledOnce();
+  h.nativeShare = true;
+});
 
 it("does not invent a Download for an unsent local preview", () => {
   const tree = Lightbox({ open: true, onOpenChange: vi.fn(), src: "blob:preview", alt: "image" });

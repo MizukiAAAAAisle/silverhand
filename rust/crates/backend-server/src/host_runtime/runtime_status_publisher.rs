@@ -7,7 +7,10 @@ use silverhand_backend_core::foundation::{
 };
 
 use crate::{
-    foundation::{scope_event_transport::ScopeEventHub, scope_event_wire::ProductEvent},
+    foundation::{
+        scope_event_transport::ScopeEventHub,
+        scope_event_wire::{NotificationEvent, NotificationKind, ProductEvent},
+    },
     host_runtime::runtime_event_settlement::{
         LiveProjectionFailure, RuntimeStatusProjectionFact, RuntimeStatusProjectionPort,
         RuntimeStatusProjectionUpdate,
@@ -35,6 +38,19 @@ impl RuntimeStatusProjectionPort for HubRuntimeStatusPublisher {
                 ProductEvent::HostConnectionChanged {
                     host_id: host.as_str().to_owned(),
                 },
+            )
+            .map_err(LiveProjectionFailure::from_source)
+    }
+
+    fn publish_start_failure(&self, owner: &UserId) -> Result<(), LiveProjectionFailure> {
+        self.0
+            .publish(
+                EventScope::Viewer(owner.clone()),
+                ProductEvent::Notification(NotificationEvent {
+                    kind: NotificationKind::AgentStartFailed,
+                    conversation_id: None,
+                    message_id: None,
+                }),
             )
             .map_err(LiveProjectionFailure::from_source)
     }

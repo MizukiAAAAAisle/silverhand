@@ -50,6 +50,7 @@ import { useEffect, useId, useRef, useState, type JSX, type KeyboardEvent } from
 import { CloseIcon, EditIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 export interface InlineRenameProps {
   /** Current label rendered in display mode. May be `null` when no
@@ -147,7 +148,7 @@ export function InlineRename({
       setEditing(false);
       setDraft("");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not save.");
+      setError(err instanceof Error ? err.message : t("computers.couldNotSave"));
     } finally {
       setPending(false);
     }
@@ -216,8 +217,8 @@ export function InlineRename({
               cancel();
             }}
             disabled={pending}
-            aria-label="Cancel rename"
-            title="Cancel"
+            aria-label={t("computers.cancelRename")}
+            title={t("common.cancel")}
           >
             <CloseIcon className="size-3.5" />
           </Button>
@@ -238,8 +239,8 @@ export function InlineRename({
       <button
         type="button"
         onDoubleClick={enterEdit}
-        aria-label={`${ariaLabel} (double-click to rename)`}
-        title="Double-click to rename"
+        aria-label={t("computers.doubleClickRenameLabel", { label: ariaLabel })}
+        title={t("computers.doubleClickToRename")}
         // Typography inherits from the wrapping element so the caller
         // owns the visual weight (e.g. Hero wraps in `font-serif
         // text-lg font-semibold`). We only color the fallback variant
@@ -256,7 +257,7 @@ export function InlineRename({
         type="button"
         onClick={enterEdit}
         aria-label={ariaLabel}
-        title="Rename"
+        title={t("computers.rename")}
         className="shrink-0 rounded-(--control-radius) p-1 text-text-muted opacity-0 transition-opacity hover:bg-bg-hover hover:text-text-primary group-hover/inline-rename:opacity-100 focus-visible:opacity-100"
       >
         <EditIcon className="size-3.5" />

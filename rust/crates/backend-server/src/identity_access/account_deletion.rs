@@ -39,6 +39,11 @@ use crate::{
 pub const ME_PATH: &str = "/api/me";
 pub const PREFLIGHT_PATH: &str = "/api/me/deletion";
 
+/// Whether this profile offers account deletion; `/api/server/info` advertises the same answer.
+pub const fn offered(profile: DeploymentProfile) -> bool {
+    !matches!(profile, DeploymentProfile::Embedded)
+}
+
 #[derive(Deserialize, Validate)]
 #[serde(deny_unknown_fields)]
 struct Input {
@@ -128,7 +133,7 @@ async fn preflight<S: AccountDeletionStore, H, B, N, D>(
     State(deps): State<Deps<S, H, B, N, D>>,
     Extension(user): Extension<UserId>,
 ) -> Response {
-    if deps.profile == DeploymentProfile::Embedded {
+    if !offered(deps.profile) {
         return Json(serde_json::json!({"available": false, "blockers": null})).into_response();
     }
     match deps.store.deletion_blockers(&user).await {
@@ -154,7 +159,7 @@ where
     N: UserChangedSink,
     D: DaemonConnectionControl,
 {
-    if deps.profile == DeploymentProfile::Embedded {
+    if !offered(deps.profile) {
         return embedded_refusal();
     }
     let Some(token) = strict_bearer_credential(&headers) else {

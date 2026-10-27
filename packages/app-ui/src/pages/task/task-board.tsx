@@ -16,6 +16,7 @@ import {
 } from "@/features/tasks/components/create-task-dialog";
 import { FloatingPaneChrome, PaneHeader, PaneShell } from "@/components/layout/pane-shell";
 import { iconMarkup } from "@/components/layout/native-page-bar";
+import { t, useLocale } from "@/lib/i18n";
 
 export interface TaskBoardProps {
   filters: TaskFilters;
@@ -28,6 +29,7 @@ export const TaskBoard = memo(function TaskBoard({
   filters,
   onFiltersChange: setFilters,
 }: TaskBoardProps): JSX.Element {
+  useLocale();
   const [createOpen, setCreateOpen] = useState(false);
   const updateStatus = useUpdateTaskStatus();
   // Per-column render bound, local to THIS surface (#task:1885). Every write that
@@ -89,14 +91,18 @@ export const TaskBoard = memo(function TaskBoard({
       <FloatingPaneChrome>
         <PaneHeader
           icon={<TaskIcon data-sticker-size="sm" className="size-4 text-text-muted" />}
-          title={selectedChannelName ? `Tasks in #${selectedChannelName}` : "Tasks"}
+          title={
+            selectedChannelName
+              ? t("taskPage.tasksIn", { channel: selectedChannelName })
+              : t("taskPage.tasks")
+          }
           trailing={
             compact ? (
               <button
                 type="button"
                 className="glass-surface glass-round focus-outline"
                 onClick={() => setCreateOpen(true)}
-                aria-label="New task"
+                aria-label={t("taskPage.newTask")}
               >
                 <PlusIcon size={20} />
               </button>
@@ -105,7 +111,7 @@ export const TaskBoard = memo(function TaskBoard({
           nativeActions={[
             {
               id: "create",
-              label: "New task",
+              label: t("taskPage.newTask"),
               icon: iconMarkup(PlusIcon),
               run: () => setCreateOpen(true),
             },
@@ -119,7 +125,7 @@ export const TaskBoard = memo(function TaskBoard({
           baselineFilters={DEFAULT_TASK_FILTERS}
           workspaceOptions={workspaceOptions}
           channelOptions={channelOptions}
-          allChannelsLabel="All"
+          allChannelsLabel={t("taskPage.all")}
           people={people}
         />
       </FloatingPaneChrome>

@@ -19,6 +19,8 @@ not Rust configuration aliases.
 | `SILVERHAND_METRICS_LISTEN`       | Optional; unset or empty disables metrics. Numeric loopback IP socket only, e.g. `127.0.0.1:9464` or `[::1]:9464`. Wildcards, LAN addresses and DNS names are rejected. Port 0 is allowed for isolated callers. |
 | `SILVERHAND_CONSOLE_TOKEN`        | Optional; enables the token-gated ECS Console on the product listener. Requires `remote-only` and 32–256 visible ASCII characters. Independent of metrics; expose through the existing HTTPS ingress.           |
 | `SILVERHAND_DISABLE_SIGNUP`       | Remote-only: unset/empty or `0` enables signup; `1` disables it; other values fail. Embedded preserves the launcher contract: only exact `1` disables signup.                                                   |
+| `SILVERHAND_SMTP_URL`             | Optional; remote-only. `smtps://user:pass@host:465` or `smtp://user:pass@host:587?tls=required`; plaintext or opportunistic TLS fails startup. Set with `SILVERHAND_MAIL_FROM` to enable password recovery.     |
+| `SILVERHAND_MAIL_FROM`            | Optional; the recovery mail sender, e.g. `Silverhand <no-reply@example.com>`. Setting only one of the two mail variables fails startup.                                                                         |
 | `SILVERHAND_MIGRATE`              | `0` or `1`; defaults to `0` for remote-only, `1` for embedded. Fresh databases initialize without an upgrade opt-in.                                                                                            |
 | `SILVERHAND_DAEMON_NPM_SPEC`      | Optional explicit daemon package specification.                                                                                                                                                                 |
 | `SILVERHAND_BOOTSTRAP_TOKEN_PATH` | Optional launcher-owned token file; armed only for embedded on actual loopback bind.                                                                                                                            |
@@ -45,6 +47,27 @@ requests application shutdown and produces a failing process exit. SIGTERM and
 SIGINT drain the existing application shutdown path and close both listeners.
 See [Server Observability](server-observability.md).
 See [ECS Console Dashboard](ecs-console.md) for the separate product-count read model.
+
+## Password recovery
+
+With both mail variables set, a remote-only server advertises
+`features.password_recovery_enabled` in `/api/server/info` and serves
+`POST /auth/password-recovery/request` and `/reset`; otherwise both answer 503
+`password_recovery_disabled`. The configuration is validated at startup only; the
+server does not probe SMTP.
+
+- Codes: 6 digits, 15 minutes, one use, at most 5 attempts each. Per account and
+  hour: at most 5 mails, 10 attempts, and 60 seconds between mails. Each route also
+  admits at most 60 requests per minute per process (429 beyond).
+- Codes are stored as an HMAC under a key held only in process memory. A restart
+  voids every outstanding code, including ones already delivered; the user requests a
+  new one, subject to the same limits.
+- Mail is sent from a bounded in-memory queue (16 pending, 4 concurrent, 10 s
+  timeout). A full queue answers 503 `password_recovery_busy`. Queued mail is lost on
+  restart, and a send failure is logged only as its kind and SMTP status; the user
+  requests again after the interval.
+- A successful reset replaces the password, consumes the code and revokes every
+  session of the account in one transaction; it does not sign in.
 
 ## Data and upgrades
 

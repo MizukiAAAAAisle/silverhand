@@ -33,22 +33,50 @@ describe('dev daemon package runtime handoff', () => {
       ['host', 'src/daemon/entry.ts', 'daemon.js'],
       ['cli', 'src/cli.ts', 'cli.js'],
     ]) {
-      execFileSync(esbuild, [entry!, '--bundle', '--platform=node', '--format=esm', '--target=node20',
-        `--outfile=${join(dist, output!)}`, '--banner:js=import{createRequire}from"node:module";const require=createRequire(import.meta.url);'],
-      { cwd: join(repo, 'packages', pkg!), stdio: 'pipe' });
+      execFileSync(
+        esbuild,
+        [
+          entry!,
+          '--bundle',
+          '--platform=node',
+          '--format=esm',
+          '--target=node20',
+          `--outfile=${join(dist, output!)}`,
+          '--banner:js=import{createRequire}from"node:module";const require=createRequire(import.meta.url);',
+        ],
+        { cwd: join(repo, 'packages', pkg!), stdio: 'pipe' },
+      );
     }
-    const local = resolveLocalSilverhandCliLauncher({ entryUrl: pathToFileURL(launcher.args[0]!).href, execPath: launcher.command });
-    expect(local).toEqual({ command: electron, args: [join(dist, 'cli.js')], env: { ELECTRON_RUN_AS_NODE: '1' } });
-    expect(execFileSync(local!.command, [...local!.args, '--help'], { encoding: 'utf8', env: { ...process.env, ...launcher.env } })).toContain('silverhand');
+    const local = resolveLocalSilverhandCliLauncher({
+      entryUrl: pathToFileURL(launcher.args[0]!).href,
+      execPath: launcher.command,
+    });
+    expect(local).toEqual({
+      command: electron,
+      args: [join(dist, 'cli.js')],
+      env: { ELECTRON_RUN_AS_NODE: '1' },
+    });
+    expect(
+      execFileSync(local!.command, [...local!.args, '--help'], {
+        encoding: 'utf8',
+        env: { ...process.env, ...launcher.env },
+      }),
+    ).toContain('silverhand');
 
     // Boot the actual selected bundle with Electron-as-Node. Runtime admission
     // below is tested separately with a model-process fixture, without account
     // binding or any connection to the user's control plane.
     const socketPath = join(root, 'd.sock');
     const child = await spawnDaemonChild({
-      launcher, socketPath, pidFilePath: join(root, 'd.pid'), logDir: join(root, 'logs'),
-      daemonIdentityPath: join(root, 'identity.json'), computersRootDir: join(root, 'computers'),
-      silverhandStateRootDir: join(root, 'state'), maxRestarts: 0, readyTimeoutMs: 10_000,
+      launcher,
+      socketPath,
+      pidFilePath: join(root, 'd.pid'),
+      logDir: join(root, 'logs'),
+      daemonIdentityPath: join(root, 'identity.json'),
+      computersRootDir: join(root, 'computers'),
+      silverhandStateRootDir: join(root, 'state'),
+      maxRestarts: 0,
+      readyTimeoutMs: 10_000,
     });
     const client = new HostClient({ socketPath });
     try {
@@ -65,44 +93,66 @@ describe('dev daemon package runtime handoff', () => {
     const startOptions = testStartOptions({ sessionScope: 'agent' });
     delete startOptions.env_policy.silverhand_cli;
     const scope = startOptions.runtime_scope;
-    const params = { runtime_generation: 1, conversation_id: 'Conversation0001', agent_id: 'a1', options: startOptions };
-    const makeSupervisor = (localLauncher: typeof local) => new Supervisor({
-      emit: noop,
-      logger: { filePath: '/dev/null', logControl: createDaemonLogControl('debug'), debug: noop, info: noop, warn: noop, error: noop, close: async () => {} },
-      localSilverhandCliLauncher: localLauncher,
-      runtimeStartResolveDeps: testRuntimeStartResolveDeps({ agentHomeRootDir: join(root, 'agents') }),
-      controlPlaneServerUrl: () => 'http://127.0.0.1:1',
-      driverFor: () => ({
-        // Only the external model process is a fixture. Real Supervisor.start
-        // constructs the prompt, CLI shim and environment before spawning it.
-        kind: 'claude' as const,
-        binary: process.execPath,
-        kickoffMode: 'self_inits' as const,
-        releaseProfile: 'native-steer' as const,
-        admissionPolicy: 'write-success' as const,
-        oneShot: false,
-        supportsNativeStandingPrompt: true,
-        initLivenessSilenceMs: 30_000,
-        initPreProtocolCapMs: 300_000,
-        initPostProtocolMs: 60_000,
-        applyEnv: env => ({ ...env }),
-        buildArgs: () => ['-e', 'process.stdin.resume()'],
-        encodeStdinMessage: text => text,
-        encodeInterruptControl: () => null,
-        parseLine: () => [],
-        classifyInitProgress: () => null,
-      }),
-      resolveRuntime: async () => ({ binary: process.execPath, version: null }),
-      spawnFn: (binary, args, options) => {
-        spawns++;
-        // Execute the generated per-runtime shim in the actual child env.
-        const shellEnv = { ...options.env };
-        delete shellEnv.ELECTRON_RUN_AS_NODE;
-        shimHelp = execFileSync('silverhand', ['--help'], { cwd: options.cwd, env: shellEnv, encoding: 'utf8', timeout: 5000 });
-        return spawn(binary, args, options);
-      },
-      sigtermToSigkillMs: 50, sigkillTimeoutMs: 200,
-    });
+    const params = {
+      runtime_generation: 1,
+      conversation_id: 'Conversation0001',
+      agent_id: 'a1',
+      options: startOptions,
+    };
+    const makeSupervisor = (localLauncher: typeof local) =>
+      new Supervisor({
+        emit: noop,
+        logger: {
+          filePath: '/dev/null',
+          logControl: createDaemonLogControl('debug'),
+          debug: noop,
+          info: noop,
+          warn: noop,
+          error: noop,
+          close: async () => {},
+        },
+        localSilverhandCliLauncher: localLauncher,
+        runtimeStartResolveDeps: testRuntimeStartResolveDeps({
+          agentHomeRootDir: join(root, 'agents'),
+        }),
+        controlPlaneServerUrl: () => 'http://127.0.0.1:1',
+        driverFor: () => ({
+          // Only the external model process is a fixture. Real Supervisor.start
+          // constructs the prompt, CLI shim and environment before spawning it.
+          kind: 'claude' as const,
+          binary: process.execPath,
+          kickoffMode: 'self_inits' as const,
+          releaseProfile: 'native-steer' as const,
+          admissionPolicy: 'write-success' as const,
+          oneShot: false,
+          supportsNativeStandingPrompt: true,
+          initLivenessSilenceMs: 30_000,
+          initPreProtocolCapMs: 300_000,
+          initPostProtocolMs: 60_000,
+          applyEnv: (env) => ({ ...env }),
+          buildArgs: () => ['-e', 'process.stdin.resume()'],
+          encodeStdinMessage: (text) => text,
+          encodeInterruptControl: () => null,
+          parseLine: () => [],
+          classifyInitProgress: () => null,
+        }),
+        resolveRuntime: async () => ({ binary: process.execPath, version: null }),
+        spawnFn: (binary, args, options) => {
+          spawns++;
+          // Execute the generated per-runtime shim in the actual child env.
+          const shellEnv = { ...options.env };
+          delete shellEnv.ELECTRON_RUN_AS_NODE;
+          shimHelp = execFileSync('silverhand', ['--help'], {
+            cwd: options.cwd,
+            env: shellEnv,
+            encoding: 'utf8',
+            timeout: 5000,
+          });
+          return spawn(binary, args, options);
+        },
+        sigtermToSigkillMs: 50,
+        sigkillTimeoutMs: 200,
+      });
     const supervisor = makeSupervisor(local);
     try {
       const result = await supervisor.start(params);
@@ -112,12 +162,18 @@ describe('dev daemon package runtime handoff', () => {
       await supervisor.stop({ runtime_scope: scope, runtime_generation: 1, mode: 'hard' });
       // The former host-only layout cannot obtain a CLI via another package
       // or global PATH. A missing local + absent server launcher stays an error.
-      const absent = resolveLocalSilverhandCliLauncher({ entryUrl: pathToFileURL(join(root, 'packages/host/dist/daemon.js')).href });
+      const absent = resolveLocalSilverhandCliLauncher({
+        entryUrl: pathToFileURL(join(root, 'packages/host/dist/daemon.js')).href,
+      });
       expect(absent).toBeNull();
-      await expect(makeSupervisor(absent).start(params)).rejects.toThrow('no silverhand CLI launcher');
+      await expect(makeSupervisor(absent).start(params)).rejects.toThrow(
+        'no silverhand CLI launcher',
+      );
       expect(spawns).toBe(1);
     } finally {
-      await supervisor.stop({ runtime_scope: scope, runtime_generation: 1, mode: 'hard' }).catch(() => {});
+      await supervisor
+        .stop({ runtime_scope: scope, runtime_generation: 1, mode: 'hard' })
+        .catch(() => {});
       rmSync(root, { recursive: true, force: true });
     }
   }, 30_000);

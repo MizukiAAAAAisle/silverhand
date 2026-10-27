@@ -52,16 +52,8 @@ export interface ConnectCommandParams {
  * `parseConnectArgv(buildConnectArgv(x))` recovers `x` verbatim; shell-string
  * rendering is layered on top by {@link assembleConnectCommand}.
  */
-export function buildConnectArgv(params: {
-  serverUrl: string;
-  connectToken: string;
-}): string[] {
-  return [
-    CONNECT_ARG_SERVER_URL,
-    params.serverUrl,
-    CONNECT_ARG_CONNECT_TOKEN,
-    params.connectToken,
-  ];
+export function buildConnectArgv(params: { serverUrl: string; connectToken: string }): string[] {
+  return [CONNECT_ARG_SERVER_URL, params.serverUrl, CONNECT_ARG_CONNECT_TOKEN, params.connectToken];
 }
 
 /**

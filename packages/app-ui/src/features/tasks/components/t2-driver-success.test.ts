@@ -62,7 +62,7 @@ it.each([true,false])('actual driver completes PRE/four cases with independent r
    else if(name==='t2-chats'){detail=false;route='#/chat';}
   }};
  try{
-  await runT2({c,api,call:async()=>({me:{status:200,bodyText:'{"id":"A"}'}}),adb:()=> 'mInputShown=false',input:async(sel:string,value:string)=>{if(sel==='#create-task-title')createTitle=value;else if(sel==='#create-task-body')createBody=value;else draft=value;},out,token:'private-token',fixture:{userId:'A'},step:(...args:any[])=>record.step(...args),observe:(name:string,value:any)=>evidence.push({name,value})},helpers);
+  await runT2({c,api,call:async()=>({me:{status:200,bodyText:'{"id":"A"}'}}),adb:()=> 'mInputShown=false',input:async(sel:string,value:string)=>{if(sel==='#create-task-title')createTitle=value;else if(sel==='#create-task-body')createBody=value;else draft=value;},out,token:'private-token',fixture:{userId:'A'},step:(id:string,fn:()=>unknown|Promise<unknown>)=>record.step(id,fn),observe:(name:string,value:any)=>evidence.push({name,value})},helpers);
   record.complete();const counts=JSON.parse(readFileSync(out+'/counts.json','utf8'));
   expect(counts.groups.PRE.passed).toBe(1);expect(counts.groups.B3.passed).toBe(4);expect(counts.groups.B3.failed).toBe(0);
   expect(evidence.find(x=>x.name==='t2-board-read-layer').value.independentReadObtained).toBe(qualified);

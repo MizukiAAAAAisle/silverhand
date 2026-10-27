@@ -57,6 +57,7 @@ import {
 } from "@/components/ui/dialog";
 import { AgentAvatar } from "../../../components/agent-avatar";
 import { AVATAR_PX } from "../../../components/avatar-scale";
+import { t } from "@/lib/i18n";
 
 interface AgentInfoPopoverProps {
   agent: AgentDto;
@@ -466,7 +467,6 @@ function AgentManagementActions({
 
   const pending = start.isPending || stop.isPending || clearSession.isPending;
   const agentLabel = `@${agent.name}`;
-  const convNoun = "channel";
   const setClearDialogOpen = (open: boolean): void => {
     setClearOpen(open);
     onDialogOpenChange(open);
@@ -525,8 +525,8 @@ function AgentManagementActions({
               onClick={restart}
               disabled={pending}
               className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
-              title={`Restart ${agentLabel}`}
-              aria-label={`Restart ${agentLabel}`}
+              title={t("agents.restartAgent", { agent: agentLabel })}
+              aria-label={t("agents.restartAgent", { agent: agentLabel })}
             >
               <RefreshIcon className="size-3.5" />
             </button>
@@ -535,8 +535,8 @@ function AgentManagementActions({
               onClick={stopAgent}
               disabled={pending || !stoppable}
               className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50 disabled:hover:bg-transparent"
-              title={`Stop ${agentLabel}`}
-              aria-label={`Stop ${agentLabel}`}
+              title={t("agents.stopAgent", { agent: agentLabel })}
+              aria-label={t("agents.stopAgent", { agent: agentLabel })}
             >
               <PowerIcon className="size-3.5" />
             </button>
@@ -545,8 +545,8 @@ function AgentManagementActions({
               onClick={() => setClearDialogOpen(true)}
               disabled={pending}
               className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
-              title={`Clear ${agentLabel} session`}
-              aria-label={`Clear ${agentLabel} session`}
+              title={t("agents.clearAgentSession", { agent: agentLabel })}
+              aria-label={t("agents.clearAgentSession", { agent: agentLabel })}
             >
               <ClearIcon className="size-3.5" />
             </button>
@@ -558,8 +558,8 @@ function AgentManagementActions({
             onClick={() => setRemoveDialogOpen(true)}
             disabled={removeFromChannel.isPending}
             className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
-            title={`Remove ${agentLabel} from this ${convNoun}`}
-            aria-label={`Remove ${agentLabel} from this ${convNoun}`}
+            title={t("agents.removeFromChannel", { agent: agentLabel })}
+            aria-label={t("agents.removeFromChannel", { agent: agentLabel })}
           >
             <RemoveMemberIcon className="size-3.5" />
           </button>
@@ -570,9 +570,9 @@ function AgentManagementActions({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-error">
               <WarningIcon className="size-4" />
-              Clear session for {agentLabel}
+              {t("agents.clearSessionFor", { agent: agentLabel })}
             </DialogTitle>
-            <DialogDescription>A new session begins on the next start.</DialogDescription>
+            <DialogDescription>{t("agents.aNewSessionBegins")}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
@@ -581,7 +581,7 @@ function AgentManagementActions({
               onClick={() => setClearDialogOpen(false)}
               disabled={clearSession.isPending}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -589,7 +589,7 @@ function AgentManagementActions({
               onClick={clear}
               disabled={clearSession.isPending}
             >
-              {clearSession.isPending ? "Clearing..." : "Clear session"}
+              {clearSession.isPending ? t("agents.clearing") : t("agents.clearSession")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -599,10 +599,10 @@ function AgentManagementActions({
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2 text-error">
               <WarningIcon className="size-4" />
-              Remove {agentLabel} from this {convNoun}
+              {t("agents.removeFromChannel", { agent: agentLabel })}
             </DialogTitle>
             <DialogDescription>
-              {agentLabel} will no longer be part of this {convNoun}. You can add it back anytime.
+              {t("agents.removeFromChannelDetail", { agent: agentLabel })}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -612,7 +612,7 @@ function AgentManagementActions({
               onClick={() => setRemoveDialogOpen(false)}
               disabled={removeFromChannel.isPending}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               type="button"
@@ -620,7 +620,7 @@ function AgentManagementActions({
               onClick={remove}
               disabled={removeFromChannel.isPending}
             >
-              {removeFromChannel.isPending ? "Removing..." : "Remove"}
+              {removeFromChannel.isPending ? t("agents.removing") : t("agents.remove")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -671,7 +671,7 @@ function DirectAgentRuntimeActions({
   const state = directAgentControlState(runtime, availability);
   const pending = start.isPending || stop.isPending || clearSession.isPending;
   const disabled = pending || !state.ready;
-  const action = state.startable ? "Start" : "Stop";
+  const action = state.startable ? t("agents.start") : t("agents.stop");
   const setClearDialogOpen = (open: boolean): void => {
     setClearOpen(open);
     onDialogOpenChange(open);
@@ -698,8 +698,8 @@ function DirectAgentRuntimeActions({
           onClick={() => setClearDialogOpen(true)}
           disabled={disabled}
           className="inline-flex size-7 items-center justify-center rounded-(--control-radius) text-error/70 transition-colors hover:bg-error/10 hover:text-error disabled:opacity-50 disabled:hover:bg-transparent"
-          title={`Clear @${agent.name} session`}
-          aria-label={`Clear @${agent.name} session`}
+          title={t("agents.clearAgentSession", { agent: `@${agent.name}` })}
+          aria-label={t("agents.clearAgentSession", { agent: `@${agent.name}` })}
         >
           <ClearIcon className="size-3.5" />
         </button>
@@ -707,15 +707,12 @@ function DirectAgentRuntimeActions({
       <Dialog open={clearOpen} onOpenChange={setClearDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Clear session for @{agent.name}</DialogTitle>
-            <DialogDescription>
-              The next start uses a fresh CLI session across all conversations. MEMORY, notes, and
-              queued deliveries are kept.
-            </DialogDescription>
+            <DialogTitle>{t("agents.clearSessionFor", { agent: `@${agent.name}` })}</DialogTitle>
+            <DialogDescription>{t("agents.clearSessionDetail")}</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="cancel" onClick={() => setClearDialogOpen(false)} disabled={pending}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button
               variant="destructive"
@@ -725,7 +722,7 @@ function DirectAgentRuntimeActions({
                 clearSession.mutate(agent.id, { onSuccess: () => setClearDialogOpen(false) });
               }}
             >
-              {clearSession.isPending ? "Clearing..." : "Clear session"}
+              {clearSession.isPending ? t("agents.clearing") : t("agents.clearSession")}
             </Button>
           </DialogFooter>
         </DialogContent>

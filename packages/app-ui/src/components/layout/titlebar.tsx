@@ -1,5 +1,6 @@
 import { SidebarCloseIcon, SidebarOpenIcon } from "@/icons";
 import type { ReactNode } from "react";
+import { t } from "@/lib/i18n";
 
 interface TitlebarProps {
   /** epoch ms when the workspace was archived; null for active workspaces.
@@ -19,6 +20,8 @@ interface TitlebarProps {
    *  wider/narrower (no second computed offset). With no channel selected the route
    *  carries no workspace, so no status renders and the offset is inert. */
   chromeMode: "chat" | "activity";
+  /** The section has a browse sidebar the toggle can hide. */
+  sidebarToggle: boolean;
   /** Global-search pill (#task:2557), centered on the window. */
   search?: ReactNode;
 }
@@ -39,6 +42,7 @@ export function Titlebar({
   workspaceSidebarVisible,
   onToggleWorkspaceSidebar,
   chromeMode,
+  sidebarToggle,
   search,
 }: TitlebarProps): JSX.Element {
   const isArchived = workspaceArchivedAt !== null;
@@ -49,7 +53,6 @@ export function Titlebar({
   // status aligned above ChannelView as the user drags the list (`app-layout.md
   // §1.1`, #task:1394). Fallback to `--sidebar-width` only guards the var being
   // unset before first layout. Chat keeps the collapsible offset.
-  const showSidebarToggle = chromeMode === "chat";
   const leftColumnWidth =
     chromeMode === "activity"
       ? "var(--activity-list-width, var(--sidebar-width))"
@@ -87,8 +90,8 @@ export function Titlebar({
         }}
       >
         <div className="absolute left-(--titlebar-sidebar-toggle-left) top-1/2 flex -translate-y-1/2 items-center gap-1">
-          {/* The browse-sidebar toggle is chat-only: Activity has no browse
-           * sidebar (its list is a fixed column), so it's hidden there —
+          {/* The browse-sidebar toggle shows only where a section has a browse
+           * sidebar (`hasCollapsibleSidebar`); elsewhere it's hidden —
            * the empty region still reserves the traffic-lights inset via
            * `chromeWidth`/`--titlebar-controls-safe-width` (#task:1394).
            *
@@ -99,13 +102,13 @@ export function Titlebar({
            * The retired channel toggle's Columns/Square family went with its
            * column — a second shape family for one pane would read as a
            * missing control. */}
-          {showSidebarToggle ? (
+          {sidebarToggle ? (
             <button
               type="button"
               onClick={onToggleWorkspaceSidebar}
-              aria-label={workspaceSidebarVisible ? "Hide sidebar" : "Show sidebar"}
+              aria-label={workspaceSidebarVisible ? t("ui.hideSidebar") : t("ui.showSidebar")}
               aria-pressed={workspaceSidebarVisible}
-              title="Sidebar (⌘\\)"
+              title={t("ui.sidebarShortcut")}
               className={toggleButton}
             >
               {workspaceSidebarVisible ? (
@@ -120,7 +123,7 @@ export function Titlebar({
 
       {isArchived ? (
         <span className="rounded-full bg-bg-elevated px-1.5 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
-          archived
+          {t("ui.archived")}
         </span>
       ) : null}
 

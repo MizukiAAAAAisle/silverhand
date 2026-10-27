@@ -13,10 +13,7 @@ import {
 } from '../db/schema.js';
 import { DisplayNameSchema } from './user.js';
 import { ParticipantNameSchema } from './name.js';
-import {
-  reasoningEffortValidForRuntime,
-  runtimeSupportsFastMode,
-} from '../runtime-catalog.js';
+import { reasoningEffortValidForRuntime, runtimeSupportsFastMode } from '../runtime-catalog.js';
 
 export const AgentDtoSchema = z.object({
   id: z.string(),
@@ -107,13 +104,7 @@ export const CreateAgentInputSchema = z
   // while Codex `max`/`ultra` are legal only on a verified 5.6 model. All fields
   // are present in the create payload, so the authoritative gate closes here.
   .superRefine((val, ctx) => {
-    if (
-      !reasoningEffortValidForRuntime(
-        val.runtime,
-        val.reasoning_effort,
-        val.model,
-      )
-    ) {
+    if (!reasoningEffortValidForRuntime(val.runtime, val.reasoning_effort, val.model)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['reasoning_effort'],
@@ -151,7 +142,7 @@ export const UpdateAgentInputSchema = z
     reasoning_effort: ReasoningEffortTokenSchema.nullable().optional(),
     fast_mode: FastModeSchema.nullable().optional(),
   })
-  .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
+  .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateAgentInput = z.infer<typeof UpdateAgentInputSchema>;
 
 /**
@@ -168,13 +159,7 @@ export const SwitchAgentRuntimeInputSchema = z
   })
   .strict()
   .superRefine((val, ctx) => {
-    if (
-      !reasoningEffortValidForRuntime(
-        val.runtime,
-        val.reasoning_effort,
-        val.model,
-      )
-    ) {
+    if (!reasoningEffortValidForRuntime(val.runtime, val.reasoning_effort, val.model)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['reasoning_effort'],
@@ -189,9 +174,7 @@ export const SwitchAgentRuntimeInputSchema = z
       });
     }
   });
-export type SwitchAgentRuntimeInput = z.infer<
-  typeof SwitchAgentRuntimeInputSchema
->;
+export type SwitchAgentRuntimeInput = z.infer<typeof SwitchAgentRuntimeInputSchema>;
 
 export const SwitchAgentRuntimeResponseSchema = z.object({
   agent: AgentDtoSchema,
@@ -199,9 +182,7 @@ export const SwitchAgentRuntimeResponseSchema = z.object({
   restarted_conversations: z.number().int().nonnegative(),
   restart_failures: z.number().int().nonnegative(),
 });
-export type SwitchAgentRuntimeResponse = z.infer<
-  typeof SwitchAgentRuntimeResponseSchema
->;
+export type SwitchAgentRuntimeResponse = z.infer<typeof SwitchAgentRuntimeResponseSchema>;
 
 // ── Self-profile (`silverhand profile get|update`, #task:1178) ─────────
 //
@@ -234,7 +215,7 @@ export const UpdateProfileInputSchema = z
     display_name: DisplayNameSchema.optional(),
     description: z.string().max(2000).nullable().optional(),
   })
-  .refine(v => Object.keys(v).length > 0, { message: 'no fields to update' });
+  .refine((v) => Object.keys(v).length > 0, { message: 'no fields to update' });
 export type UpdateProfileInput = z.infer<typeof UpdateProfileInputSchema>;
 
 /**
@@ -322,9 +303,7 @@ export const AgentWorkspaceTreeNodeSchema = z
     mtime: z.number(),
   })
   .strict();
-export type AgentWorkspaceTreeNode = z.infer<
-  typeof AgentWorkspaceTreeNodeSchema
->;
+export type AgentWorkspaceTreeNode = z.infer<typeof AgentWorkspaceTreeNodeSchema>;
 
 /**
  * Flat tree shape — every visible file/directory under the agent home,
@@ -356,9 +335,7 @@ export const AgentWorkspaceFileReadSchema = z
     truncated: z.boolean(),
   })
   .strict();
-export type AgentWorkspaceFileRead = z.infer<
-  typeof AgentWorkspaceFileReadSchema
->;
+export type AgentWorkspaceFileRead = z.infer<typeof AgentWorkspaceFileReadSchema>;
 
 // One placement-aware participation projection for the Agent detail surface.
 // It carries display/navigation coordinates only; runtime ownership and process
@@ -397,9 +374,7 @@ export const AgentRuntimeParticipationSchema = z.object({
   channel_title: z.string(),
   closed_at: z.number().nullable(),
 });
-export type AgentRuntimeParticipation = z.infer<
-  typeof AgentRuntimeParticipationSchema
->;
+export type AgentRuntimeParticipation = z.infer<typeof AgentRuntimeParticipationSchema>;
 
 export const AgentRuntimeSeatScopeSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('agent') }),
@@ -525,9 +500,7 @@ export const AgentAvailabilityChangedEventSchema = z
     agent_id: z.string(),
   })
   .strict();
-export type AgentAvailabilityChangedEvent = z.infer<
-  typeof AgentAvailabilityChangedEventSchema
->;
+export type AgentAvailabilityChangedEvent = z.infer<typeof AgentAvailabilityChangedEventSchema>;
 
 // Invalidation event for GET /api/agents/:id/presence (#task:2049). A pure,
 // id-only CACHE-INVALIDATION frame — same discipline as
@@ -562,12 +535,9 @@ export const AgentPresenceChangedEventSchema = z
     agent_id: z.string(),
   })
   .strict();
-export type AgentPresenceChangedEvent = z.infer<
-  typeof AgentPresenceChangedEventSchema
->;
+export type AgentPresenceChangedEvent = z.infer<typeof AgentPresenceChangedEventSchema>;
 
 export const DeleteAgentInputSchema = z.object({
   confirm: z.literal(true),
 });
 export type DeleteAgentInput = z.infer<typeof DeleteAgentInputSchema>;
-

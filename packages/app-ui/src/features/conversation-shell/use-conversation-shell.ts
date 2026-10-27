@@ -1,3 +1,4 @@
+import { hasCollapsibleSidebar } from "@/components/layout/sidebar-slot";
 import { useCompactLayout } from "@/navigation/layout";
 import { buildConversationPanes } from "./build-conversation-panes";
 import { senderFilterToParam } from "@/features/search/sender-filter-select";
@@ -67,7 +68,7 @@ export function useConversationShell({
 
   const workspaceSidebarVisible = workspaceSidebarPane.visible;
 
-  useLayoutKeyboardShortcuts(toggleWorkspaceSidebar, appSection === "chat");
+  useLayoutKeyboardShortcuts(toggleWorkspaceSidebar, hasCollapsibleSidebar(appSection));
 
   const { data: agents = [] } = useAgents();
 
@@ -119,11 +120,8 @@ export function useConversationShell({
 
   const panes = useConversationPanes(read, jump, { compact });
 
-  useNotificationToasts(
-    appSection === "chat" || appSection === "activity"
-      ? (panes.focusedConversation?.id ?? null)
-      : null,
-    (target) => handleJumpToMessage(target),
+  useNotificationToasts(panes.focusedConversation?.id ?? null, (target) =>
+    handleJumpToMessage(target),
   );
 
   // Regular width defers a section's teardown past the click (`SectionLayer`).
@@ -245,7 +243,6 @@ export function useConversationShell({
 
       directDraftTarget,
       workspaceSidebarPane,
-      workspaceSidebarVisible,
 
       workspaces: read.workspaces,
       workspacesLoading: read.workspacesLoading,

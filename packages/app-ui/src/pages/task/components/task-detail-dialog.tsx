@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/button";
 import { MiniIconButton } from "@/features/tasks/components/mini-icon-button";
 import { TaskDetailMetaPanel } from "@/pages/task/components/task-detail-meta-panel";
 import {
-  FAILURE_COPY,
+  failureCopy,
   InlineFieldEditor,
   useTaskWriteSlot,
   type EditingField,
@@ -29,6 +29,7 @@ import {
   type TaskDetailView,
   type TaskJumpTarget,
 } from "@/features/tasks/model/task-detail";
+import { t } from "@/lib/i18n";
 
 export type { TaskJumpTarget } from "@/features/tasks/model/task-detail";
 
@@ -178,8 +179,8 @@ export function TaskDetailDialog({
               data-sticker
               data-sticker-size="md"
               data-sticker-tone="neutral"
-              title="View in conversation"
-              aria-label="View in conversation"
+              title={t("taskPage.viewInConversation")}
+              aria-label={t("taskPage.viewInConversation")}
               onClick={() => onJump(jumpTarget)}
               className={dialogCornerButtonClass}
             >
@@ -249,13 +250,13 @@ function TaskDetailContent({
               reachable here — but it stays a single muted line: the body below
               is still readable, this is a footnote about its freshness. */}
           <div className="flex items-center gap-3 border-b border-border-subtle px-5 py-2 text-xs text-text-muted">
-            <span>Showing the last loaded version — the refresh failed.</span>
+            <span>{t("taskPage.showingTheLastLoaded")}</span>
             <button
               type="button"
               onClick={onRetry}
               className="ml-auto shrink-0 rounded px-1 py-0.5 font-medium text-text-secondary underline-offset-2 hover:text-text-primary hover:underline focus-outline"
             >
-              Retry
+              {t("common.retry")}
             </button>
           </div>
           <TaskDetailBody
@@ -283,13 +284,13 @@ function TaskDetailStatePanel({
   if (failure === null) {
     return (
       <div>
-        <DialogTitle className="sr-only">Task detail</DialogTitle>
-        <DialogDescription className="sr-only">Loading task</DialogDescription>
+        <DialogTitle className="sr-only">{t("taskPage.taskDetail")}</DialogTitle>
+        <DialogDescription className="sr-only">{t("taskPage.loadingTask")}</DialogDescription>
         <TaskBodySkeleton />
       </div>
     );
   }
-  const copy = FAILURE_COPY[failure];
+  const copy = failureCopy()[failure];
   return (
     <div className="flex flex-col gap-1.5 px-5 py-6 pr-12">
       <DialogTitle className="text-sm font-semibold leading-snug text-text-primary">
@@ -308,7 +309,7 @@ function TaskDetailStatePanel({
           className="mt-2 self-start"
           onClick={onRetry}
         >
-          Retry
+          {t("common.retry")}
         </Button>
       ) : null}
     </div>
@@ -361,7 +362,7 @@ function TaskDetailBody({
             <>
               {/* Radix needs a DialogTitle for a11y even while the visible title
                   is swapped for the inline editor. */}
-              <DialogTitle className="sr-only">Edit task title</DialogTitle>
+              <DialogTitle className="sr-only">{t("taskPage.editTaskTitle")}</DialogTitle>
               <InlineFieldEditor
                 taskId={detail.id}
                 field="title"
@@ -378,7 +379,7 @@ function TaskDetailBody({
               {!busy ? (
                 <MiniIconButton
                   icon={EditIcon}
-                  label="Edit title"
+                  label={t("taskPage.editTitle")}
                   className="mt-0.5"
                   onClick={() => onEditField("title")}
                 />
@@ -386,7 +387,7 @@ function TaskDetailBody({
             </div>
           )}
         </div>
-        <DialogDescription className="sr-only">Task detail</DialogDescription>
+        <DialogDescription className="sr-only">{t("taskPage.taskDetail")}</DialogDescription>
       </DialogHeader>
 
       {/* Two columns, each scrolling on its own: a long description scrolls
@@ -415,13 +416,13 @@ function TaskDetailBody({
                 {detail.content.trim() ? (
                   <Markdown content={detail.content} taskReferences="raw" />
                 ) : (
-                  <p className="text-sm italic text-text-muted">No description.</p>
+                  <p className="text-sm italic text-text-muted">{t("taskPage.noDescription")}</p>
                 )}
               </div>
               {!busy ? (
                 <MiniIconButton
                   icon={EditIcon}
-                  label="Edit description"
+                  label={t("taskPage.editDescription")}
                   className="mt-0.5"
                   onClick={() => onEditField("content")}
                 />

@@ -14,8 +14,7 @@ import type {
 } from "@silverhand/shared";
 import { cn } from "@/lib/cn";
 import { AVATAR_PX } from "@/components/avatar-scale";
-import { ChannelIcon } from "@/components/channel-icon";
-import { PlusIcon, SettingsIcon, StarIcon, ThreadIcon } from "@/icons";
+import { LockIcon, PlusIcon, SettingsIcon, StarIcon, ThreadIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
 import { WorkspaceIcon } from "@/components/workspace-icon";
 import { isAgentSpace } from "@/features/workspaces/workspace-ownership";
@@ -37,6 +36,7 @@ import {
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
 import { AuthorAvatarView } from "@/features/messages/components/author-avatar-view";
+import { ChannelAvatar } from "@/features/conversations/components/channel-avatar";
 import { presentAuthor } from "@/features/messages/model/author-presentation";
 import {
   useArchiveChannel,
@@ -44,13 +44,19 @@ import {
   useStarChannel,
 } from "@/features/workspaces/hooks";
 import { AppContextMenu } from "@/components/menus/app-context-menu";
-import { useFavoritesList } from "@/features/workspaces/favorites";
+import { starredConversationIds, useFavoritesList } from "@/features/workspaces/favorites";
+import { DirectPairStarMenuItem } from "./direct-messages-panel";
 import { useViewerUser } from "@/features/session/hooks";
 import { channelNodeBadge, directRowBadge } from "../model/sidebar-row-badges";
-import { orderRecentRows, recentPreviewText, recentTimeLabel } from "../model/recent-rows";
+import {
+  orderRecentRows,
+  recentPreviewText,
+  recentTimeLabel,
+} from "@/features/conversations/latest/recent-rows";
 import { ChannelRowMenuItems } from "./channel-row-menu-items";
 import { ProjectFilterStrip } from "./project-filter-strip";
 import type { WorkspaceItem } from "./workspaces-panel";
+import { t } from "@/lib/i18n";
 
 type RecentListRow =
   | {
@@ -129,10 +135,7 @@ export function RecentList(props: {
   const latest = useConversationLatest();
   const viewer = useViewerUser();
 
-  const pinned = useMemo(
-    () => new Set((favorites.data?.items ?? []).map((item) => item.entity_id)),
-    [favorites.data],
-  );
+  const pinned = useMemo(() => starredConversationIds(favorites.data), [favorites.data]);
 
   const rows: RecentListRow[] = [];
   workspaceIds.forEach((workspaceId, index) => {
@@ -233,7 +236,7 @@ export function RecentList(props: {
         </div>
       ) : null}
 
-      {loading ? <SidebarRowsSkeleton label="Loading conversations" /> : null}
+      {loading ? <SidebarRowsSkeleton label={t("chat.loadingConversations")} /> : null}
 
       <ul className="flex flex-col">
         {visible.map((row, index) => (
@@ -298,11 +301,11 @@ function ProjectBar(props: {
         {props.workspace.name}
       </span>
       <div className="flex shrink-0 items-center">
-        <ProjectBarButton label="New channel" onClick={props.onCreateChannel}>
+        <ProjectBarButton label={t("chat.newChannel")} onClick={props.onCreateChannel}>
           <PlusIcon className="size-4" />
         </ProjectBarButton>
         {props.onOpenSettings ? (
-          <ProjectBarButton label="Project settings" onClick={props.onOpenSettings}>
+          <ProjectBarButton label={t("chat.projectSettings")} onClick={props.onOpenSettings}>
             <SettingsIcon className="size-4" />
           </ProjectBarButton>
         ) : null}
@@ -374,7 +377,7 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
     !sender || !latest
       ? null
       : sender.navigableId !== null && sender.navigableId === viewerId
-        ? "You"
+        ? t("chat.you")
         : row.kind === "channel"
           ? sender.label
           : null;
@@ -414,13 +417,6 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
         )}
       >
         <span className="flex min-w-0 items-baseline gap-1.5">
-          {row.kind === "channel" ? (
-            <ChannelIcon
-              variant="utility"
-              visibility={row.visibility}
-              className="-mr-0.5 size-3 self-center text-text-muted"
-            />
-          ) : null}
           <span
             className={cn(
               "min-w-0 truncate text-[13px] leading-4 text-text-primary",
@@ -430,6 +426,13 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
           >
             {title}
           </span>
+          {row.kind === "channel" && row.visibility === "private" ? (
+            <LockIcon
+              role="img"
+              aria-label={t("chat.private")}
+              className="-mx-0.5 size-3 shrink-0 self-center text-text-muted"
+            />
+          ) : null}
           {row.kind === "channel" ? (
             <span className="min-w-0 shrink-[999] truncate text-(length:--text-meta) text-text-muted">
               {row.workspaceName}
@@ -438,7 +441,7 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
           {pinned ? (
             <StarIcon
               role="img"
-              aria-label="Starred"
+              aria-label={t("chat.starred2")}
               className="ml-auto size-3 shrink-0 self-center fill-current text-text-muted opacity-60"
             />
           ) : null}
@@ -457,7 +460,7 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
             {latest?.thread_root_id ? (
               <ThreadIcon
                 role="img"
-                aria-label="In a thread"
+                aria-label={t("chat.inAThread")}
                 className="mr-1 inline size-3 align-[-2px]"
               />
             ) : null}
@@ -474,49 +477,19 @@ const RecentRow = forwardRef<HTMLButtonElement, RecentRowProps>(function RecentR
   );
 });
 
-/** Telegram's seven name tones. The hue is keyed on the conversation id, so a
- *  rename keeps a channel's colour. */
-const CHANNEL_TONES = [
-  "#e17076",
-  "#faa774",
-  "#a695e7",
-  "#7bc862",
-  "#6ec9cb",
-  "#65aadd",
-  "#ee7aae",
-] as const;
-
-function channelTone(id: string): string {
-  let hash = 0;
-  for (let i = 0; i < id.length; i += 1) {
-    hash = (hash * 31 + id.charCodeAt(i)) | 0;
-  }
-
-  return CHANNEL_TONES[Math.abs(hash) % CHANNEL_TONES.length]!;
-}
-
-function ChannelAvatar(props: { id: string; title: string }): JSX.Element {
-  const initial = Array.from(props.title.trim())[0]?.toUpperCase() ?? "#";
-
-  return (
-    <span
-      className="flex shrink-0 items-center justify-center text-[15px] font-semibold text-white"
-      style={{ width: AVATAR_PX.lg, height: AVATAR_PX.lg, backgroundColor: channelTone(props.id) }}
-    >
-      {initial}
-    </span>
-  );
-}
-
-/** The tree's channel menu (star, notifications, archive, copy name) on the same
- *  channel here. DM rows have no menu in the tree either. */
+/** The tree's row menu on the same conversation here: the channel menu, or a
+ *  direct pair's Star item. */
 function RecentRowMenu(props: {
   row: RecentListRow;
   pinned: boolean;
   children: ReactElement;
 }): JSX.Element {
   if (props.row.kind !== "channel") {
-    return props.children;
+    return (
+      <AppContextMenu trigger={props.children}>
+        <DirectPairStarMenuItem conversationId={props.row.id} starred={props.pinned} />
+      </AppContextMenu>
+    );
   }
 
   return (

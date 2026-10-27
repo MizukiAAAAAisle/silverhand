@@ -35,10 +35,7 @@ import {
 
 const SHARED_SRC = join(dirname(fileURLToPath(import.meta.url)), '../src');
 
-const TABLES: readonly (readonly [
-  string,
-  readonly (readonly [number, number])[],
-])[] = [
+const TABLES: readonly (readonly [string, readonly (readonly [number, number])[]])[] = [
   ['NAME_RENDERABLE_RANGES', NAME_RENDERABLE_RANGES],
   ['NAME_DEFAULT_IGNORABLE_RANGES', NAME_DEFAULT_IGNORABLE_RANGES],
   ['NAME_ENCLOSING_MARK_RANGES', NAME_ENCLOSING_MARK_RANGES],
@@ -70,10 +67,7 @@ describe('pinned charset tables (#task:2016)', () => {
   }
 
   it('admits exactly the reviewed number of code points', () => {
-    const total = NAME_RENDERABLE_RANGES.reduce(
-      (sum, [start, end]) => sum + (end - start + 1),
-      0,
-    );
+    const total = NAME_RENDERABLE_RANGES.reduce((sum, [start, end]) => sum + (end - start + 1), 0);
     expect(total).toBe(NAME_RENDERABLE_CODE_POINT_COUNT);
   });
 
@@ -161,10 +155,7 @@ describe('name code point verdicts (#task:2016)', () => {
     it(`admits U+${codePoint.toString(16).toUpperCase().padStart(4, '0')} — ${why}`, () => {
       const value = String.fromCodePoint(codePoint);
       expect(
-        findForbiddenCodePoint(value, [
-          INVISIBLE_CODE_POINTS,
-          SEQUENCE_FORMING_EMOJI_PARTS,
-        ]),
+        findForbiddenCodePoint(value, [INVISIBLE_CODE_POINTS, SEQUENCE_FORMING_EMOJI_PARTS]),
       ).toBeNull();
     });
   }
@@ -188,9 +179,7 @@ describe('name code point verdicts (#task:2016)', () => {
   it('reports the offender by CODE POINT index, counting an astral character once', () => {
     // `🚀` is two UTF-16 units; a caller that reports `.indexOf` would name
     // position 3 for a character a person would count as the third.
-    const found = findForbiddenCodePoint('\u{1F680}a\u200B', [
-      INVISIBLE_CODE_POINTS,
-    ]);
+    const found = findForbiddenCodePoint('\u{1F680}a\u200B', [INVISIBLE_CODE_POINTS]);
     expect(found).toEqual({ codePoint: 0x200b, index: 2 });
   });
 });
@@ -211,17 +200,13 @@ describe('no engine Unicode properties in the name domain (#task:2016)', () => {
 
   for (const relative of NAME_DOMAIN_SOURCES) {
     it(`${relative} decides nothing with a \\p{…} class`, () => {
-      const code = stripComments(
-        readFileSync(join(SHARED_SRC, relative), 'utf8'),
-      );
+      const code = stripComments(readFileSync(join(SHARED_SRC, relative), 'utf8'));
       expect(code).not.toMatch(/\\p\{/);
     });
   }
 
   it('strips comments without stripping code, so the scan is not vacuously green', () => {
-    const code = stripComments(
-      readFileSync(join(SHARED_SRC, 'display-name-charset.ts'), 'utf8'),
-    );
+    const code = stripComments(readFileSync(join(SHARED_SRC, 'display-name-charset.ts'), 'utf8'));
     // The docblocks DO mention `\p{Emoji}` and `\p{Cn}`; if the stripper failed,
     // the assertions above would be red rather than falsely green — this pins the
     // other direction, that it did not strip the declarations too.

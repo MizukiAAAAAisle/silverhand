@@ -8,6 +8,7 @@ import {
   AuthorAvatarView,
   DeletedActorMarker,
 } from "@/features/messages/components/author-avatar-view";
+import { cn } from "@/lib/cn";
 import { useNav } from "@/router";
 import { focusAgentSideSection } from "@/features/agents/components/agent-view";
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
@@ -20,6 +21,7 @@ import {
   presentCounterpart,
 } from "@/features/direct-pairs/counterpart-presentation";
 import type { ConversationPaneCapabilities } from "@/features/conversations/pane-mode";
+import { t } from "@/lib/i18n";
 
 const TITLE_CLASS =
   "min-w-0 truncate font-serif text-base leading-4.5 font-semibold text-text-primary";
@@ -56,8 +58,11 @@ export function ConversationHeaderIdentity({
   if (identity === "counterpart" && counterpart) {
     return <CounterpartIdentity title={title} counterpart={counterpart} />;
   }
+  // A flex row, not inline flow: the 30px `#` box on a text line grows the line
+  // box past the box itself (middle-aligned against the serif strut), so the title
+  // would stand taller than the header's identity edge and sit off its centre.
   return (
-    <span data-conversation-title className={TITLE_CLASS}>
+    <span data-conversation-title className={cn(TITLE_CLASS, "flex items-center")}>
       {identity === "channel_hash" ? (
         <span
           data-conversation-hash-icon
@@ -68,7 +73,7 @@ export function ConversationHeaderIdentity({
           <HashIcon size={HEADER_IDENTITY_GLYPH_PX} />
         </span>
       ) : null}
-      {title}
+      <span className="min-w-0 truncate">{title}</span>
     </span>
   );
 }
@@ -161,9 +166,9 @@ function CounterpartIdentity({
             focusAgentSideSection(agentId, "activity");
             openAgentPanel(agentId);
           }}
-          aria-label={`Open ${presentation.label} activity`}
-          title={`Open ${presentation.label} activity`}
-          className="focus-outline inline-flex shrink-0 rounded-none transition-[filter] duration-100 hover:brightness-90"
+          aria-label={t("conversationShell.openActivity", { name: presentation.label })}
+          title={t("conversationShell.openActivity", { name: presentation.label })}
+          className="focus-outline inline-flex shrink-0 rounded-(--avatar-radius) transition-[filter] duration-100 hover:brightness-90"
         >
           {face}
         </button>
@@ -171,9 +176,9 @@ function CounterpartIdentity({
         <button
           type="button"
           onClick={() => openHumanPanel(counterpart.id)}
-          aria-label={`Open ${presentation.label} profile`}
-          title={`Open ${presentation.label} profile`}
-          className="focus-outline inline-flex shrink-0 rounded-none transition-[filter] duration-100 hover:brightness-90"
+          aria-label={t("conversationShell.openProfile", { name: presentation.label })}
+          title={t("conversationShell.openProfile", { name: presentation.label })}
+          className="focus-outline inline-flex shrink-0 rounded-(--avatar-radius) transition-[filter] duration-100 hover:brightness-90"
         >
           {face}
         </button>
@@ -241,7 +246,7 @@ function HumanPresenceDot({ userId }: { userId: string }): JSX.Element {
   return (
     <span
       data-status-pip
-      title={online ? "Online" : "Offline"}
+      title={online ? t("conversationShell.online") : t("conversationShell.offline")}
       className={`${PRESENCE_DOT_CLASS} ${online ? "bg-success" : "bg-text-muted/40"}`}
     />
   );

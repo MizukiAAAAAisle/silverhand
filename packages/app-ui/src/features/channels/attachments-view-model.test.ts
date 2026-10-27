@@ -8,6 +8,7 @@ import type {
 } from "@silverhand/shared";
 import { decodeMessageSeq } from "@silverhand/shared";
 import { groupAttachmentsByDay, resolveSenderIdentity } from "./attachments-view-model";
+import { t } from "@/lib/i18n";
 
 // A fixed local time: 2026-07-13 15:00 in the runner's TZ. All day math in
 // the SUT is TZ-relative, so pinning the base timestamp + always deriving
@@ -211,7 +212,7 @@ describe("groupAttachmentsByDay", () => {
 
     const groups = groupAttachmentsByDay(items, { now: NOW, locale: "en-US" });
 
-    expect(groups.map((g) => g.label)).toEqual(["Today", "Yesterday"]);
+    expect(groups.map((g) => g.label)).toEqual([t("channels.today"), t("channels.yesterday")]);
     expect(groups[0]!.items.map((i) => i.attachment.id)).toEqual(["a1", "a2"]);
     expect(groups[1]!.items.map((i) => i.attachment.id)).toEqual(["a3"]);
   });
@@ -224,8 +225,8 @@ describe("groupAttachmentsByDay", () => {
     });
 
     expect(groups).toHaveLength(1);
-    expect(groups[0]!.label).not.toBe("Today");
-    expect(groups[0]!.label).not.toBe("Yesterday");
+    expect(groups[0]!.label).not.toBe(t("channels.today"));
+    expect(groups[0]!.label).not.toBe(t("channels.yesterday"));
     // Format is stable enough to assert both a comma-separated locale string
     // and the presence of the numeric year — either shape is acceptable.
     expect(groups[0]!.label).toMatch(/2026/);
@@ -252,7 +253,7 @@ describe("groupAttachmentsByDay", () => {
       { now, locale: "en-US" },
     );
 
-    expect(groups.map((g) => g.label)).toEqual(["Today", "Yesterday"]);
+    expect(groups.map((g) => g.label)).toEqual([t("channels.today"), t("channels.yesterday")]);
     expect(groups[0]!.items.map((i) => i.attachment.id)).toEqual(["after"]);
     expect(groups[1]!.items.map((i) => i.attachment.id)).toEqual(["before"]);
   });

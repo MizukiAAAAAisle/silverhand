@@ -19,6 +19,7 @@ import type {
 } from "@silverhand/shared";
 import { Markdown } from "@/features/messages/components/markdown";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 /**
  * The read-only file browser for an agent's own files, factored out of
@@ -176,7 +177,7 @@ function FullBrowser({
             stays put while the tree scrolls. */}
         <header className="flex shrink-0 items-center gap-2 border-b border-border-subtle px-3 py-2">
           <span className="text-(length:--text-meta) uppercase tracking-[0.08em] text-text-muted">
-            Files
+            {t("agents.files")}
           </span>
           <RefreshButton onRefresh={onRefresh} isFetching={treeQuery.isFetching} />
         </header>
@@ -221,8 +222,8 @@ function CompactBrowser({
               type="button"
               onClick={() => onSelect(null)}
               className="flex items-center rounded-(--row-radius) p-1 text-text-muted transition-colors hover:text-text-primary"
-              aria-label="Back to file list"
-              title="Back to file list"
+              aria-label={t("agents.backToFileList")}
+              title={t("agents.backToFileList")}
             >
               <ChevronRightIcon className="size-4 rotate-180" />
             </button>
@@ -261,8 +262,8 @@ function RefreshButton({
       disabled={isFetching}
       data-panel-control="row-action"
       className="ml-auto inline-flex size-6 shrink-0 items-center justify-center text-text-muted transition-colors hover:text-text-primary focus-outline disabled:opacity-50"
-      aria-label="Refresh workspace files"
-      title="Refresh"
+      aria-label={t("agents.refreshWorkspaceFiles")}
+      title={t("agents.refresh")}
     >
       <ReloadIcon className={cn("size-3.5", isFetching && "animate-spin")} />
     </button>
@@ -287,10 +288,10 @@ function TreeColumn({
     );
   }
   if (treeQuery.isError) {
-    return <div className="px-3 py-3 text-xs text-error">Failed to load workspace files.</div>;
+    return <div className="px-3 py-3 text-xs text-error">{t("agents.failedToLoadWorkspace")}</div>;
   }
   if (treeQuery.data && treeQuery.data.nodes.length === 0) {
-    return <div className="px-3 py-3 text-xs text-text-muted">No files here yet.</div>;
+    return <div className="px-3 py-3 text-xs text-text-muted">{t("agents.noFilesHereYet")}</div>;
   }
   if (treeQuery.data) {
     return (
@@ -479,18 +480,18 @@ function WorkspaceFilePreview({
   if (path === null) {
     return (
       <div className="flex h-full items-center justify-center text-xs text-text-muted">
-        Select a file to preview.
+        {t("agents.selectAFileTo")}
       </div>
     );
   }
   if (fileQuery.isLoading) {
-    return <DocumentSkeleton label={`Loading ${leafName(path)}`} />;
+    return <DocumentSkeleton label={t("agents.loadingFile", { file: leafName(path) })} />;
   }
   if (fileQuery.isError) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-1 px-6 text-center text-xs text-error">
-        <span className="font-medium">Couldn't read {leafName(path)}.</span>
-        <span className="text-text-muted">It may be unavailable right now.</span>
+        <span className="font-medium">{t("agents.readFailed", { file: leafName(path) })}</span>
+        <span className="text-text-muted">{t("agents.itMayBeUnavailable")}</span>
       </div>
     );
   }
@@ -515,8 +516,8 @@ function WorkspaceFilePreview({
             type="button"
             data-panel-control="row-action"
             className="inline-flex size-6 items-center justify-center text-text-muted transition-colors hover:text-text-primary"
-            aria-label="Copy file contents"
-            title="Copy contents"
+            aria-label={t("agents.copyFileContents")}
+            title={t("agents.copyContents")}
             onClick={() => void copyFileContent(file)}
           >
             <CopyIcon className="size-3" />
@@ -528,8 +529,7 @@ function WorkspaceFilePreview({
           data-panel-card="placeholder"
           className="shrink-0 border-b border-warning/40 bg-warning/10 px-4 py-2 text-(length:--text-meta) text-text-on-warning"
         >
-          Preview truncated at 512 KB. The full file lives on the agent's host — not all of it is
-          shown here.
+          {t("agents.previewTruncated")}
         </div>
       ) : null}
       <div className="min-h-0 flex-1 overflow-auto bg-bg-floating px-4 py-3 text-sm text-text-primary">
@@ -563,7 +563,9 @@ function WorkspaceFilePreview({
 async function copyFileContent(file: AgentWorkspaceFileRead): Promise<void> {
   try {
     await navigator.clipboard.writeText(file.content);
-    toast.success(file.truncated ? "Copied the truncated preview" : "Copied to clipboard");
+    toast.success(
+      file.truncated ? t("agents.copiedTheTruncatedPreview") : t("agents.copiedToClipboard"),
+    );
   } catch (err) {
     toast.error("Couldn't copy: " + (err instanceof Error ? err.message : String(err)));
   }

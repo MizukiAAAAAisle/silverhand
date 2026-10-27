@@ -486,6 +486,55 @@ describe('IntentDispatcher — runtime_* routing', () => {
     });
   });
 
+  it.each(['runtime_binary_missing', 'runtime_version_unsupported'] as const)(
+    'runtime_start and runtime_deliver both carry %s on the wire',
+    async (code) => {
+      const fail = () => {
+        throw new RuntimeStartResolveError(code, 'Pi is not installed on this computer.');
+      };
+      const supervisor = { start: fail, deliver: fail } as unknown as SupervisorContract;
+      const d = new IntentDispatcher({ logger: silentLogger(), supervisor });
+      const started = await d.dispatch(
+        's',
+        'runtime_start',
+        {
+          runtime_generation: 1,
+          conversation_id: 'c1',
+          agent_id: 'a1',
+          options: testStartOptions(),
+        },
+        { owner: 'test-owner' },
+      );
+      const delivered = await d.dispatch(
+        'd',
+        'runtime_deliver',
+        {
+          runtime_generation: 1,
+          conversation_id: 'c1',
+          target: { conversation_id: 'c1', workspace: null },
+          agent_id: 'a1',
+          delivery_ids: [1],
+          deliveries: [
+            {
+              delivery_id: 1,
+              seq: 1,
+              presentation: { body: 'hi', instruction: 'system' as const },
+            },
+          ],
+          kind: 'message',
+          text: 'hi',
+          spawn_options: testStartOptions(),
+        },
+        { owner: 'test-owner' },
+      );
+      for (const r of [started, delivered]) {
+        expect(r).toMatchObject({
+          error: { code, message: 'Pi is not installed on this computer.' },
+        });
+      }
+    },
+  );
+
   it('runtime_status reflects supervisor snapshot', async () => {
     const queue: Array<() => void> = [];
     const supervisor = new FakeSupervisor({

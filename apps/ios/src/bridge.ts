@@ -5,13 +5,19 @@ import type {
   BannerNotice,
   ComposerEvent,
   ComposerState,
+  ContextMenu,
+  ContextMenuChoice,
   TitlebarEvent,
   TitlebarState,
   PageBarEvent,
   PageBarState,
+  SelectionBarEvent,
+  SelectionBarState,
   BackendProxyRequest,
   BackendProxyResponse,
   ClientAuthResult,
+  PasswordRecoveryCall,
+  PasswordRecoveryResult,
   NativeNavigationState,
   NativeNavigationIntent,
 } from "@silverhand/client";
@@ -32,6 +38,8 @@ export interface NativeBridge {
   navigationSync(state: NativeNavigationState): Promise<{ tabBarHeight: number }>;
   navigationReset(input: { session: string }): Promise<void>;
   navigationAvatar(input: { base64?: string }): Promise<void>;
+  /** The language the page resolved; native tabs and sheets follow it. */
+  setLocale(input: { locale: "en" | "zh" }): Promise<void>;
   /** Groups of page controls the iPhone Duo vertical bar draws. */
   /** The wide layout's native titlebar; a null state removes it. */
   titlebar(input: { state: TitlebarState | null }): Promise<void>;
@@ -44,6 +52,10 @@ export interface NativeBridge {
   composerSync(input: { state: ComposerState }): Promise<void>;
   /** Removes the composer if it shows draft `key`; without a key, whatever it shows. */
   composerRemove(input: { key?: string }): Promise<void>;
+  /** The compact message-selection bar, in the composer's place. */
+  selectionBarSync(input: { state: SelectionBarState }): Promise<void>;
+  /** Removes the selection bar if it shows pane `key`. */
+  selectionBarRemove(input: { key: string }): Promise<void>;
   /** A notice over the bars; the icon is base64 PNG. */
   bannerShow(input: BannerNotice): Promise<void>;
   composerSetText(input: {
@@ -66,7 +78,9 @@ export interface NativeBridge {
     info: BackendProxyResponse;
     me?: BackendProxyResponse;
   }>;
+  serverInfo(): Promise<BackendProxyResponse>;
   authenticate(input: { action: "login" | "signup"; body: string }): Promise<ClientAuthResult>;
+  passwordRecovery(input: PasswordRecoveryCall): Promise<PasswordRecoveryResult>;
   logout(): Promise<void>;
   request(input: BackendProxyRequest): Promise<BackendProxyResponse & { bodyBase64?: string }>;
   upload(input: {
@@ -79,6 +93,17 @@ export interface NativeBridge {
   closeSocket(input: { id: string }): Promise<void>;
   saveAttachment(input: { filename: string; base64: string }): Promise<{ completed: boolean }>;
   sharePng(input: { base64: string }): Promise<{ completed: boolean }>;
+  /** A rendered image in a native sheet with a share action. */
+  previewPng(input: {
+    base64: string;
+    title: string;
+    shareLabel: string;
+    closeLabel: string;
+  }): Promise<{ shared: boolean }>;
+  /** Whether this iOS draws `contextMenuShow`. */
+  contextMenuAvailable(): Promise<{ available: boolean }>;
+  /** The system context menu; `choice` is absent when it was dismissed. */
+  contextMenuShow(input: { menu: ContextMenu }): Promise<{ choice?: ContextMenuChoice }>;
   /** The native avatar editor; both fields are absent when it was dismissed. */
   avatarMakerEdit(input: {
     config: { parts: Record<string, number>; bg: number };
@@ -108,12 +133,12 @@ export interface NativeBridge {
     handler: (event: ComposerEvent) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
-    event: "banner",
-    handler: (event: BannerEvent) => void,
+    event: "selectionBar",
+    handler: (event: SelectionBarEvent) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
-    event: "composerMetrics",
-    handler: (metrics: { rest: number; reserve: number; overlay: number; picker: number }) => void,
+    event: "banner",
+    handler: (event: BannerEvent) => void,
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "fold",
@@ -123,7 +148,7 @@ export interface NativeBridge {
   ): Promise<PluginListenerHandle>;
   addListener(
     event: "barMetrics",
-    handler: (metrics: { bottom: number; tabs: number }) => void,
+    handler: (metrics: { bottom: number; tabs: number; vertical: boolean }) => void,
   ): Promise<PluginListenerHandle>;
 }
 export const nativeBridge = registerPlugin<NativeBridge>("SilverhandClient");

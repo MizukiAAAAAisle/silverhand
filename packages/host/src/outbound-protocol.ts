@@ -224,16 +224,11 @@ export type RotateTokenResult = z.infer<typeof RotateTokenResultSchema>;
  */
 export const AgentMaterializeWireErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      AgentMaterializeErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorSchema.shape.code, AgentMaterializeErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
-export type AgentMaterializeWireError = z.infer<
-  typeof AgentMaterializeWireErrorSchema
->;
+export type AgentMaterializeWireError = z.infer<typeof AgentMaterializeWireErrorSchema>;
 
 /**
  * Per-command wire error schemas for the D4.e data-plane intents.
@@ -243,16 +238,11 @@ export type AgentMaterializeWireError = z.infer<
  */
 export const AgentWorkspaceIndexWireErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      AgentWorkspaceIndexErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorSchema.shape.code, AgentWorkspaceIndexErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
-export type AgentWorkspaceIndexWireError = z.infer<
-  typeof AgentWorkspaceIndexWireErrorSchema
->;
+export type AgentWorkspaceIndexWireError = z.infer<typeof AgentWorkspaceIndexWireErrorSchema>;
 
 /**
  * #task:811 — shared wire error envelope for the new agent home
@@ -264,65 +254,42 @@ export type AgentWorkspaceIndexWireError = z.infer<
  */
 export const AgentWorkspaceFsWireErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      AgentWorkspaceFsErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorSchema.shape.code, AgentWorkspaceFsErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
-export type AgentWorkspaceFsWireError = z.infer<
-  typeof AgentWorkspaceFsWireErrorSchema
->;
+export type AgentWorkspaceFsWireError = z.infer<typeof AgentWorkspaceFsWireErrorSchema>;
 
 export const AgentL2SeedWireErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      AgentL2SeedErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorSchema.shape.code, AgentL2SeedErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
-export type AgentL2SeedWireError = z.infer<
-  typeof AgentL2SeedWireErrorSchema
->;
+export type AgentL2SeedWireError = z.infer<typeof AgentL2SeedWireErrorSchema>;
 
 export const AgentFilesPurgeWireErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      AgentFilesPurgeErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorSchema.shape.code, AgentFilesPurgeErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
-export type AgentFilesPurgeWireError = z.infer<
-  typeof AgentFilesPurgeWireErrorSchema
->;
+export type AgentFilesPurgeWireError = z.infer<typeof AgentFilesPurgeWireErrorSchema>;
 
 // #task:1135: profile-mcp write widens its wire error with the same
 // per-command scoping — `invalid_config` (fail-loud re-validation),
 // `fs_unavailable` (E* host-fs error), `internal_error`.
 export const AgentProfileMcpWireErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      AgentProfileMcpErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorSchema.shape.code, AgentProfileMcpErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
-export type AgentProfileMcpWireError = z.infer<
-  typeof AgentProfileMcpWireErrorSchema
->;
+export type AgentProfileMcpWireError = z.infer<typeof AgentProfileMcpWireErrorSchema>;
 
 export const AgentProfileMcpWriteWireErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      AgentProfileMcpWriteErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorSchema.shape.code, AgentProfileMcpWriteErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
@@ -349,16 +316,11 @@ export type McpProbeWireError = z.infer<typeof McpProbeWireErrorSchema>;
 // executes the same resolver as `runtime_start`.
 export const RuntimeStartWireErrorSchema = z
   .object({
-    code: z.union([
-      ResponseErrorSchema.shape.code,
-      RuntimeStartErrorCodeSchema,
-    ]),
+    code: z.union([ResponseErrorSchema.shape.code, RuntimeStartErrorCodeSchema]),
     message: z.string(),
   })
   .strict();
-export type RuntimeStartWireError = z.infer<
-  typeof RuntimeStartWireErrorSchema
->;
+export type RuntimeStartWireError = z.infer<typeof RuntimeStartWireErrorSchema>;
 
 /**
  * Source of truth for D2 server-issued commands. The runtime_* entries
@@ -517,18 +479,21 @@ export const outboundServerCommandSchemas = {
 } as const;
 
 export type OutboundServerCommandKind = keyof typeof outboundServerCommandSchemas;
-export type OutboundServerCommandParams<K extends OutboundServerCommandKind> =
-  z.infer<(typeof outboundServerCommandSchemas)[K]['params']>;
-export type OutboundServerCommandResult<K extends OutboundServerCommandKind> =
-  z.infer<(typeof outboundServerCommandSchemas)[K]['result']>;
-export type OutboundServerCommandError<K extends OutboundServerCommandKind> =
-  z.infer<(typeof outboundServerCommandSchemas)[K]['error']>;
+export type OutboundServerCommandParams<K extends OutboundServerCommandKind> = z.infer<
+  (typeof outboundServerCommandSchemas)[K]['params']
+>;
+export type OutboundServerCommandResult<K extends OutboundServerCommandKind> = z.infer<
+  (typeof outboundServerCommandSchemas)[K]['result']
+>;
+export type OutboundServerCommandError<K extends OutboundServerCommandKind> = z.infer<
+  (typeof outboundServerCommandSchemas)[K]['error']
+>;
 
 export const OUTBOUND_SERVER_COMMAND_KINDS = Object.keys(
   outboundServerCommandSchemas,
 ) as OutboundServerCommandKind[];
 
-const serverCommandFrameOptions = OUTBOUND_SERVER_COMMAND_KINDS.map(kind =>
+const serverCommandFrameOptions = OUTBOUND_SERVER_COMMAND_KINDS.map((kind) =>
   z
     .object({
       direction: z.literal('server_to_daemon'),
@@ -538,10 +503,7 @@ const serverCommandFrameOptions = OUTBOUND_SERVER_COMMAND_KINDS.map(kind =>
       params: outboundServerCommandSchemas[kind].params,
     })
     .strict(),
-) as unknown as [
-  z.ZodDiscriminatedUnionOption<'kind'>,
-  ...z.ZodDiscriminatedUnionOption<'kind'>[],
-];
+) as unknown as [z.ZodDiscriminatedUnionOption<'kind'>, ...z.ZodDiscriminatedUnionOption<'kind'>[]];
 
 export const OutboundServerToDaemonCommandFrameSchema = z.discriminatedUnion(
   'kind',
@@ -568,7 +530,7 @@ export type OutboundCommandError = {
   [K in OutboundServerCommandKind]: OutboundServerCommandError<K>;
 }[OutboundServerCommandKind];
 
-const commandResponseFrameOptions = OUTBOUND_SERVER_COMMAND_KINDS.flatMap(kind => [
+const commandResponseFrameOptions = OUTBOUND_SERVER_COMMAND_KINDS.flatMap((kind) => [
   z
     .object({
       direction: z.literal('daemon_to_server'),
@@ -608,9 +570,7 @@ export const OutboundHeartbeatPingFrameSchema = z
     ts: HeartbeatTimestampSchema,
   })
   .strict();
-export type OutboundHeartbeatPingFrame = z.infer<
-  typeof OutboundHeartbeatPingFrameSchema
->;
+export type OutboundHeartbeatPingFrame = z.infer<typeof OutboundHeartbeatPingFrameSchema>;
 
 export const OutboundHeartbeatPongFrameSchema = z
   .object({
@@ -621,9 +581,7 @@ export const OutboundHeartbeatPongFrameSchema = z
     echo_ts: HeartbeatTimestampSchema,
   })
   .strict();
-export type OutboundHeartbeatPongFrame = z.infer<
-  typeof OutboundHeartbeatPongFrameSchema
->;
+export type OutboundHeartbeatPongFrame = z.infer<typeof OutboundHeartbeatPongFrameSchema>;
 
 export const OutboundHeartbeatFrameSchema = z.discriminatedUnion('kind', [
   OutboundHeartbeatPingFrameSchema,
@@ -731,12 +689,7 @@ export const OutboundRuntimeDeliveryFailedEventFrameSchema = z
     agent_id: z.string().min(1),
     runtime_generation: z.number().int().positive(),
     delivery_ids: z.array(z.number().int()).min(1),
-    reason: z.enum([
-      'child_exit',
-      'init_watchdog',
-      'write_failed',
-      'driver_refused',
-    ]),
+    reason: z.enum(['child_exit', 'init_watchdog', 'write_failed', 'driver_refused']),
     ts: z.number().int(),
   })
   .strict();
@@ -916,10 +869,9 @@ const OutboundDaemonToServerEventFrameUnion = z.discriminatedUnion('kind', [
  * from the union rather than from daemon-admission.json, so the fixture gate
  * detects drift in either direction.
  */
-export const OUTBOUND_DAEMON_EVENT_SCHEMA_KINDS =
-  OutboundDaemonToServerEventFrameUnion.options.map(
-    option => option.shape.kind.value,
-  );
+export const OUTBOUND_DAEMON_EVENT_SCHEMA_KINDS = OutboundDaemonToServerEventFrameUnion.options.map(
+  (option) => option.shape.kind.value,
+);
 
 export const OutboundDaemonToServerEventFrameSchema =
   OutboundDaemonToServerEventFrameUnion.superRefine((frame, ctx) => {
@@ -954,11 +906,19 @@ export const OutboundFrameSchema = z.union([
 ]);
 export type OutboundFrame = z.infer<typeof OutboundFrameSchema>;
 
-export function encodeOutboundFrame(frame: OutboundFrame, responseCommand?: OutboundServerToDaemonCommandFrame): string {
+export function encodeOutboundFrame(
+  frame: OutboundFrame,
+  responseCommand?: OutboundServerToDaemonCommandFrame,
+): string {
   const line = JSON.stringify(frame);
-  const budget = responseFrameBudget(typeof responseCommand?.kind === 'string' ? responseCommand.kind : undefined,
-    frame.type === 'command_response' && 'result' in frame && !('error' in frame)
-    && frame.id === responseCommand?.id && frame.kind === responseCommand?.kind);
+  const budget = responseFrameBudget(
+    typeof responseCommand?.kind === 'string' ? responseCommand.kind : undefined,
+    frame.type === 'command_response' &&
+      'result' in frame &&
+      !('error' in frame) &&
+      frame.id === responseCommand?.id &&
+      frame.kind === responseCommand?.kind,
+  );
   if (Buffer.byteLength(line, 'utf8') > budget) {
     throw new Error(`encoded outbound frame exceeds MAX_FRAME_BYTES budget=${budget}`);
   }

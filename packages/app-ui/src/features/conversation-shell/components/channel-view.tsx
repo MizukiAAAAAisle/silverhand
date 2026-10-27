@@ -72,7 +72,7 @@ import { FloatingPaneChrome } from "@/components/layout/pane-shell";
 import { cn } from "@/lib/cn";
 import {
   ConversationTabBar,
-  PANEL_PRESENTATION,
+  panelPresentation,
   tabPresentation,
 } from "./channel-view/conversation-tab-bar";
 import {
@@ -94,6 +94,7 @@ import {
   taskBoardContainerForPane,
   type TaskBoardContainer,
 } from "@/features/tasks/model/task-container";
+import { t, useLocale } from "@/lib/i18n";
 
 interface ChannelViewProps {
   /** Whether this conversation's container has a `#` channel namespace: true for
@@ -247,6 +248,7 @@ interface ChannelViewProps {
 }
 
 export const ChannelView = memo(function ChannelView(props: ChannelViewProps): JSX.Element {
+  useLocale();
   if (!props.conversation) {
     if (props.resolving) {
       // A channel IS selected but its descriptor is still resolving (a
@@ -266,7 +268,7 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
           className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
           style={paneChrome}
         >
-          Couldn&apos;t load this conversation — reopen it to retry.
+          {t("conversationShell.couldntLoadThisConversation")}
         </main>
       );
     }
@@ -280,7 +282,7 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
           className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
           style={paneChrome}
         >
-          This conversation isn&apos;t available to you.
+          {t("conversationShell.thisConversationIsntAvailable")}
         </main>
       );
     }
@@ -290,7 +292,7 @@ export const ChannelView = memo(function ChannelView(props: ChannelViewProps): J
         className="flex h-full min-w-0 flex-1 items-center justify-center text-sm text-text-muted"
         style={paneChrome}
       >
-        Select a channel
+        {t("conversationShell.selectAChannel")}
       </main>
     );
   }
@@ -325,7 +327,7 @@ function ActiveChannelView({
   onToggleFilesList,
   filesListActive = false,
   onCloseChild,
-  closeLabel = "Close thread",
+  closeLabel = t("conversationShell.closeThread"),
   onJumpToOriginal,
   onThreadAnchorResolved,
   highlightedMessageId,
@@ -780,19 +782,23 @@ function ActiveChannelView({
     counterpart?.status === "active"
       ? counterpart.kind === "agent"
         ? {
-            hint: "Opens activity",
+            hint: t("conversationShell.opensActivity"),
             run: () => {
               focusAgentSideSection(counterpart.id, "activity");
               nav.openAgentPanel(counterpart.id);
             },
           }
-        : { hint: "Opens profile", run: () => nav.openHumanPanel(counterpart.id) }
+        : {
+            hint: t("conversationShell.opensProfile"),
+            run: () => nav.openHumanPanel(counterpart.id),
+          }
       : null;
   const titleAction = showThreadHeader
     ? null
     : canOpenSettings
-      ? "Opens channel settings"
+      ? t("conversationShell.opensChannelSettings")
       : (openCounterpart?.hint ?? null);
+  const locale = useLocale();
   const nativeBar = useMemo<PageBarDeclaration | null>(() => {
     if (!nativeBarAvailable) {
       return null;
@@ -802,8 +808,8 @@ function ActiveChannelView({
       findAvailable
         ? {
             id: "find",
-            label: "Search",
-            accessibilityLabel: "Search this channel",
+            label: t("common.search"),
+            accessibilityLabel: t("conversationShell.searchThisChannel"),
             icon: iconMarkup(SearchIcon),
             selected: find.open,
           }
@@ -811,8 +817,10 @@ function ActiveChannelView({
       onToggleThreadsList && gate.allowMemberEffects
         ? {
             id: "threads",
-            label: "Threads",
-            accessibilityLabel: hasFollowedThreadUnread ? "Threads (unread)" : undefined,
+            label: t("conversationShell.threads"),
+            accessibilityLabel: hasFollowedThreadUnread
+              ? t("conversationShell.threadsUnread")
+              : undefined,
             icon: iconMarkup(ThreadIcon),
             selected: threadsListActive,
             dot: hasFollowedThreadUnread,
@@ -821,7 +829,7 @@ function ActiveChannelView({
       onToggleFilesList && gate.allowMemberEffects
         ? {
             id: "files",
-            label: "Attachments",
+            label: t("conversationShell.attachments"),
             icon: iconMarkup(AttachmentIcon),
             selected: filesListActive,
           }
@@ -829,7 +837,9 @@ function ActiveChannelView({
       onToggleFullscreen
         ? {
             id: "fullscreen",
-            label: isFullscreen ? "Exit full screen" : "Full screen",
+            label: isFullscreen
+              ? t("conversationShell.exitFullScreen")
+              : t("conversationShell.fullScreen"),
             icon: iconMarkup(isFullscreen ? CollapseIcon : ExpandIcon),
           }
         : null,
@@ -839,16 +849,19 @@ function ActiveChannelView({
     return {
       title: nativeTitle,
       subtitle: isArchived
-        ? "Archived"
+        ? t("common.archived")
         : closed
-          ? "Closed"
+          ? t("conversationShell.closed")
           : showThreadHeader
-            ? "Thread"
+            ? t("conversationShell.thread")
             : undefined,
       titleAction,
       titleIcon: titleAction ? nativeTitleIcon : undefined,
       actions: actions.length > 0 ? [actions] : [],
-      overflow: actions.length > 1 ? { label: "More", icon: iconMarkup(MoreIcon) } : undefined,
+      overflow:
+        actions.length > 1
+          ? { label: t("conversationShell.more"), icon: iconMarkup(MoreIcon) }
+          : undefined,
       tabs: viewTabsShown
         ? tabController.tabs.map((tab) => {
             const key = tabKey(tab);
@@ -862,23 +875,24 @@ function ActiveChannelView({
               icon: iconMarkup(icon),
               selected: key === tabController.activeKey,
               dot: unread,
-              closeLabel: isRemovable(tab) ? "Remove" : null,
+              closeLabel: isRemovable(tab) ? t("conversationShell.remove") : null,
             };
           })
         : null,
       addTabs:
         viewTabsShown && addablePanels.length > 0
           ? {
-              label: "Add a view",
+              label: t("conversationShell.addAView"),
               items: addablePanels.map((panel) => ({
                 id: panel,
-                label: PANEL_PRESENTATION[panel].label,
-                icon: iconMarkup(PANEL_PRESENTATION[panel].icon),
+                label: panelPresentation()[panel].label,
+                icon: iconMarkup(panelPresentation()[panel].icon),
               })),
             }
           : null,
     };
   }, [
+    locale,
     nativeBarAvailable,
     nativeTitle,
     findAvailable,
@@ -988,9 +1002,9 @@ function ActiveChannelView({
                         type="button"
                         onClick={() => onJumpToOriginal(anchorMessageId)}
                         className="text-xs text-accent hover:underline"
-                        title="Jump to the source message"
+                        title={t("conversationShell.jumpToTheSource")}
                       >
-                        view in channel
+                        {t("conversationShell.viewInChannel")}
                       </button>
                     ) : null}
                   </>
@@ -1008,7 +1022,7 @@ function ActiveChannelView({
                         type="button"
                         data-conversation-title-button
                         onClick={() => nav.openChannelSettings(conversation.id)}
-                        aria-label="Channel settings"
+                        aria-label={t("conversationShell.channelSettings")}
                         className="focus-outline flex min-w-0"
                       >
                         <ConversationHeaderIdentity
@@ -1036,19 +1050,21 @@ function ActiveChannelView({
                     {parentTitle ? (
                       <span className="flex min-w-0 items-center gap-1 truncate text-xs text-text-muted">
                         <ThreadIcon className="size-3 shrink-0 text-text-muted/60" />
-                        <span className="truncate">thread of {parentTitle}</span>
+                        <span className="truncate">
+                          {t("conversationShell.threadOf", { title: parentTitle })}
+                        </span>
                       </span>
                     ) : null}
                   </>
                 )}
                 {closed ? (
                   <span className="rounded-full bg-bg-elevated px-2 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-text-muted">
-                    closed
+                    {t("conversationShell.closed2")}
                   </span>
                 ) : null}
                 {isArchived ? (
                   <span className="rounded-full bg-accent-soft px-2 py-0.5 text-(length:--text-badge) uppercase tracking-wider text-accent">
-                    archived
+                    {t("conversationShell.archived")}
                   </span>
                 ) : null}
 
@@ -1066,9 +1082,9 @@ function ActiveChannelView({
                       data-sticker-size="md"
                       data-sticker-tone="neutral"
                       onClick={find.open ? find.close : find.openFind}
-                      aria-label="Search this channel"
+                      aria-label={t("conversationShell.searchThisChannel")}
                       aria-pressed={find.open}
-                      title="Search this channel"
+                      title={t("conversationShell.searchThisChannel")}
                       className={
                         "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                         (find.open
@@ -1086,9 +1102,13 @@ function ActiveChannelView({
                       data-sticker-size="md"
                       data-sticker-tone="neutral"
                       onClick={onToggleThreadsList}
-                      aria-label={hasFollowedThreadUnread ? "Threads (unread)" : "Threads"}
+                      aria-label={
+                        hasFollowedThreadUnread
+                          ? t("conversationShell.threadsUnread")
+                          : t("conversationShell.threads")
+                      }
                       aria-pressed={threadsListActive}
-                      title="Threads"
+                      title={t("conversationShell.threads")}
                       className={
                         "relative flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                         (threadsListActive
@@ -1115,9 +1135,9 @@ function ActiveChannelView({
                       data-sticker-size="md"
                       data-sticker-tone="neutral"
                       onClick={onToggleFilesList}
-                      aria-label="Attachments"
+                      aria-label={t("conversationShell.attachments")}
                       aria-pressed={filesListActive}
-                      title="Attachments"
+                      title={t("conversationShell.attachments")}
                       className={
                         "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                         (filesListActive
@@ -1140,8 +1160,8 @@ function ActiveChannelView({
                           : nav.openChannelSettings(conversation.id)
                       }
                       aria-pressed={settingsActive}
-                      aria-label="Channel settings"
-                      title="Channel settings"
+                      aria-label={t("conversationShell.channelSettings")}
+                      title={t("conversationShell.channelSettings")}
                       className={
                         "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                         (settingsActive
@@ -1159,8 +1179,16 @@ function ActiveChannelView({
                       data-sticker-size="md"
                       data-sticker-tone="neutral"
                       onClick={onToggleFullscreen}
-                      aria-label={isFullscreen ? "Exit full screen" : "Full screen"}
-                      title={isFullscreen ? "Exit full screen" : "Full screen"}
+                      aria-label={
+                        isFullscreen
+                          ? t("conversationShell.exitFullScreen")
+                          : t("conversationShell.fullScreen")
+                      }
+                      title={
+                        isFullscreen
+                          ? t("conversationShell.exitFullScreen")
+                          : t("conversationShell.fullScreen")
+                      }
                       className="flex size-7 shrink-0 items-center justify-center rounded text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                     >
                       {isFullscreen ? (
@@ -1239,7 +1267,7 @@ function ActiveChannelView({
                         : undefined,
                   })
                 }
-                placeholder="Search this channel"
+                placeholder={t("conversationShell.searchThisChannel")}
               />
             </div>
           ) : null}
@@ -1405,7 +1433,7 @@ function ActiveChannelView({
                   />
                 ) : (
                   <div className="flex h-full items-center justify-center px-6 text-xs text-text-muted">
-                    This view is unavailable here.
+                    {t("conversationShell.thisViewIsUnavailable")}
                   </div>
                 )}
               </div>

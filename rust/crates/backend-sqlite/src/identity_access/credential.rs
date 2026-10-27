@@ -24,7 +24,9 @@ use silverhand_backend_core::{
     foundation::identity::UserId,
     foundation::persistence::PersistenceFailure,
     identity_access::credential::{
-        LoginCandidate, LoginCredentialLookup, PasswordHashParams, RUST_PRODUCER,
+        LoginCandidate, LoginCredentialLookup, PasswordHashParams, PendingRecoveryCode,
+        RECOVERY_CODE_MAX_ATTEMPTS, RECOVERY_CODE_TTL_MS, RECOVERY_RESEND_INTERVAL_MS,
+        RECOVERY_WINDOW_MAX_ATTEMPTS, RECOVERY_WINDOW_MAX_SENDS, RECOVERY_WINDOW_MS, RUST_PRODUCER,
     },
 };
 use sqlx::{
@@ -237,6 +239,260 @@ impl silverhand_backend_core::identity_access::credential::PasswordChangeStore
         tx.commit().await.map_err(PersistenceFailure::from_source)?;
         Ok(true)
     }
+}
+
+impl silverhand_backend_core::identity_access::credential::PasswordRecoveryStore
+    for SqliteCredentialStore
+{
+    async fn account_for_email(&self, email: &str) -> Result<Option<UserId>, PersistenceFailure> {
+        let raw: Option<String> =
+            sqlx::query_scalar("SELECT id FROM users WHERE email = ? COLLATE NOCASE")
+                .bind(email)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(PersistenceFailure::from_source)?;
+        raw.map(|raw| {
+            UserId::parse(raw).map_err(|_| PersistenceFailure::from_source(CorruptStoredUserId))
+        })
+        .transpose()
+    }
+
+    async fn issue_code(
+        &self,
+        user: &UserId,
+        email: &str,
+        code_id: &str,
+        code_hash: &str,
+        now_ms: i64,
+    ) -> Result<bool, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        let owned: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM users WHERE id = ? AND email = ? COLLATE NOCASE)",
+        )
+        .bind(user.as_str())
+        .bind(email)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+        if !owned {
+            return Ok(false);
+        }
+        let window = current_window(&mut tx, user, now_ms).await?;
+        if window.sends >= RECOVERY_WINDOW_MAX_SENDS
+            || window.attempts >= RECOVERY_WINDOW_MAX_ATTEMPTS
+            || window
+                .last_sent_at
+                .is_some_and(|sent| now_ms - sent < RECOVERY_RESEND_INTERVAL_MS)
+        {
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO password_recovery_state (user_id, email, code_id, code_hash, \
+             code_expires_at, code_attempts, window_started_at, window_sends, window_attempts, \
+             last_sent_at) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?) \
+             ON CONFLICT(user_id) DO UPDATE SET email = excluded.email, \
+             code_id = excluded.code_id, code_hash = excluded.code_hash, \
+             code_expires_at = excluded.code_expires_at, code_attempts = 0, \
+             window_started_at = excluded.window_started_at, \
+             window_sends = excluded.window_sends, window_attempts = excluded.window_attempts, \
+             last_sent_at = excluded.last_sent_at",
+        )
+        .bind(user.as_str())
+        .bind(email)
+        .bind(code_id)
+        .bind(code_hash)
+        .bind(now_ms + RECOVERY_CODE_TTL_MS)
+        .bind(window.started_at)
+        .bind(window.sends + 1)
+        .bind(window.attempts)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+        tx.commit().await.map_err(PersistenceFailure::from_source)?;
+        Ok(true)
+    }
+
+    async fn claim_attempt(
+        &self,
+        email: &str,
+        now_ms: i64,
+    ) -> Result<Option<PendingRecoveryCode>, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        let row = sqlx::query(
+            "SELECT s.user_id, s.code_id, s.code_hash, s.code_expires_at, s.code_attempts \
+               FROM password_recovery_state s JOIN users u ON u.id = s.user_id \
+              WHERE s.email = ? COLLATE NOCASE AND u.email = s.email COLLATE NOCASE",
+        )
+        .bind(email)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+        let Some(row) = row else {
+            return Ok(None);
+        };
+        let raw_user: String = row
+            .try_get("user_id")
+            .map_err(PersistenceFailure::from_source)?;
+        let user = UserId::parse(raw_user)
+            .map_err(|_| PersistenceFailure::from_source(CorruptStoredUserId))?;
+        let code_id: Option<String> = row
+            .try_get("code_id")
+            .map_err(PersistenceFailure::from_source)?;
+        let code_hash: Option<String> = row
+            .try_get("code_hash")
+            .map_err(PersistenceFailure::from_source)?;
+        let expires_at: Option<i64> = row
+            .try_get("code_expires_at")
+            .map_err(PersistenceFailure::from_source)?;
+        let code_attempts: i64 = row
+            .try_get("code_attempts")
+            .map_err(PersistenceFailure::from_source)?;
+        let window = current_window(&mut tx, &user, now_ms).await?;
+        let (Some(code_id), Some(code_hash), Some(expires_at)) = (code_id, code_hash, expires_at)
+        else {
+            return Ok(None);
+        };
+        if expires_at <= now_ms
+            || code_attempts >= RECOVERY_CODE_MAX_ATTEMPTS
+            || window.attempts >= RECOVERY_WINDOW_MAX_ATTEMPTS
+        {
+            return Ok(None);
+        }
+        sqlx::query(
+            "UPDATE password_recovery_state SET code_attempts = code_attempts + 1, \
+             window_started_at = ?, window_sends = ?, window_attempts = ? WHERE user_id = ?",
+        )
+        .bind(window.started_at)
+        .bind(window.sends)
+        .bind(window.attempts + 1)
+        .bind(user.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+        tx.commit().await.map_err(PersistenceFailure::from_source)?;
+        Ok(Some(PendingRecoveryCode {
+            user_id: user,
+            code_id,
+            code_hash,
+        }))
+    }
+
+    async fn complete_reset(
+        &self,
+        code: &PendingRecoveryCode,
+        email: &str,
+        replacement: silverhand_backend_core::identity_access::credential::PreparedPasswordCredential,
+        now_ms: i64,
+    ) -> Result<bool, PersistenceFailure> {
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN IMMEDIATE")
+            .await
+            .map_err(PersistenceFailure::from_source)?;
+        // The claimed attempt is already counted, hence `<=`.
+        let consumed = sqlx::query(
+            "UPDATE password_recovery_state \
+                SET code_id = NULL, code_hash = NULL, code_expires_at = NULL, code_attempts = 0 \
+              WHERE user_id = ? AND code_id = ? AND code_hash = ? AND code_expires_at > ? \
+                AND code_attempts <= ? AND window_attempts <= ? \
+                AND email = ? COLLATE NOCASE \
+                AND EXISTS (SELECT 1 FROM users u WHERE u.id = user_id AND u.email = ? COLLATE NOCASE)",
+        )
+        .bind(code.user_id.as_str())
+        .bind(&code.code_id)
+        .bind(&code.code_hash)
+        .bind(now_ms)
+        .bind(RECOVERY_CODE_MAX_ATTEMPTS)
+        .bind(RECOVERY_WINDOW_MAX_ATTEMPTS)
+        .bind(email)
+        .bind(email)
+        .execute(&mut *tx)
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+        if consumed.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query(
+            "INSERT INTO user_password_credentials \
+             (user_id, password_hash, password_hash_params, password_updated_at) VALUES (?, ?, ?, ?) \
+             ON CONFLICT(user_id) DO UPDATE SET password_hash = excluded.password_hash, \
+             password_hash_params = excluded.password_hash_params, \
+             password_updated_at = excluded.password_updated_at",
+        )
+        .bind(code.user_id.as_str())
+        .bind(replacement.phc)
+        .bind(serialize_password_hash_params(&replacement.params))
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+        sqlx::query(
+            "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+        )
+        .bind(now_ms)
+        .bind(code.user_id.as_str())
+        .execute(&mut *tx)
+        .await
+        .map_err(PersistenceFailure::from_source)?;
+        tx.commit().await.map_err(PersistenceFailure::from_source)?;
+        Ok(true)
+    }
+}
+
+struct RecoveryWindow {
+    started_at: i64,
+    sends: i64,
+    attempts: i64,
+    last_sent_at: Option<i64>,
+}
+
+/// The account's hourly window, rolled over when it has elapsed.
+async fn current_window(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    user: &UserId,
+    now_ms: i64,
+) -> Result<RecoveryWindow, PersistenceFailure> {
+    let row: Option<(i64, i64, i64, Option<i64>)> = sqlx::query_as(
+        "SELECT window_started_at, window_sends, window_attempts, last_sent_at \
+           FROM password_recovery_state WHERE user_id = ?",
+    )
+    .bind(user.as_str())
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(PersistenceFailure::from_source)?;
+    Ok(match row {
+        Some((started_at, sends, attempts, last_sent_at))
+            if now_ms - started_at < RECOVERY_WINDOW_MS =>
+        {
+            RecoveryWindow {
+                started_at,
+                sends,
+                attempts,
+                last_sent_at,
+            }
+        }
+        Some((_, _, _, last_sent_at)) => RecoveryWindow {
+            started_at: now_ms,
+            sends: 0,
+            attempts: 0,
+            last_sent_at,
+        },
+        None => RecoveryWindow {
+            started_at: now_ms,
+            sends: 0,
+            attempts: 0,
+            last_sent_at: None,
+        },
+    })
 }
 
 #[cfg(test)]

@@ -13,6 +13,7 @@ import {
 import { HumanHeader } from "./human-header";
 import { HumanProfileCard } from "./human-profile-card";
 import { paneChrome } from "@/components/layout/pane-chrome";
+import { t } from "@/lib/i18n";
 
 interface HumanViewProps {
   /** Identifier from the URL (`/members/u/:userId`). */
@@ -77,7 +78,7 @@ export function HumanView({
           <SidePanelHeader
             onClose={onClose}
             nativeBar={{
-              title: "Profile",
+              title: t("profile.profile"),
               subtitle: undefined,
               titleAction: null,
               actions: [],
@@ -85,14 +86,14 @@ export function HumanView({
               addTabs: null,
             }}
           >
-            <span className="text-sm text-text-muted">Profile</span>
+            <span className="text-sm text-text-muted">{t("profile.profile")}</span>
           </SidePanelHeader>
         ) : null}
         {isLoading ? (
           <ProfileSkeleton />
         ) : (
           <div className="flex flex-1 items-center justify-center text-sm text-text-muted">
-            Profile unavailable.
+            {t("profile.profileUnavailable")}
           </div>
         )}
       </main>

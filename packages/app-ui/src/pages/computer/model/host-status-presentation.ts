@@ -37,6 +37,7 @@ import type {
   HostUnreachableReason,
 } from "@silverhand/shared";
 import { computerCopy } from "../../../features/computers/model/computer-copy";
+import { t } from "@/lib/i18n";
 
 export type HostStatusTone = "accent" | "success" | "muted" | "warning" | "error";
 
@@ -65,11 +66,11 @@ export interface HostStatusView {
 export function describeUnreachableReason(reason: HostUnreachableReason): string {
   switch (reason) {
     case "timeout":
-      return "The computer took too long to answer. Try refreshing.";
+      return t("computers.theComputerTookToo");
     case "daemon_unreachable":
-      return "Could not reach this computer. Make sure it is connected.";
+      return t("computers.couldNotReachThis");
     case "protocol_error":
-      return "This computer sent an unexpected response.";
+      return t("computers.thisComputerSentAn");
     default: {
       // Exhaustive — adding a new reason on the schema side fails the
       // typecheck here loud-and-early rather than rendering an empty
@@ -143,12 +144,12 @@ export function describeAdmissionFailure(
       const offered = failure.offered_protocol_version;
       const expected = failure.expected_protocol_version;
       if (offered > expected) {
-        return `Silverhand on this computer is not compatible with this server: it uses connection protocol v${offered}, and the server accepts v${expected}. Update Silverhand on the server to restore agent connectivity.`;
+        return t("computers.protocolTooNew", { offered, expected });
       }
       const target = options.appManaged
-        ? "Silverhand on this computer"
-        : `${computerCopy.connectionPackageName} on this computer`;
-      return `Silverhand on this computer is not compatible with this server: it uses connection protocol v${offered}, and the server requires v${expected}. Update ${target} to restore agent connectivity.`;
+        ? t("computers.silverhandOnThisComputer")
+        : t("computers.packageOnThisComputer", { name: computerCopy().connectionPackageName });
+      return t("computers.protocolTooOld", { offered, expected, target });
     }
     default: {
       // Exhaustive — a new terminal admission reason on the schema side
@@ -171,7 +172,7 @@ export function describeHostStatus(status: HostStatusResponse): HostStatusView {
   switch (status.availability) {
     case "available":
       return {
-        label: computerCopy.availabilityConnected,
+        label: computerCopy().availabilityConnected,
         detail: null,
         tone: "success",
       };
@@ -183,21 +184,20 @@ export function describeHostStatus(status: HostStatusResponse): HostStatusView {
       // not a second voice in the status chrome — the pill answers "is
       // it connected", the notice answers "what do I do about it".
       return {
-        label: computerCopy.availabilityOffline,
-        detail:
-          "This computer is not connected right now. Registered agents are shown but cannot run.",
+        label: computerCopy().availabilityOffline,
+        detail: t("computers.thisComputerIsNot"),
         tone: "muted",
       };
     case "unreachable":
       return {
-        label: computerCopy.availabilityUnreachable,
+        label: computerCopy().availabilityUnreachable,
         detail: describeUnreachableReason(status.reason),
         tone: "warning",
       };
     case "revoked":
       return {
-        label: computerCopy.lifecycleRevoked,
-        detail: "This computer has been revoked. Re-add it to use it again.",
+        label: computerCopy().lifecycleRevoked,
+        detail: t("computers.thisComputerHasBeen"),
         tone: "muted",
       };
     default: {

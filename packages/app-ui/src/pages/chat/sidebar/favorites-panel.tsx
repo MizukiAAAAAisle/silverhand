@@ -2,7 +2,11 @@ import { SidebarRowsSkeleton } from "@/components/layout/sidebar-skeleton";
 import { SidebarReveal, SidebarRevealRow } from "@/components/layout/sidebar-reveal";
 import { useMemo } from "react";
 import { StarIcon } from "@/icons";
-import type { ChannelAttentionModeRowDto, FavoriteRowDto } from "@silverhand/shared";
+import type {
+  ChannelAttentionModeRowDto,
+  DirectPairFavoriteRowDto,
+  FavoriteRowDto,
+} from "@silverhand/shared";
 import { useSortable } from "@dnd-kit/sortable";
 import { ChannelRow } from "./channel-row";
 import { AppContextMenu } from "@/components/menus/app-context-menu";
@@ -22,6 +26,22 @@ import {
 } from "@/components/layout/list-drag-sort";
 import { useListDragSort } from "@/features/workspaces/use-list-drag-sort";
 import { SidebarSection, SidebarEmptyRow } from "../../../components/layout/sidebar-shared";
+import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
+import { useUserAvatarObjectUrls } from "@/features/users/avatar-hooks";
+import { collectCounterpartAvatarSources } from "@/features/direct-pairs/counterpart-presentation";
+import { DirectLineRowView, DirectPairStarMenuItem } from "./direct-messages-panel";
+import { directRowBadge } from "../model/sidebar-row-badges";
+import { t } from "@/lib/i18n";
+
+/** One STARRED row: a starred channel or a starred direct pair, one sort group. */
+type StarredRow =
+  | { kind: "channel"; key: string; createdAt: number; item: FavoriteRowDto }
+  | { kind: "direct"; key: string; createdAt: number; pair: DirectPairFavoriteRowDto };
+
+interface AvatarUrls {
+  agents: ReadonlyMap<string, string | null>;
+  humans: ReadonlyMap<string, string | null>;
+}
 
 const FAVORITES_LIST_KEY = "favorites";
 const FAVORITES_GROUP = "favorites";
@@ -39,9 +59,34 @@ export function FavoritesGroup(props: {
   watchWorkspaceIds: FavoritesWatchScope;
   /** Navigate to a starred conversation inside its parent workspace. */
   onSelectConversation: (workspaceId: string, conversationId: string) => void;
+  /** Open a starred direct pair. */
+  onSelectDirectPair: (conversationId: string) => void;
 }): JSX.Element | null {
   const { data, isLoading } = useFavorites(props.watchWorkspaceIds);
   const items = useMemo(() => data?.items ?? [], [data]);
+  const pairs = useMemo(() => data?.direct_pairs ?? [], [data]);
+  const rows = useMemo<StarredRow[]>(
+    () => [
+      ...items.map((item): StarredRow => ({
+        kind: "channel",
+        key: item.favorite_key,
+        createdAt: item.created_at,
+        item,
+      })),
+      ...pairs.map((pair): StarredRow => ({
+        kind: "direct",
+        key: pair.favorite_key,
+        createdAt: pair.created_at,
+        pair,
+      })),
+    ],
+    [items, pairs],
+  );
+  const avatarSources = useMemo(() => collectCounterpartAvatarSources(pairs), [pairs]);
+  const avatars: AvatarUrls = {
+    agents: useAgentAvatarObjectUrls(avatarSources.agents),
+    humans: useUserAvatarObjectUrls(avatarSources.users),
+  };
   const viewerSort = data?.viewer_sort;
   const unstar = useUnstarFavorite();
   const setSortMode = useSetSortMode();
@@ -66,12 +111,12 @@ export function FavoritesGroup(props: {
   // `getId` MUST be `favorite_key` — it is the entity_id under which
   // `viewer_sort.entries` (and the backend rank) live, and the reorder `ordered_ids`
   // element.
-  const { orderedGroups, onReorder } = useListDragSort<typeof FAVORITES_GROUP, FavoriteRowDto>({
+  const { orderedGroups, onReorder } = useListDragSort<typeof FAVORITES_GROUP, StarredRow>({
     listKey: FAVORITES_LIST_KEY,
-    groups: { [FAVORITES_GROUP]: items },
+    groups: { [FAVORITES_GROUP]: rows },
     viewerSort,
-    getId: (r) => r.favorite_key,
-    getCreatedAt: (r) => r.created_at,
+    getId: (r) => r.key,
+    getCreatedAt: (r) => r.createdAt,
   });
   const ordered = orderedGroups[FAVORITES_GROUP];
   const mode = sortModeOf(viewerSort);
@@ -79,32 +124,50 @@ export function FavoritesGroup(props: {
   // Revealed rows keep the full-list order, but cannot reorder a partial set.
   const revealed = collapsedRevealRows(ordered, {
     pokeUnread: true,
-    isSelected: (item) => item.entity_id === props.selectedChannelId,
-    isLoud: (item) => favoriteRowBadge(item, byChannel.get(item.entity_id))?.tier === "loud",
+    isSelected: (row) =>
+      (row.kind === "channel" ? row.item.entity_id : row.pair.conversation_id) ===
+      props.selectedChannelId,
+    isLoud: (row) =>
+      (row.kind === "channel"
+        ? favoriteRowBadge(row.item, byChannel.get(row.item.entity_id))
+        : directRowBadge(row.pair.unread_count)
+      )?.tier === "loud",
   });
+
+  const renderRow = (row: StarredRow, draggable: boolean): JSX.Element =>
+    row.kind === "channel" ? (
+      <FavoriteRow
+        item={row.item}
+        selectedChannelId={props.selectedChannelId}
+        attention={byChannel.get(row.item.entity_id)}
+        workspaceMuted={mutedByWorkspace.get(row.item.workspace_id)}
+        onSelectConversation={props.onSelectConversation}
+        onUnstar={() => unstar.mutate(row.item)}
+        draggable={draggable}
+      />
+    ) : (
+      <DirectFavoriteRow
+        pair={row.pair}
+        selectedChannelId={props.selectedChannelId}
+        avatars={avatars}
+        onSelectDirectPair={props.onSelectDirectPair}
+        draggable={draggable}
+      />
+    );
 
   return (
     <SidebarSection
-      label="STARRED"
+      label={t("chat.starred")}
       labelClassName="text-xs"
       icon={<StarIcon className="size-3.5" />}
-      count={items.length}
+      count={rows.length}
       collapsible
       defaultExpanded
       persistId="starred"
       collapsedContent={
         <SidebarReveal>
-          {revealed.map((item) => (
-            <SidebarRevealRow key={item.favorite_key}>
-              <FavoriteRow
-                item={item}
-                selectedChannelId={props.selectedChannelId}
-                attention={byChannel.get(item.entity_id)}
-                workspaceMuted={mutedByWorkspace.get(item.workspace_id)}
-                onSelectConversation={props.onSelectConversation}
-                onUnstar={() => unstar.mutate(item)}
-              />
-            </SidebarRevealRow>
+          {revealed.map((row) => (
+            <SidebarRevealRow key={row.key}>{renderRow(row, false)}</SidebarRevealRow>
           ))}
         </SidebarReveal>
       }
@@ -118,26 +181,20 @@ export function FavoritesGroup(props: {
       {ordered.length === 0 ? (
         isLoading ? (
           <li>
-            <SidebarRowsSkeleton label="Loading starred conversations" nested />
+            <SidebarRowsSkeleton label={t("chat.loadingStarredConversations")} nested />
           </li>
         ) : (
-          <SidebarEmptyRow>No starred conversations</SidebarEmptyRow>
+          <SidebarEmptyRow>{t("chat.noStarredConversations")}</SidebarEmptyRow>
         )
       ) : null}
       <SortableGroup
-        ids={ordered.map((i) => i.favorite_key)}
+        ids={ordered.map((r) => r.key)}
         onReorder={(o) => onReorder(FAVORITES_GROUP, o)}
       >
-        {ordered.map((item) => (
-          <SortableFavoriteRow
-            key={item.favorite_key}
-            item={item}
-            selectedChannelId={props.selectedChannelId}
-            attention={byChannel.get(item.entity_id)}
-            workspaceMuted={mutedByWorkspace.get(item.workspace_id)}
-            onSelectConversation={props.onSelectConversation}
-            onUnstar={() => unstar.mutate(item)}
-          />
+        {ordered.map((row) => (
+          <SortableStarredRow key={row.key} id={row.key}>
+            {renderRow(row, true)}
+          </SortableStarredRow>
         ))}
       </SortableGroup>
     </SidebarSection>
@@ -167,9 +224,9 @@ interface FavoriteRowProps {
  *  `SortableChannelItem`. Drag listeners sit on the `<li>`; the row's own click
  *  (navigate) and context menu (unstar) still fire — dnd-kit's activation constraint
  *  separates a drag from a click. */
-function SortableFavoriteRow(props: Omit<FavoriteRowProps, "draggable">): JSX.Element {
+function SortableStarredRow(props: { id: string; children: JSX.Element }): JSX.Element {
   const { setNodeRef, transform, transition, isDragging, attributes, listeners } = useSortable({
-    id: props.item.favorite_key,
+    id: props.id,
     animateLayoutChanges,
   });
   return (
@@ -181,8 +238,39 @@ function SortableFavoriteRow(props: Omit<FavoriteRowProps, "draggable">): JSX.El
       {...attributes}
       {...listeners}
     >
-      <FavoriteRow {...props} draggable />
+      {props.children}
     </li>
+  );
+}
+
+function DirectFavoriteRow({
+  pair,
+  selectedChannelId,
+  avatars,
+  onSelectDirectPair,
+  draggable,
+}: {
+  pair: DirectPairFavoriteRowDto;
+  selectedChannelId: string | null;
+  avatars: AvatarUrls;
+  onSelectDirectPair: (conversationId: string) => void;
+  draggable: boolean;
+}): JSX.Element {
+  const row = (
+    <DirectLineRowView
+      counterpart={pair.counterpart}
+      unread={pair.unread_count}
+      selected={conversationSelectionTier(pair.conversation_id, selectedChannelId) === "primary"}
+      draggable={draggable}
+      agentAvatarUrls={avatars.agents}
+      humanAvatarUrls={avatars.humans}
+      onSelect={() => onSelectDirectPair(pair.conversation_id)}
+    />
+  );
+  return (
+    <AppContextMenu trigger={row}>
+      <DirectPairStarMenuItem conversationId={pair.conversation_id} starred />
+    </AppContextMenu>
   );
 }
 
@@ -216,7 +304,7 @@ function FavoriteRow({
   );
 
   return (
-    <AppContextMenu trigger={row} touchLongPress={!draggable}>
+    <AppContextMenu trigger={row}>
       <FavoriteMenuItems
         item={item}
         attention={attention}

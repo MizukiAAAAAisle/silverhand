@@ -183,8 +183,7 @@ impl TaskEditWrite for SqliteTaskEditWrite {
         let current_content_raw: String = row.try_get("content").map_err(driver)?;
         let current_title =
             TaskTitle::parse(&current_title_raw).map_err(|_| corrupt("tasks.title"))?;
-        let current_content =
-            TaskContent::parse(current_content_raw).map_err(|_| corrupt("tasks.content"))?;
+        let current_content = TaskContent::from_persisted(current_content_raw);
 
         let change = match plan_edit(
             &current_title,

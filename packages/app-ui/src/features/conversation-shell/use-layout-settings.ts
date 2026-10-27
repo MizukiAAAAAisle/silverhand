@@ -1,4 +1,4 @@
-import { type SidebarPane, useSidebarPane } from "./use-sidebar-pane";
+import { type SidebarPane, useSidebarPane } from "@/hooks/use-sidebar-pane";
 
 /**
  * Top-level layout preferences. The sidebar owns its animated visibility (see

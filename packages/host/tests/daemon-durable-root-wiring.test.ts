@@ -1,12 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createConnection, type Socket } from 'node:net';
 import { runDaemon, type RunningDaemon } from '../src/daemon/index.js';
@@ -45,7 +38,10 @@ describe('runDaemon wiring — durable agent-tree placement', () => {
 
   afterEach(async () => {
     while (daemons.length) {
-      await daemons.pop()!.stop('test_done').catch(() => undefined);
+      await daemons
+        .pop()!
+        .stop('test_done')
+        .catch(() => undefined);
     }
     while (dirs.length) {
       rmSync(dirs.pop()!, { recursive: true, force: true });
@@ -85,7 +81,7 @@ describe('runDaemon wiring — durable agent-tree placement', () => {
       installSignals: false,
       writeStdoutHandshake: false,
       alsoStderr: false,
-      supervisorFactory: factoryDeps => {
+      supervisorFactory: (factoryDeps) => {
         deps = factoryDeps.runtimeStartResolveDeps;
         return new FakeSupervisor({ emit: factoryDeps.emit });
       },
@@ -130,7 +126,6 @@ describe('runDaemon wiring — durable agent-tree placement', () => {
     expect(readFileSync(evidence, 'utf-8')).toContain('guest memory');
   });
 
-
   it('a direct --host-config boot freezes the computer context at startup without crashing (P0-1 TDZ falsifier)', async () => {
     const dir = mkdtempSync('/tmp/sh-directboot-');
     dirs.push(dir);
@@ -155,7 +150,7 @@ describe('runDaemon wiring — durable agent-tree placement', () => {
       installSignals: false,
       writeStdoutHandshake: false,
       alsoStderr: false,
-      supervisorFactory: factoryDeps => {
+      supervisorFactory: (factoryDeps) => {
         deps = factoryDeps.runtimeStartResolveDeps;
         return new FakeSupervisor({ emit: factoryDeps.emit });
       },
@@ -163,9 +158,7 @@ describe('runDaemon wiring — durable agent-tree placement', () => {
     daemons.push(daemon);
     if (!deps) throw new Error('supervisorFactory was not called');
     // The frozen context serves the slot-keyed agents root immediately.
-    expect(deps.agentHomeRootDir).toBe(
-      join(dir, 'computers', 'computer-direct-1', 'agents'),
-    );
+    expect(deps.agentHomeRootDir).toBe(join(dir, 'computers', 'computer-direct-1', 'agents'));
   });
 });
 
@@ -186,7 +179,10 @@ describe('slot mode fails closed before registration (#task:1608 P0-2)', () => {
 
   afterEach(async () => {
     while (daemons.length) {
-      await daemons.pop()!.stop('test_done').catch(() => undefined);
+      await daemons
+        .pop()!
+        .stop('test_done')
+        .catch(() => undefined);
     }
     while (dirs.length) {
       rmSync(dirs.pop()!, { recursive: true, force: true });
@@ -213,7 +209,7 @@ describe('slot mode fails closed before registration (#task:1608 P0-2)', () => {
       installSignals: false,
       writeStdoutHandshake: false,
       alsoStderr: false,
-      supervisorFactory: factoryDeps => {
+      supervisorFactory: (factoryDeps) => {
         deps = factoryDeps.runtimeStartResolveDeps;
         return new FakeSupervisor({ emit: factoryDeps.emit });
       },
@@ -245,7 +241,7 @@ describe('slot mode fails closed before registration (#task:1608 P0-2)', () => {
       socket.on('connect', () => {
         socket.write(`${encodeOutboundFrame(frame)}\n`);
       });
-      socket.on('error', err => finish(() => rejectPromise(err)));
+      socket.on('error', (err) => finish(() => rejectPromise(err)));
       socket.on('data', (chunk: string | Buffer) => {
         const text = typeof chunk === 'string' ? chunk : chunk.toString('utf8');
         const { frames, leftover } = splitNdjson(buffer, text);
@@ -320,8 +316,6 @@ describe('slot mode fails closed before registration (#task:1608 P0-2)', () => {
       thrown = err;
     }
     expect(thrown).toBeInstanceOf(RuntimeStartResolveError);
-    expect((thrown as RuntimeStartResolveError).code).toBe(
-      'registry_unavailable',
-    );
+    expect((thrown as RuntimeStartResolveError).code).toBe('registry_unavailable');
   });
 });

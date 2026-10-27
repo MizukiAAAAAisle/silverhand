@@ -46,3 +46,4 @@ pub mod workspaces;
 pub mod profile_message_counts;
 
 pub mod password_change;
+pub mod password_recovery;

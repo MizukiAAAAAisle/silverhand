@@ -19,12 +19,8 @@ describe('root-resolution semantics matrix (v2: ONE unified SILVERHAND_DIR contr
   // unset; anything else is the trimmed root.
   it('defaultAppRoot — the ONE unified SILVERHAND_DIR contract (trim; blank = unset)', () => {
     expect(defaultAppRoot({}, () => '/home/u')).toBe('/home/u/.silverhand');
-    expect(defaultAppRoot({ SILVERHAND_DIR: '' }, () => '/home/u')).toBe(
-      '/home/u/.silverhand',
-    );
-    expect(defaultAppRoot({ SILVERHAND_DIR: '  ' }, () => '/home/u')).toBe(
-      '/home/u/.silverhand',
-    );
+    expect(defaultAppRoot({ SILVERHAND_DIR: '' }, () => '/home/u')).toBe('/home/u/.silverhand');
+    expect(defaultAppRoot({ SILVERHAND_DIR: '  ' }, () => '/home/u')).toBe('/home/u/.silverhand');
     expect(defaultAppRoot({ SILVERHAND_DIR: ' /x/y ' }, () => '/home/u')).toBe('/x/y');
     expect(defaultAppRoot({ SILVERHAND_DIR: '/x/y' }, () => '/home/u')).toBe('/x/y');
   });
@@ -40,9 +36,7 @@ describe('root-resolution semantics matrix (v2: ONE unified SILVERHAND_DIR contr
   });
 
   it('computersRootDir — the per-computer profiles root', () => {
-    expect(computersRootDir('/home/u/.silverhand')).toBe(
-      '/home/u/.silverhand/computers',
-    );
+    expect(computersRootDir('/home/u/.silverhand')).toBe('/home/u/.silverhand/computers');
   });
 });
 
@@ -101,7 +95,6 @@ describe('resolveDesktopAppPaths — current desktop layout', () => {
   it('the desktop-owned computer binding lives under desktop/', () => {
     expect(p.desktop.computerBinding).toBe(`${R}/desktop/computer-binding.json`);
   });
-
 });
 
 describe('resolveComputerDataPaths — explicit data roots (connect / custom)', () => {

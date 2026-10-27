@@ -17,10 +17,21 @@ struct ComposerState: Equatable {
   let add: [ComposerMenuItem]
   let picker: ComposerPicker?
   let activity: ComposerActivity?
+  /// The pane it belongs to, in the host's points; nil spans the screen.
+  let frame: ComposerFrame?
 }
 
-/// The compact composer, floating over the page above the keyboard. The page
+struct ComposerFrame: Equatable {
+  /// `bottom` is the pane's end, up from the window's bottom.
+  let left, width, bottom: CGFloat
+}
+
+/// The native composer, floating over the page above the keyboard. The page
 /// owns the draft, the send and every string; this edits text and reports it.
+///
+/// Without a `frame` it spans the screen; with one it stands over its pane,
+/// beside the other panes' composers, and rests at the pane's end while
+/// another one edits.
 ///
 /// At rest it is a one-line capsule; editing opens it into a card whose text
 /// grows with its lines up to `autoLines`, then scrolls. The grabber drags
@@ -31,12 +42,11 @@ struct ComposerState: Equatable {
 final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegate,
   PHPickerViewControllerDelegate, UIDocumentPickerDelegate
 {
+  /// Edits and taps, and `metrics`: distances up from the bottom of the host
+  /// view to the composer's top at rest (`rest`), at the height its text gives
+  /// it (`reserve`), and as drawn (`overlay`); and the room the picker or the
+  /// activity line takes over it (`picker`).
   var onEvent: (([String: Any]) -> Void)?
-  /// Distances up from the bottom of the host view to the composer's top: at
-  /// rest (`rest`), at the height its text gives it (`reserve`), and as drawn
-  /// (`overlay`); and the room the picker or the activity line takes over it
-  /// (`picker`).
-  var onMetrics: ((_ metrics: [String: CGFloat]) -> Void)?
   /// Presents the system pickers.
   weak var presenter: UIViewController?
   private(set) var state: ComposerState?
@@ -46,6 +56,8 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private static let autoLines: CGFloat = 6
   private static let button: CGFloat = 36
   private static let padding: CGFloat = 8
+  /// From the screen's or the pane's sides, and from a pane's end.
+  private static let inset: CGFloat = 12
   private static let cardTop: CGFloat = 16
   private static let cardRadius: CGFloat = 26
   private static let grabberZone: CGFloat = 28
@@ -65,7 +77,16 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private let addButton = UIButton(configuration: .plain())
   private let sendButton = UIButton(configuration: .filled())
   private var heightConstraint: NSLayoutConstraint?
-  private var editing = false
+  // Sides: the screen's safe area, or the pane's frame (`placeSides`).
+  private var screenSides: [NSLayoutConstraint] = []
+  private var paneSides: (leading: NSLayoutConstraint, width: NSLayoutConstraint)?
+  // Bottom (`placeBottom`): never below rest (`restCap`); above the keyboard
+  // while it follows it, else at rest. Beside other panes' composers only
+  // the one editing follows the keyboard.
+  private var restCap: NSLayoutConstraint?
+  private var restBottom: NSLayoutConstraint?
+  private var keyboardBottom: [NSLayoutConstraint] = []
+  private(set) var isEditing = false
   /// The text's height the user dragged to; nil follows the text.
   private var draggedHeight: CGFloat?
   private var dragStart: CGFloat = 0
@@ -89,6 +110,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     textView.textContainer.lineFragmentPadding = 0
     textView.delegate = self
     textView.onPasteFiles = { [weak self] files in self?.sendFiles(files) }
+    textView.onReturn = { [weak self] in self?.hardwareReturn() }
     backdrop.contentView.addSubview(textView)
 
     placeholder.font = font
@@ -157,15 +179,28 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     let pull = bottomAnchor.constraint(equalTo: guide.topAnchor, constant: -Self.padding)
     pull.priority = .defaultHigh
     heightConstraint = height
-    NSLayoutConstraint.activate([
-      leadingAnchor.constraint(equalTo: host.safeAreaLayoutGuide.leadingAnchor, constant: 12),
-      trailingAnchor.constraint(equalTo: host.safeAreaLayoutGuide.trailingAnchor, constant: -12),
-      bottomAnchor.constraint(lessThanOrEqualTo: guide.topAnchor, constant: -Self.padding),
-      bottomAnchor.constraint(
-        lessThanOrEqualTo: host.safeAreaLayoutGuide.bottomAnchor, constant: Self.homeOverlap),
-      pull,
-      height,
-    ])
+    screenSides = [
+      leadingAnchor.constraint(
+        equalTo: host.safeAreaLayoutGuide.leadingAnchor, constant: Self.inset),
+      trailingAnchor.constraint(
+        equalTo: host.safeAreaLayoutGuide.trailingAnchor, constant: -Self.inset),
+    ]
+    paneSides = (
+      leadingAnchor.constraint(equalTo: host.leadingAnchor),
+      widthAnchor.constraint(equalToConstant: 0)
+    )
+    keyboardBottom = [
+      bottomAnchor.constraint(lessThanOrEqualTo: guide.topAnchor, constant: -Self.padding), pull,
+    ]
+    let rest = bottomAnchor.constraint(equalTo: host.bottomAnchor)
+    rest.priority = .defaultHigh
+    restBottom = rest
+    restCap?.isActive = false
+    let cap = bottomAnchor.constraint(lessThanOrEqualTo: host.bottomAnchor)
+    restCap = cap
+    NSLayoutConstraint.activate([cap, height])
+    placeSides()
+    placeBottom()
 
     host.addSubview(picker)
     picker.translatesAutoresizingMaskIntoConstraints = false
@@ -188,9 +223,36 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     ])
   }
 
+  private func placeSides() {
+    guard let paneSides else { return }
+    if let frame = state?.frame {
+      NSLayoutConstraint.deactivate(screenSides)
+      paneSides.leading.constant = frame.left + Self.inset
+      paneSides.width.constant = max(0, frame.width - Self.inset * 2)
+      NSLayoutConstraint.activate([paneSides.leading, paneSides.width])
+    } else {
+      NSLayoutConstraint.deactivate([paneSides.leading, paneSides.width])
+      NSLayoutConstraint.activate(screenSides)
+    }
+  }
+
+  private func placeBottom() {
+    restBottom?.constant = -restInset
+    restCap?.constant = -restInset
+    let follows = state?.frame == nil || isEditing
+    restBottom?.isActive = !follows
+    if follows { NSLayoutConstraint.activate(keyboardBottom) } else {
+      NSLayoutConstraint.deactivate(keyboardBottom)
+    }
+  }
+
   func apply(_ next: ComposerState) {
     let previous = state
     state = next
+    if previous?.frame != next.frame {
+      placeSides()
+      placeBottom()
+    }
     if previous?.key != next.key {
       textView.text = ""
       draggedHeight = nil
@@ -263,6 +325,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   func endsEditing(at point: CGPoint) -> Bool {
     guard textView.isFirstResponder, let state else { return false }
     return point.y < frame.minY - listSpace - state.accessoryHeight - Self.padding * 2
+      || point.x < frame.minX || point.x > frame.maxX
   }
 
   func endEditing() { textView.resignFirstResponder() }
@@ -292,19 +355,37 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   /// A web modal covers the page; native chrome cannot sit under its
   /// backdrop, so the composer leaves while one is open.
   func setBlocked(_ blocked: Bool) {
-    if blocked, textView.isFirstResponder { textView.resignFirstResponder() }
-    isHidden = blocked
-    picker.isHidden = blocked
-    activity.isHidden = blocked
+    self.blocked = blocked
+    applyHidden()
+  }
+
+  /// The message-selection bar takes the composer's place while it shows.
+  func setSteppedAside(_ aside: Bool) {
+    steppedAside = aside
+    applyHidden()
+  }
+
+  private var blocked = false
+  private var steppedAside = false
+
+  private func applyHidden() {
+    let hidden = blocked || steppedAside
+    if hidden, textView.isFirstResponder { textView.resignFirstResponder() }
+    isHidden = hidden
+    picker.isHidden = hidden
+    activity.isHidden = hidden
   }
 
   /// Takes the composer off screen and forgets its draft.
   func remove() {
     if textView.isFirstResponder { textView.resignFirstResponder() }
+    if let key = state?.key {
+      onEvent?(["kind": "metrics", "key": key, "rest": 0, "reserve": 0, "overlay": 0, "picker": 0])
+    }
     state = nil
     textView.text = ""
     draggedHeight = nil
-    editing = false
+    isEditing = false
     transform = .identity
     picker.transform = .identity
     picker.alpha = 0
@@ -318,7 +399,6 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     activity.removeFromSuperview()
     removeFromSuperview()
     published = nil
-    onMetrics?(["rest": 0, "reserve": 0, "overlay": 0, "picker": 0])
   }
 
   // MARK: Layout
@@ -346,7 +426,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   private var textWidth: CGFloat { max(0, bounds.width - 32) }
 
   private func heights() -> (drawn: CGFloat, reserve: CGFloat) {
-    guard editing else { return (collapsedHeight, collapsedHeight) }
+    guard isEditing else { return (collapsedHeight, collapsedHeight) }
     let auto = autoTextHeight(width: textWidth) + cardChrome
     let dragged = draggedHeight.map { min($0, maxTextHeight) + cardChrome }
     return (dragged ?? auto, auto)
@@ -377,9 +457,9 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     backdrop.frame = bounds
     if #available(iOS 26.0, *) {
       backdrop.cornerConfiguration =
-        editing ? .uniformCorners(radius: .fixed(Self.cardRadius)) : .capsule()
+        isEditing ? .uniformCorners(radius: .fixed(Self.cardRadius)) : .capsule()
     } else {
-      backdrop.layer.cornerRadius = editing ? Self.cardRadius : bounds.height / 2
+      backdrop.layer.cornerRadius = isEditing ? Self.cardRadius : bounds.height / 2
       backdrop.clipsToBounds = true
     }
     let pad = Self.padding
@@ -387,7 +467,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     let buttonsY = bounds.height - pad - side
     addButton.frame = CGRect(x: pad, y: buttonsY, width: side, height: side)
     sendButton.frame = CGRect(x: bounds.width - pad - side, y: buttonsY, width: side, height: side)
-    if editing {
+    if isEditing {
       textView.frame = CGRect(
         x: 16, y: Self.cardTop, width: textWidth, height: max(0, buttonsY - pad - Self.cardTop))
       grabber.frame = CGRect(x: (bounds.width - 36) / 2, y: 6, width: 36, height: 5)
@@ -398,26 +478,38 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
         height: lineBox)
     }
     textView.isScrollEnabled = true
-    grabber.alpha = editing ? 1 : 0
+    grabber.alpha = isEditing ? 1 : 0
     placeholder.frame = CGRect(
       x: textView.frame.minX, y: textView.frame.minY + 8, width: textView.frame.width,
       height: ceil(font.lineHeight))
     publishMetrics()
   }
 
+  /// The composer's distance up from the window's bottom with the keyboard
+  /// down; in a pane that ends above the window (iPad's frame), as far in
+  /// from the pane's end as from its sides.
+  private var restInset: CGFloat {
+    let home = max(Self.padding, (superview?.safeAreaInsets.bottom ?? 0) - Self.homeOverlap)
+    guard let frame = state?.frame, frame.bottom > 0 else { return home }
+    return max(home, frame.bottom + Self.inset)
+  }
+
   /// Tells the page where the composer's top is; the host calls this after
   /// each layout pass, as the keyboard moves the composer without resizing it.
   func publishMetrics() {
-    guard let host = superview, state != nil else { return }
+    guard let host = superview, let key = state?.key else { return }
     let bottom = host.bounds.maxY - frame.maxY
-    let rest = max(Self.padding, host.safeAreaInsets.bottom - Self.homeOverlap) + collapsedHeight
+    let rest = restInset + collapsedHeight
     // The activity line stays while agents run, so the page clears it as it
     // clears the composer; the picker is passing and covers the page instead.
     let lasting = activityShown && state?.picker == nil ? listSpace : 0
     let next = [rest, bottom + heights().reserve + lasting, bottom + frame.height, listSpace]
     guard published != next else { return }
     published = next
-    onMetrics?(["rest": next[0], "reserve": next[1], "overlay": next[2], "picker": next[3]])
+    onEvent?([
+      "kind": "metrics", "key": key, "rest": next[0], "reserve": next[1], "overlay": next[2],
+      "picker": next[3],
+    ])
   }
 
   /// The room the picker or the activity line takes over the composer.
@@ -437,12 +529,14 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
   }
 
   func textViewDidBeginEditing(_ textView: UITextView) {
-    editing = true
+    isEditing = true
+    placeBottom()
     refresh(animated: true)
   }
 
   func textViewDidEndEditing(_ textView: UITextView) {
-    editing = false
+    isEditing = false
+    placeBottom()
     refresh(animated: true)
     textView.setContentOffset(.zero, animated: false)
   }
@@ -463,6 +557,20 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
       "caret": textView.selectedRange.location + textView.selectedRange.length,
       "composing": textView.markedTextRange != nil,
     ])
+  }
+
+  /// A hardware keyboard's Return sends, as on the desktop, or picks the
+  /// first candidate while the picker lists some; Shift-Return adds a line.
+  private func hardwareReturn() {
+    if textView.markedTextRange != nil {
+      textView.unmarkText()
+      return
+    }
+    if let key = state?.key, let first = state?.picker?.rows.first {
+      onEvent?(["kind": "pick", "key": key, "id": first.id])
+      return
+    }
+    send()
   }
 
   private func send() {
@@ -517,7 +625,7 @@ final class ComposerView: UIView, UITextViewDelegate, UIGestureRecognizerDelegat
     guard recognizer is UIPanGestureRecognizer else {
       return super.gestureRecognizerShouldBegin(recognizer)
     }
-    return editing && touchStart < Self.grabberZone
+    return isEditing && touchStart < Self.grabberZone
   }
 
   @objc private func drag(_ pan: UIPanGestureRecognizer) {
@@ -635,6 +743,15 @@ struct ComposerFile: Sendable {
 /// Pasted images become attachments; text pastes as usual.
 final class ComposerTextView: UITextView {
   var onPasteFiles: (([ComposerFile]) -> Void)?
+  var onReturn: (() -> Void)?
+
+  override var keyCommands: [UIKeyCommand]? {
+    let command = UIKeyCommand(input: "\r", modifierFlags: [], action: #selector(pressedReturn))
+    command.wantsPriorityOverSystemBehavior = true
+    return [command]
+  }
+
+  @objc private func pressedReturn() { onReturn?() }
   /// The page takes focus on any tap; one on the controls above the composer
   /// must leave the keyboard where it is.
   var holdsFocus = false

@@ -13,12 +13,10 @@ import type { BackendUnreachable, SetupRequired, ViewerState } from "../session/
 // that does NOT depend on user-facing wording or iconography, so copy
 // edits never break this pin (the whole point of the rewrite).
 //
-//   - Unreachable gate: a branch-owned `data-gate` marker on its root,
-//     plus the server_url / message it echoes from its props.
+//   - Unreachable: the login form with the connection message it echoes.
 //   - Registration gate: the email + password form fields, with the
 //     `autocomplete` mode distinguishing signup (new-password) from
 //     login (current-password).
-const SIG_UNREACHABLE_GATE = 'data-gate="backend-unreachable"';
 const SIG_REG_EMAIL_FIELD = 'type="email"';
 const SIG_REG_PASSWORD_FIELD = 'type="password"';
 const SIG_REG_SIGNUP_AUTOCOMPLETE = 'autoComplete="new-password"';
@@ -57,6 +55,7 @@ const silverhand = {
 async function renderApp(
   viewer: ViewerState | undefined,
   showServerAddress = false,
+  signupEnabled = true,
 ): Promise<string> {
   // Late-import so the silverhand stub is installed before app.tsx is
   // evaluated. app.tsx pulls in `useAppearance` and a handful of
@@ -69,6 +68,15 @@ async function renderApp(
     defaultOptions: { queries: { retry: false } },
   });
   if (viewer !== undefined) qc.setQueryData(["me"], viewer);
+  qc.setQueryData(["server-environment"], {
+    url: "https://server.example.test",
+    mode: "remote",
+    features: {
+      signup_enabled: signupEnabled,
+      password_recovery_enabled: false,
+      account_deletion_enabled: false,
+    },
+  });
   return renderToStaticMarkup(
     React.createElement(
       QueryClientProvider,
@@ -114,32 +122,26 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
   it("loading branch: viewer.data is undefined → no gate renders", async () => {
     const html = await renderApp(undefined);
     // Neither gate's structural signal should be present while loading.
-    expect(html).not.toContain(SIG_UNREACHABLE_GATE);
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
   });
 
-  it("backend_unreachable branch: BackendUnreachableGate renders with serverUrl + message", async () => {
+  it("backend_unreachable branch: the login page reports the connection and keeps the server row", async () => {
     const viewer: BackendUnreachable = {
       backend_unreachable: true,
       server_url: "https://down.example.test",
       message: "connect ECONNREFUSED 127.0.0.1:443",
     };
     const html = await renderApp(viewer);
-    // Gate identity: the branch-owned data marker unique to this gate.
-    expect(html).toContain(SIG_UNREACHABLE_GATE);
-    // Data echo: the gate surfaces the server_url + message it is handed.
-    expect(html).toContain("https://down.example.test");
     expect(html).toContain("ECONNREFUSED");
-    // The registration gate must NOT appear when backend is
-    // unreachable — that's the P1-2 load-bearing pin.
-    expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
+    expect(html).toContain(SIG_REG_LOGIN_AUTOCOMPLETE);
+    expect(html).not.toContain(SIG_REG_SIGNUP_AUTOCOMPLETE);
+    expect(html).toContain('aria-label="Change server"');
   });
 
   it("registration_required (signup enabled) branch: RegistrationGate renders the signup form", async () => {
     const viewer: SetupRequired = {
       registration_required: true,
       suggested_name: "",
-      signup_enabled: true,
     };
     const html = await renderApp(viewer);
     expect(html).toContain(SIG_REG_EMAIL_FIELD);
@@ -149,24 +151,21 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
     expect(html).toContain(SIG_REG_SIGNUP_AUTOCOMPLETE);
     // The unreachable gate must NOT appear when registration is the
     // intended branch.
-    expect(html).not.toContain(SIG_UNREACHABLE_GATE);
   });
 
   it("registration_required (signup disabled) branch: RegistrationGate renders the login form (current-password, no new-password)", async () => {
     const viewer: SetupRequired = {
       registration_required: true,
       suggested_name: "",
-      signup_enabled: false,
     };
-    const html = await renderApp(viewer);
+    const html = await renderApp(viewer, false, false);
     expect(html).toContain(SIG_REG_EMAIL_FIELD);
     expect(html).toContain(SIG_REG_LOGIN_AUTOCOMPLETE);
     // Login mode suppresses the new-password (signup/confirm) wiring.
     expect(html).not.toContain(SIG_REG_SIGNUP_AUTOCOMPLETE);
-    expect(html).not.toContain(SIG_UNREACHABLE_GATE);
   });
 
-  it("GATE ORDER (Cindy P1-2): synthetic ViewerState satisfying BOTH backend_unreachable AND registration_required renders the UNREACHABLE gate, not the registration gate", async () => {
+  it("GATE ORDER (Cindy P1-2): synthetic ViewerState satisfying BOTH backend_unreachable AND registration_required renders the unreachable login page", async () => {
     // This payload should never appear on the wire — the IPC only
     // emits one arm at a time. The synthetic case here is the
     // load-bearing regression bait: if a future edit flipped the
@@ -179,13 +178,10 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
       message: "mixed",
       registration_required: true,
       suggested_name: "",
-      signup_enabled: true,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);
-    expect(html).toContain(SIG_UNREACHABLE_GATE);
-    expect(html).toContain("https://down.example.test");
-    // The registration form must NOT appear — order proven.
-    expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
+    expect(html).toContain("mixed");
+    expect(html).not.toContain(SIG_REG_SIGNUP_AUTOCOMPLETE);
   });
 
   it("update_required branch: UpdateRequiredGate renders and the registered shell does not mount", async () => {
@@ -197,7 +193,6 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
     const html = await renderApp(viewer);
     expect(html).toContain('data-gate="update-required"');
     expect(html).not.toContain(SIG_REG_EMAIL_FIELD);
-    expect(html).not.toContain(SIG_UNREACHABLE_GATE);
   });
 
   it("GATE ORDER: synthetic ViewerState satisfying BOTH update_required AND registration_required renders the update gate, not the registration form", async () => {
@@ -207,7 +202,6 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
       server_api_epoch: 0,
       registration_required: true,
       suggested_name: "",
-      signup_enabled: true,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);
     expect(html).toContain('data-gate="update-required"');
@@ -224,7 +218,7 @@ describe("app.tsx gate ordering (D4.a Commit 6 part 2)", () => {
       server_api_epoch: 2,
     } as unknown as ViewerState;
     const html = await renderApp(synthetic);
-    expect(html).toContain(SIG_UNREACHABLE_GATE);
+    expect(html).toContain("mixed");
     expect(html).not.toContain('data-gate="update-required"');
   });
 });
@@ -246,10 +240,11 @@ it("opens Login for a returning user even when signup remains available", async 
 it.each([true, false])(
   "server editing follows the product option (enabled=%s) in login and signup",
   async (enabled) => {
-    for (const signup_enabled of [true, false]) {
+    for (const signupEnabled of [true, false]) {
       const html = await renderApp(
-        { registration_required: true, suggested_name: "", signup_enabled },
+        { registration_required: true, suggested_name: "" },
         enabled,
+        signupEnabled,
       );
       expect(html.includes('aria-label="Change server"')).toBe(enabled);
       expect(html).toContain('type="email"');
@@ -259,7 +254,7 @@ it.each([true, false])(
 
 it("the app update dialog is reachable from every gate (login, unreachable, update required)", async () => {
   const gates = [
-    { registration_required: true, suggested_name: "", signup_enabled: false },
+    { registration_required: true, suggested_name: "" },
     { backend_unreachable: true, server_url: "https://down.example.test", message: "down" },
     { update_required: true, direction: "app", server_api_epoch: 2 },
   ] as unknown as ViewerState[];

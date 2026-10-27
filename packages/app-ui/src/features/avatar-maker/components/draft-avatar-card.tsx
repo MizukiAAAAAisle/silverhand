@@ -6,6 +6,7 @@ import type { DraftAvatar } from "../hooks/use-draft-avatar";
 import { AvatarConfigPreview } from "./avatar-config-preview";
 import { AvatarMakerDialog } from "./avatar-maker-dialog";
 import { AvatarMakerGlyph } from "./avatar-maker-glyph";
+import { t } from "@/lib/i18n";
 
 /** The avatar block at the top of signup and profile setup. A composed face is
  *  already there, with Random and Customize beside it, so the maker is discovered
@@ -19,27 +20,31 @@ export function DraftAvatarCard({ draft, disabled }: { draft: DraftAvatar; disab
       <div className="flex items-center gap-3">
         <AvatarPickerButton
           size={size}
-          ariaLabel="Upload photo"
+          ariaLabel={t("avatarMaker.uploadPhoto")}
           disabled={disabled}
           className="border border-border-subtle"
           onPick={draft.pick}
         >
           {draft.photoUrl ? (
-            <img src={draft.photoUrl} alt="Avatar preview" className="size-full object-cover" />
+            <img
+              src={draft.photoUrl}
+              alt={t("avatarMaker.avatarPreview")}
+              className="size-full object-cover"
+            />
           ) : (
             <AvatarConfigPreview config={draft.composed} size={size} />
           )}
         </AvatarPickerButton>
         <div className="flex flex-col items-start gap-2.5">
           <CardAction icon={<AvatarMakerGlyph />} disabled={disabled} onClick={draft.shuffle}>
-            Random
+            {t("avatarMaker.random")}
           </CardAction>
           <CardAction
             icon={<EditIcon className="size-3.5" />}
             disabled={disabled}
             onClick={() => setMakerOpen(true)}
           >
-            Customize
+            {t("avatarMaker.customize")}
           </CardAction>
         </div>
       </div>

@@ -30,6 +30,7 @@ import { ChannelSettingsDetails } from "./channel-settings-details";
 import { ChannelMembersPreview } from "./channel-members-preview";
 import { ChannelNotificationSettings } from "./channel-notification-settings";
 import { ChannelMembersPage } from "./channel-members-page";
+import { t } from "@/lib/i18n";
 
 export function ChannelSettingsPanel({
   channelId,
@@ -81,7 +82,9 @@ export function ChannelSettingsPanel({
         onClose={nav.closeChannelSettings}
         onBack={membersPage ? nav.navigateBack : undefined}
         nativeBar={{
-          title: membersPage ? "Members" : (detail.data?.channel.title ?? "Channel settings"),
+          title: membersPage
+            ? t("conversationShell.members")
+            : (detail.data?.channel.title ?? t("conversationShell.channelSettings")),
           subtitle: membersPage ? detail.data?.channel.title : undefined,
           titleAction: null,
           actions: [],
@@ -92,36 +95,40 @@ export function ChannelSettingsPanel({
         <SidePanelHeaderTitle
           icon={
             detail.data?.channel.visibility === "private" ? (
-              <LockIcon aria-label="Private channel" className="size-4 text-text-secondary" />
+              <LockIcon
+                aria-label={t("conversationShell.privateChannel")}
+                className="size-4 text-text-secondary"
+              />
             ) : (
-              <HashIcon aria-label="Public channel" className="size-4 text-text-secondary" />
+              <HashIcon
+                aria-label={t("conversationShell.publicChannel")}
+                className="size-4 text-text-secondary"
+              />
             )
           }
           title={
             membersPage
-              ? `${detail.data?.channel.title ?? "Channel"} - Members`
-              : (detail.data?.channel.title ?? "Channel settings")
+              ? `${detail.data?.channel.title ?? t("conversationShell.channel")} - Members`
+              : (detail.data?.channel.title ?? t("conversationShell.channelSettings"))
           }
         />
       </SidePanelHeader>
       {detail.isError ? (
         <div className="p-4 text-sm text-error">
-          Unable to load channel settings.
+          {t("conversationShell.unableToLoadChannel")}
           <Button
             variant="neutral"
             size="sm"
             className="mt-3"
             onClick={() => void detail.refetch()}
           >
-            Retry
+            {t("common.retry")}
           </Button>
         </div>
       ) : !detail.data ? (
         <ChannelSettingsSkeleton />
       ) : !detail.data.is_member ? (
-        <p className="p-4 text-sm text-text-muted">
-          Join this channel to manage its settings and members.
-        </p>
+        <p className="p-4 text-sm text-text-muted">{t("conversationShell.joinThisChannelTo")}</p>
       ) : (
         <SettingsBody
           key={channelId}
@@ -223,7 +230,9 @@ function SettingsBody({
     }
   };
   const membersLabel =
-    roster.status === "resolved" ? `Members ${roster.members.length}` : "Members";
+    roster.status === "resolved"
+      ? t("conversationShell.membersCount", { count: roster.members.length })
+      : t("conversationShell.members");
 
   return (
     <AnimatePresence initial={false} mode="wait" custom={membersPage ? 1 : -1}>
@@ -253,7 +262,7 @@ function SettingsBody({
                       disabled={bulkPending}
                       onClick={() => void bulkAction(true)}
                     >
-                      <RefreshIcon className="size-3.5" /> Restart
+                      <RefreshIcon className="size-3.5" /> {t("conversationShell.restart")}
                     </Button>
                     <Button
                       variant="neutral"
@@ -261,7 +270,7 @@ function SettingsBody({
                       disabled={bulkPending}
                       onClick={() => void bulkAction(false)}
                     >
-                      <PowerIcon className="size-3.5" /> Stop
+                      <PowerIcon className="size-3.5" /> {t("conversationShell.stop")}
                     </Button>
                   </div>
                 ) : null

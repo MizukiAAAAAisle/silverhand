@@ -76,7 +76,4 @@ stdout: { "thread_root_id": "<root_id>", "changed": <bool> }
   },
 };
 
-export const threadCommands: readonly Command[] = [
-  followCommand,
-  unfollowCommand,
-];
+export const threadCommands: readonly Command[] = [followCommand, unfollowCommand];

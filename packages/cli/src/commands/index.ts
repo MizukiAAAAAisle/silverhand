@@ -105,10 +105,7 @@ export interface RemovedVerbSpec {
   hint: string;
 }
 
-const COMMAND_IMPLEMENTATIONS: Record<
-  SilverhandCommandNoun,
-  readonly Command[]
-> = {
+const COMMAND_IMPLEMENTATIONS: Record<SilverhandCommandNoun, readonly Command[]> = {
   message: messageCommands,
   task: taskCommands,
   thread: threadCommands,
@@ -120,9 +117,7 @@ const COMMAND_IMPLEMENTATIONS: Record<
   profile: profileCommands,
 };
 
-const FACET_IMPLEMENTATIONS: Partial<
-  Record<SilverhandCommandNoun, readonly FacetGroup[]>
-> = {
+const FACET_IMPLEMENTATIONS: Partial<Record<SilverhandCommandNoun, readonly FacetGroup[]>> = {
   profile: profileFacets,
 };
 
@@ -173,21 +168,19 @@ function bindCommands(
   const byVerb = new Map<string, Command>();
   for (const command of implementations) {
     if (byVerb.has(command.verb)) {
-      throw new Error(
-        `duplicate CLI implementation: ${spec.noun} ${command.verb}`,
-      );
+      throw new Error(`duplicate CLI implementation: ${spec.noun} ${command.verb}`);
     }
     byVerb.set(command.verb, command);
   }
 
-  const bound = spec.verbs.map(verb => {
+  const bound = spec.verbs.map((verb) => {
     const command = byVerb.get(verb);
     if (!command) {
       throw new Error(`missing CLI implementation: ${spec.noun} ${verb}`);
     }
     return command;
   });
-  const extras = [...byVerb.keys()].filter(verb => !spec.verbs.includes(verb));
+  const extras = [...byVerb.keys()].filter((verb) => !spec.verbs.includes(verb));
   if (extras.length > 0) {
     throw new Error(
       `CLI implementations absent from manifest for ${spec.noun}: ${extras.join(', ')}`,
@@ -200,13 +193,11 @@ function bindFacets(
   spec: SilverhandCommandNounManifest,
   implementations: readonly FacetGroup[],
 ): readonly FacetGroup[] {
-  const byFacet = new Map(implementations.map(facet => [facet.facet, facet]));
-  const bound = (spec.facets ?? []).map(facetSpec => {
+  const byFacet = new Map(implementations.map((facet) => [facet.facet, facet]));
+  const bound = (spec.facets ?? []).map((facetSpec) => {
     const implementation = byFacet.get(facetSpec.facet);
     if (!implementation) {
-      throw new Error(
-        `missing CLI facet implementation: ${spec.noun} ${facetSpec.facet}`,
-      );
+      throw new Error(`missing CLI facet implementation: ${spec.noun} ${facetSpec.facet}`);
     }
     return {
       facet: facetSpec.facet,
@@ -222,53 +213,40 @@ function bindFacets(
     };
   });
   const extras = [...byFacet.keys()].filter(
-    facet => !(spec.facets ?? []).some(candidate => candidate.facet === facet),
+    (facet) => !(spec.facets ?? []).some((candidate) => candidate.facet === facet),
   );
   if (extras.length > 0) {
-    throw new Error(
-      `CLI facets absent from manifest for ${spec.noun}: ${extras.join(', ')}`,
-    );
+    throw new Error(`CLI facets absent from manifest for ${spec.noun}: ${extras.join(', ')}`);
   }
   return bound;
 }
 
-export const COMMAND_GROUPS: readonly NounGroup[] =
-  silverhandCommandNouns().map(spec => {
-    const facets = bindFacets(
-      spec,
-      FACET_IMPLEMENTATIONS[spec.noun as SilverhandCommandNoun] ?? [],
-    );
-    return {
-      noun: spec.noun,
-      summary: spec.summary,
-      ...(spec.guidance ? { guidance: spec.guidance } : {}),
-      commands: bindCommands(
-        spec,
-        COMMAND_IMPLEMENTATIONS[spec.noun as SilverhandCommandNoun],
-      ),
-      ...(facets.length > 0 ? { facets } : {}),
-      ...(REMOVED_VERBS[spec.noun as SilverhandCommandNoun]
-        ? { removedVerbs: REMOVED_VERBS[spec.noun as SilverhandCommandNoun] }
-        : {}),
-    };
-  });
+export const COMMAND_GROUPS: readonly NounGroup[] = silverhandCommandNouns().map((spec) => {
+  const facets = bindFacets(spec, FACET_IMPLEMENTATIONS[spec.noun as SilverhandCommandNoun] ?? []);
+  return {
+    noun: spec.noun,
+    summary: spec.summary,
+    ...(spec.guidance ? { guidance: spec.guidance } : {}),
+    commands: bindCommands(spec, COMMAND_IMPLEMENTATIONS[spec.noun as SilverhandCommandNoun]),
+    ...(facets.length > 0 ? { facets } : {}),
+    ...(REMOVED_VERBS[spec.noun as SilverhandCommandNoun]
+      ? { removedVerbs: REMOVED_VERBS[spec.noun as SilverhandCommandNoun] }
+      : {}),
+  };
+});
 
 export function findGroup(noun: string): NounGroup | undefined {
-  return COMMAND_GROUPS.find(g => g.noun === noun);
+  return COMMAND_GROUPS.find((g) => g.noun === noun);
 }
 
 export function findCommand(noun: string, verb: string): Command | undefined {
-  return findGroup(noun)?.commands.find(c => c.verb === verb);
+  return findGroup(noun)?.commands.find((c) => c.verb === verb);
 }
 
 export function findFacet(noun: string, facet: string): FacetGroup | undefined {
-  return findGroup(noun)?.facets?.find(f => f.facet === facet);
+  return findGroup(noun)?.facets?.find((f) => f.facet === facet);
 }
 
-export function findFacetCommand(
-  noun: string,
-  facet: string,
-  verb: string,
-): Command | undefined {
-  return findFacet(noun, facet)?.commands.find(c => c.verb === verb);
+export function findFacetCommand(noun: string, facet: string, verb: string): Command | undefined {
+  return findFacet(noun, facet)?.commands.find((c) => c.verb === verb);
 }

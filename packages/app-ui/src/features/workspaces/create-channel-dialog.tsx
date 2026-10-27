@@ -21,6 +21,7 @@ import {
 import { MemberPicker, type MemberPickerCandidate } from "./agent-picker";
 import { useCreateChannel, useWorkspaceMemberLists } from "./hooks";
 import type { WorkspaceCapabilities } from "./workspace-capabilities";
+import { t } from "@/lib/i18n";
 
 // Stable empty member object so the useEffect dependency on `members` doesn't
 // create a new reference every render when the query hasn't resolved yet.
@@ -177,7 +178,7 @@ export function CreateChannelDialog({
     e.preventDefault();
     setError(null);
     if (!title.trim()) {
-      setError("Please enter a channel title");
+      setError(t("workspaces.pleaseEnterAChannel"));
       return;
     }
     // A channel in a memberless container (Agent Space) carries no member
@@ -205,18 +206,18 @@ export function CreateChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New Channel</DialogTitle>
-          <DialogDescription>A focused space with its own conversation context.</DialogDescription>
+          <DialogTitle>{t("workspaces.newChannel")}</DialogTitle>
+          <DialogDescription>{t("workspaces.aFocusedSpaceWith")}</DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="flex flex-col gap-3">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor="se-title">Title</Label>
+            <Label htmlFor="se-title">{t("workspaces.title")}</Label>
             <Input
               id="se-title"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
-              placeholder="fix the login bug"
+              placeholder={t("workspaces.fixTheLoginBug")}
               autoFocus
             />
           </div>
@@ -246,10 +247,10 @@ export function CreateChannelDialog({
 
           <DialogFooter className="mt-2">
             <Button type="button" variant="cancel" onClick={() => onOpenChange(false)}>
-              Cancel
+              {t("common.cancel")}
             </Button>
             <Button type="submit" variant="primary" disabled={createChannel.isPending}>
-              {createChannel.isPending ? "Creating…" : "Create"}
+              {createChannel.isPending ? t("workspaces.creating") : t("workspaces.create")}
             </Button>
           </DialogFooter>
         </form>
@@ -263,13 +264,13 @@ export function CreateChannelDialog({
  *  they'll later recognise in the channel list. Rendered as two independent
  *  buttons — no segmented frame, no explanatory copy: the label + familiar
  *  glyph carry the meaning. */
-const VISIBILITY_OPTIONS: ReadonlyArray<{
+const visibilityOptions = (): ReadonlyArray<{
   value: ConversationVisibility;
   label: string;
   icon: typeof LockIcon;
-}> = [
-  { value: "private", label: "Private", icon: LockIcon },
-  { value: "public", label: "Public", icon: HashIcon },
+}> => [
+  { value: "private", label: t("workspaces.private"), icon: LockIcon },
+  { value: "public", label: t("workspaces.public"), icon: HashIcon },
 ];
 
 function VisibilitySelect({
@@ -281,13 +282,17 @@ function VisibilitySelect({
 }): JSX.Element {
   return (
     <div className="flex flex-col gap-1.5">
-      <Label>Visibility</Label>
+      <Label>{t("workspaces.visibility")}</Label>
       {/* Single-select, so a11y-grouped as a radiogroup — but visually two
           independent buttons, each carrying its own border (no segmented
           container frame). Selected reuses the canonical neutral selected-row
           recipe (ink fill + border, never a brand hue). */}
-      <div role="radiogroup" aria-label="Channel visibility" className="flex gap-2 self-start">
-        {VISIBILITY_OPTIONS.map((opt) => {
+      <div
+        role="radiogroup"
+        aria-label={t("workspaces.channelVisibility")}
+        className="flex gap-2 self-start"
+      >
+        {visibilityOptions().map((opt) => {
           const selected = opt.value === value;
           const Icon = opt.icon;
           return (
@@ -327,10 +332,8 @@ function RegularMemberPicker({
   if (candidates.length === 0) {
     return (
       <div className="flex flex-col gap-1.5">
-        <Label>Members</Label>
-        <span className="text-xs text-text-muted">
-          This project has no members yet. Add them from the Members panel first.
-        </span>
+        <Label>{t("workspaces.members")}</Label>
+        <span className="text-xs text-text-muted">{t("workspaces.thisProjectHasNo")}</span>
       </div>
     );
   }
@@ -339,7 +342,7 @@ function RegularMemberPicker({
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-1">
         <Label htmlFor="se-add-member">
-          Members
+          {t("workspaces.members")}
           <span className="ml-1 text-text-muted">
             ({selected.length} / {candidates.length})
           </span>
@@ -352,7 +355,7 @@ function RegularMemberPicker({
           <button
             type="button"
             onClick={() => onChange([])}
-            aria-label="Clear selected members"
+            aria-label={t("workspaces.clearSelectedMembers")}
             className="shrink-0 rounded-(--control-radius) text-text-muted transition-colors hover:text-text-primary focus-outline"
           >
             <CloseIcon className="size-3.5" aria-hidden />
@@ -365,8 +368,12 @@ function RegularMemberPicker({
         candidates={candidates}
         value={selected}
         onChange={onChange}
-        placeholder={selected.length === 0 ? "Select members to add…" : "Add more members…"}
-        allSelectedText="All members added"
+        placeholder={
+          selected.length === 0
+            ? t("workspaces.selectMembersToAdd")
+            : t("workspaces.addMoreMembers")
+        }
+        allSelectedText={t("workspaces.allMembersAdded")}
       />
     </div>
   );

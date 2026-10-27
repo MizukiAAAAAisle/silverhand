@@ -34,7 +34,7 @@ export const animateLayoutChanges: AnimateLayoutChanges = (args) =>
   args.isSorting ? defaultAnimateLayoutChanges(args) : false;
 
 /** Generic per-group DnD context: vertical-only, in-place (no DragOverlay),
- *  4px mouse activation; touch must hold still before dragging so swipes scroll. Each hard group gets
+ *  4px mouse activation (no touch drag: see `useListSortSensors`). Each hard group gets
  *  its own context so drags never cross a group boundary. The consumer renders
  *  its `SortableXxxItem` rows as children and sends the COMPLETE new group
  *  order up through `onReorder`. */

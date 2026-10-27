@@ -45,12 +45,11 @@ export interface SpawnPrepHandle {
   cleanup(): Promise<void>;
 }
 
-export async function prepareSpawnFiles(
-  input: SpawnPrepInput,
-): Promise<SpawnPrepHandle> {
-  const scopeDir = input.runtimeScope.kind === 'agent'
-    ? join('agent', input.agentId)
-    : join(input.runtimeScope.conversation_id, input.agentId);
+export async function prepareSpawnFiles(input: SpawnPrepInput): Promise<SpawnPrepHandle> {
+  const scopeDir =
+    input.runtimeScope.kind === 'agent'
+      ? join('agent', input.agentId)
+      : join(input.runtimeScope.conversation_id, input.agentId);
   const parentDir = join(tmpdir(), 'silverhand', scopeDir);
   await mkdir(parentDir, { recursive: true });
   const dir = await mkdtemp(join(parentDir, 'spawn-'));
@@ -65,9 +64,7 @@ export async function prepareSpawnFiles(
   const shimEnv: Record<string, string> = {
     ...(input.silverhandCli.env ?? {}),
     ...input.silverhandEnv,
-    ...(input.daemonSocketPath
-      ? { [SILVERHAND_DAEMON_SOCKET_ENV]: input.daemonSocketPath }
-      : {}),
+    ...(input.daemonSocketPath ? { [SILVERHAND_DAEMON_SOCKET_ENV]: input.daemonSocketPath } : {}),
     [SILVERHAND_LAST_DELIVERED_SEQ_FILE_ENV]: lastDeliveredSeqPath,
   };
   // A configured launcher may carry a legacy ambient conversation env of its
@@ -79,9 +76,7 @@ export async function prepareSpawnFiles(
   const shim = renderSilverhandShim(
     input.silverhandCli,
     shimEnv,
-    input.runtimeScope.kind === 'agent'
-      ? [SILVERHAND_CONVERSATION_ID_ENV]
-      : [],
+    input.runtimeScope.kind === 'agent' ? [SILVERHAND_CONVERSATION_ID_ENV] : [],
   );
 
   await Promise.all([
@@ -113,21 +108,10 @@ function renderSilverhandShim(
   const envAssignments = Object.entries(env)
     .map(([key, value]) => `export ${shellName(key)}=${shellString(value)}`)
     .join('\n');
-  const envUnsets = unsetKeys
-    .map(key => `unset ${shellName(key)}`)
-    .join('\n');
-  const command = [launcher.command, ...launcher.args]
-    .map(part => shellString(part))
-    .join(' ');
-  return [
-    '#!/bin/sh',
-    'set -eu',
-    envUnsets,
-    envAssignments,
-    `exec ${command} "$@"`,
-    '',
-  ]
-    .filter(line => line.length > 0)
+  const envUnsets = unsetKeys.map((key) => `unset ${shellName(key)}`).join('\n');
+  const command = [launcher.command, ...launcher.args].map((part) => shellString(part)).join(' ');
+  return ['#!/bin/sh', 'set -eu', envUnsets, envAssignments, `exec ${command} "$@"`, '']
+    .filter((line) => line.length > 0)
     .join('\n');
 }
 

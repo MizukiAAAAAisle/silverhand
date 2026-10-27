@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, expect, it, vi } from "vitest";
 import { SavedListView, SAVED_FILTER_DEFAULT } from "./saved-list-view";
 import { ArchivedChannelsPanel, ARCHIVED_FILTER_DEFAULT } from "./archived-channels-panel";
+import { t } from "@/lib/i18n";
 
 const state = vi.hoisted(() => ({ compact: true }));
 vi.mock("@/navigation/layout", () => ({ useCompactLayout: () => state.compact }));
@@ -47,17 +48,17 @@ function saved(active: boolean) {
 
 it("keeps the compact Saved filter action when active filters yield no results", () => {
   const html = saved(true);
-  expect(html).toContain("No matches");
-  expect(html).toContain('aria-label="Show filters (active)"');
-  expect(html).toContain('aria-label="Filters" hidden=""');
+  expect(html).toContain(t("chat.noMatches"));
+  expect(html).toContain(`aria-label="${t("ui.filters.showActive")}"`);
+  expect(html).toContain(`aria-label="${t("ui.filters.label")}" hidden=""`);
 });
 
 it("preserves Saved's original no-collection behavior and desktop visibility", () => {
-  expect(saved(false)).not.toContain('aria-label="Filters"');
+  expect(saved(false)).not.toContain(`aria-label="${t("ui.filters.label")}"`);
   state.compact = false;
   const html = saved(true);
-  expect(html).toContain('aria-label="Filters"');
-  expect(html).not.toContain('aria-label="Filters" hidden=');
+  expect(html).toContain(`aria-label="${t("ui.filters.label")}"`);
+  expect(html).not.toContain(`aria-label="${t("ui.filters.label")}" hidden=`);
   expect(html.match(/<header\b[^>]*>[\s\S]*?<\/header>/)?.[0]).not.toContain("aria-controls=");
 });
 
@@ -72,6 +73,6 @@ it("starts Archived with its compact filters collapsed", () => {
       onOpenWorkspaceSettings: vi.fn(),
     }),
   );
-  expect(html).toContain('aria-label="Show filters"');
-  expect(html).toContain('aria-label="Filters" hidden=""');
+  expect(html).toContain(`aria-label="${t("ui.filters.show")}"`);
+  expect(html).toContain(`aria-label="${t("ui.filters.label")}" hidden=""`);
 });

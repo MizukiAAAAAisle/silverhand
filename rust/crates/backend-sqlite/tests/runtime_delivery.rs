@@ -1637,3 +1637,148 @@ async fn archive_blocks_existing_queue_without_changing_its_rows() {
         .unwrap();
     assert_eq!(after, before);
 }
+
+/// The oldest backfilled reply names the gap before it, whether or not the root is
+/// in this batch (already delivered, or authored by the recipient).
+#[tokio::test]
+async fn the_oldest_backfilled_reply_names_the_replies_omitted_before_it() {
+    for root_case in ["observe", "delivered", "self"] {
+        let fixture = fixture().await;
+        let mut db = open(&fixture.path).await;
+        sqlx::query("DELETE FROM conversation_inboxes")
+            .execute(&mut db)
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE conversations SET title = 'it''s #1', title_key = 'it''s #1' WHERE id = ?",
+        )
+        .bind(CONVERSATION)
+        .execute(&mut db)
+        .await
+        .unwrap();
+        let (from_kind, from_user, from_agent) = if root_case == "self" {
+            ("agent", None, Some(AGENT))
+        } else {
+            ("user", Some("user-1"), None)
+        };
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, from_kind, from_user_id, from_agent_id,
+                 content, seq, created_at)
+             VALUES ('rootmessage00001', ?, ?, ?, ?, 'root', 10, 10)",
+        )
+        .bind(CONVERSATION)
+        .bind(from_kind)
+        .bind(from_user)
+        .bind(from_agent)
+        .execute(&mut db)
+        .await
+        .unwrap();
+        for seq in 11..=15 {
+            sqlx::query(
+                "INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq,
+                     created_at, thread_root_id)
+                 VALUES (?, ?, 'user', 'user-1', 'reply', ?, ?, 'rootmessage00001')",
+            )
+            .bind(format!("reply-{seq}"))
+            .bind(CONVERSATION)
+            .bind(seq)
+            .bind(seq)
+            .execute(&mut db)
+            .await
+            .unwrap();
+        }
+        let mut backfilled = vec![("reply-14", None), ("reply-15", None)];
+        match root_case {
+            "observe" => backfilled.insert(0, ("rootmessage00001", None)),
+            "delivered" => backfilled.insert(0, ("rootmessage00001", Some(5_i64))),
+            _ => {}
+        }
+        for (id, delivered_at) in backfilled {
+            sqlx::query(
+                "INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id,
+                     delivered_at, created_at, delivery_kind) VALUES (?, ?, ?, ?, 20, 'observe')",
+            )
+            .bind(CONVERSATION)
+            .bind(AGENT)
+            .bind(id)
+            .bind(delivered_at)
+            .execute(&mut db)
+            .await
+            .unwrap();
+        }
+        db.close().await.unwrap();
+
+        let principal = claim_runtime(&fixture, "daemon-1").await;
+        let ClaimPendingInbox::Claimed(batch) = fixture
+            .delivery
+            .claim_pending(
+                "host-1".into(),
+                principal,
+                ConversationId::parse(CONVERSATION).unwrap(),
+                owner("owner-omitted"),
+                100,
+                50,
+                &NoReferences,
+            )
+            .await
+            .unwrap()
+        else {
+            panic!("backfilled rows must be claimable")
+        };
+        let notes: Vec<bool> = batch
+            .deliveries()
+            .iter()
+            .map(|delivery| delivery.presentation().contains("not included"))
+            .collect();
+        let first_reply = if root_case == "observe" { 1 } else { 0 };
+        assert_eq!(notes.iter().filter(|note| **note).count(), 1, "{root_case}");
+        let note = batch.deliveries()[first_reply].presentation();
+        assert!(
+            note.ends_with(
+                "reply\n\n[3 earlier replies in this thread are not included. Read them with `silverhand message history --target '#Workspace%20One/it'\\''s%20#1/thread:rootmessage00001' --before-seq 14`.]"
+            ),
+            "{root_case}: {note}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn pending_turn_is_reported_only_for_unclaimed_turn_rows_of_current_custody() {
+    let fixture = fixture().await;
+    let principal = claim_runtime(&fixture, "daemon-1").await;
+    let admission = RuntimeEventAdmission::new("host-1".into(), principal.clone());
+    let conversation = ConversationId::parse(CONVERSATION).unwrap();
+    assert!(
+        fixture
+            .delivery
+            .has_pending_turn(admission.clone(), conversation.clone())
+            .await
+            .unwrap()
+    );
+    let mut db = open(&fixture.path).await;
+    sqlx::query(
+        "UPDATE conversation_inboxes SET delivery_kind = 'observe' WHERE message_id = 'message-3'",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query("UPDATE conversation_inboxes SET in_flight_owner = 'other', in_flight_at = 100 WHERE message_id = 'message-1'")
+        .execute(&mut db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "UPDATE conversation_inboxes SET delivered_at = 100 WHERE message_id = 'message-2'",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+    assert!(
+        !fixture
+            .delivery
+            .has_pending_turn(admission, conversation)
+            .await
+            .unwrap(),
+        "observe-only, in-flight and delivered rows owe no run"
+    );
+}

@@ -63,8 +63,10 @@ export const SplitterTrack = forwardRef<HTMLDivElement, SplitterTrackProps>(func
         marginInline: "calc((var(--pane-gap) + 4px) / -2)",
         zIndex: 1,
       }}
+      // A touch drag would otherwise scroll the page, or a held press select
+      // the track as text instead of resizing.
       className={
-        "relative w-1 shrink-0 cursor-col-resize bg-(--splitter-bg,var(--border-subtle)) " +
+        "relative w-1 shrink-0 cursor-col-resize touch-none select-none [-webkit-touch-callout:none] bg-(--splitter-bg,var(--border-subtle)) " +
         "transition-colors hover:bg-(--splitter-hover-bg,var(--border)) " +
         "data-[active=true]:bg-(--splitter-hover-bg,var(--border))"
       }

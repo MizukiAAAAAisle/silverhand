@@ -11,10 +11,7 @@
  * Kept byte-for-byte identical to the pre-Stage-3 backend formatter so the
  * combined-message wording the runtime receives does not change.
  */
-export function combineGatedBatch(
-  messages: readonly string[],
-  sendMessageTool: string,
-): string {
+export function combineGatedBatch(messages: readonly string[], sendMessageTool: string): string {
   return (
     `You have ${messages.length} new messages that arrived while you were busy ` +
     `(oldest first):\n\n${messages.join('\n\n---\n\n')}\n\n` +

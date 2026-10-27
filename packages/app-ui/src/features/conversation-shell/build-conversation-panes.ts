@@ -7,6 +7,7 @@ import type {
   PaneContentState,
   PaneContentCommands,
 } from "./pane-content-inputs";
+import { t } from "@/lib/i18n";
 
 export function buildConversationPanes(
   route: PaneContentRoute,
@@ -163,7 +164,7 @@ export function resolveSecondaryPane(
           jumpPrimePending: state.secondaryJumpPrimePending,
           onJumped: commands.handleJumped,
           onCloseChild: commands.closeSecondary,
-          closeLabel: "Close side pane",
+          closeLabel: t("conversationShell.closeSidePane"),
           isFullscreen: false,
           conversationRefsById: read.conversationRefsById,
           onOpenConversationRef: commands.openSide,

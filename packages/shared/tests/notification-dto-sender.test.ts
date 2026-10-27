@@ -26,9 +26,31 @@ describe('NotificationDto.sender', () => {
   it('accepts null and every author arm', () => {
     const senders = [
       null,
-      { status: 'active', kind: 'user', id: 'u-2', name: 'bo', display_name: 'Bo', avatar_url: null, runtime: null },
-      { status: 'deleted', kind: 'agent', id: 'a-1', name: 'gone', display_name: 'Gone', avatar_url: null },
-      { status: 'unresolved', kind: 'user', id: null, name: null, display_name: null, avatar_url: null },
+      {
+        status: 'active',
+        kind: 'user',
+        id: 'u-2',
+        name: 'bo',
+        display_name: 'Bo',
+        avatar_url: null,
+        runtime: null,
+      },
+      {
+        status: 'deleted',
+        kind: 'agent',
+        id: 'a-1',
+        name: 'gone',
+        display_name: 'Gone',
+        avatar_url: null,
+      },
+      {
+        status: 'unresolved',
+        kind: 'user',
+        id: null,
+        name: null,
+        display_name: null,
+        avatar_url: null,
+      },
     ];
     for (const sender of senders) {
       expect(NotificationDtoSchema.parse({ ...base, sender }).sender).toEqual(sender);

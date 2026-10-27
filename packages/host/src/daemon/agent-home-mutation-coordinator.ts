@@ -76,10 +76,12 @@ export class AgentHomeMutationCoordinator implements AgentHomeFenceAuthority {
       this.bounded.set(agentId, entries);
     }
     entries.add(promise);
-    void promise.finally(() => {
-      entries!.delete(promise);
-      if (entries!.size === 0) this.bounded.delete(agentId);
-    }).catch(() => undefined);
+    void promise
+      .finally(() => {
+        entries!.delete(promise);
+        if (entries!.size === 0) this.bounded.delete(agentId);
+      })
+      .catch(() => undefined);
     return promise;
   }
 

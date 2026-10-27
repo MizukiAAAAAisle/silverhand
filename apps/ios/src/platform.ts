@@ -14,8 +14,10 @@ import { createIOSTitlebar } from "./titlebar";
 import { createIOSPageBar } from "./page-bar";
 import { createIOSBanner } from "./banner";
 import { createIOSComposer } from "./composer";
+import { createIOSSelectionBar } from "./selection-bar";
 import { createIOSFiles, encodeBytes } from "./files";
 import { createIOSAvatarMaker } from "./avatar-maker";
+import { createIOSContextMenu } from "./context-menu";
 
 function parse(text?: string): unknown {
   try {
@@ -28,6 +30,8 @@ function parse(text?: string): unknown {
 export function createIOSPlatform(
   bridge: NativeBridge,
   resetApplication: () => void,
+  /** Whether this iOS draws the system context menu; without it the page keeps its own. */
+  { contextMenu = false }: { contextMenu?: boolean } = {},
 ): ClientPlatform {
   const epochHandlers = new Set<() => void>();
   let upgrade: ClientAuthState | undefined;
@@ -57,17 +61,26 @@ export function createIOSPlatform(
   };
 
   return {
+    setLocale: (locale) => void bridge.setLocale({ locale }),
     navigation: createIOSNavigation(bridge),
     titlebar: createIOSTitlebar(bridge),
     pageBar: createIOSPageBar(bridge),
     composer: createIOSComposer(bridge),
+    selectionBar: createIOSSelectionBar(bridge),
     banner: createIOSBanner(bridge),
     avatarMaker: createIOSAvatarMaker(bridge),
+    contextMenu: contextMenu ? createIOSContextMenu(bridge) : undefined,
     client: {
       getConnectionPolicy: async () => ({ allow_insecure_remote: false }),
       getConnectionInfo: async () => {
         const profile = await bridge.getProfile();
         return profile.server_url ? { url: profile.server_url, mode: "remote" } : null;
+      },
+      getServerInfo: async () => {
+        const response = await bridge.serverInfo();
+        if (response.status !== 200)
+          throw new Error(`Server discovery returned HTTP ${response.status}`);
+        return ServerInfoSchema.parse(parse(response.bodyText));
       },
       getServerConnectionProfile: async () => {
         const profile = await bridge.getProfile();
@@ -115,20 +128,15 @@ export function createIOSPlatform(
           const info = ServerInfoSchema.parse(parse(state.info.bodyText));
           const skew = compatibility(info);
           if (skew) return skew;
-          if (!state.me) return { status: "unauthenticated", signup_enabled: info.signup_enabled };
+          const unauthenticated = { status: "unauthenticated" as const };
+          if (!state.me) return unauthenticated;
           const result = classifyMeFetchOutcome({
             kind: "response",
             status: state.me.status,
             body: parse(state.me.bodyText),
           });
-          if (result.kind === "valid")
-            return {
-              status: "authenticated",
-              signup_enabled: info.signup_enabled,
-              user: result.user,
-            };
-          if (result.kind === "rejected")
-            return { status: "unauthenticated", signup_enabled: info.signup_enabled };
+          if (result.kind === "valid") return { status: "authenticated", user: result.user };
+          if (result.kind === "rejected") return unauthenticated;
           return { status: "backend_unreachable", server_url: serverUrl, message: result.message };
         } catch (error) {
           return { status: "backend_unreachable", server_url: serverUrl, message: String(error) };
@@ -136,6 +144,7 @@ export function createIOSPlatform(
       },
       login: (input) => bridge.authenticate({ action: "login", body: JSON.stringify(input) }),
       signup: (input) => bridge.authenticate({ action: "signup", body: JSON.stringify(input) }),
+      passwordRecovery: (input) => bridge.passwordRecovery(input),
       logout: async () => {
         await bridge.logout();
         resetApplication();

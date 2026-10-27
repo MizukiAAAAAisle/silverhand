@@ -8,11 +8,12 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   public let identifier = "SilverhandClientPlugin"
   public let jsName = "SilverhandClient"
   public let pluginMethods: [CAPPluginMethod] = [
-    "getProfile", "saveProfile", "clearProfile", "authState", "authenticate", "logout", "request",
+    "getProfile", "saveProfile", "clearProfile", "authState", "serverInfo", "authenticate",
+    "passwordRecovery", "logout", "request",
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "bannerShow", "sharePng", "saveAttachment", "avatarMakerEdit",
+    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "selectionBarSync", "selectionBarRemove", "bannerShow", "sharePng", "previewPng", "saveAttachment", "avatarMakerEdit", "contextMenuAvailable", "contextMenuShow",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -88,6 +89,42 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
 
+  @objc func contextMenuAvailable(_ call: CAPPluginCall) {
+    call.resolve(["available": SilverhandContextMenu.isAvailable])
+  }
+
+  @objc func contextMenuShow(_ call: CAPPluginCall) {
+    let menu = call.getObject("menu") ?? [:]
+    let point = menu["point"] as? JSObject ?? [:]
+    let request = ContextMenuRequest(
+      point: CGPoint(x: point["x"] as? Double ?? 0, y: point["y"] as? Double ?? 0),
+      reactions: (menu["reactions"] as? JSArray ?? []).compactMap { value in
+        guard let item = value as? JSObject, let emoji = item["emoji"] as? String else { return nil }
+        return (emoji, item["label"] as? String ?? emoji)
+      },
+      sections: (menu["sections"] as? JSArray ?? []).map { section in
+        (section as? JSArray ?? []).compactMap { value in
+          guard let item = value as? JSObject, let id = item["id"] as? String else { return nil }
+          return ContextMenuItem(
+            id: id, label: item["label"] as? String ?? "", icon: item["icon"] as? String ?? "")
+        }
+      })
+    Task { @MainActor in
+      guard let web = self.bridge?.webView else {
+        call.reject("Unable to present the menu")
+        return
+      }
+      let shown = SilverhandContextMenu.present(request, over: web) { choice in
+        switch choice {
+        case .item(let id): call.resolve(["choice": ["kind": "item", "id": id]])
+        case .react(let emoji): call.resolve(["choice": ["kind": "react", "emoji": emoji]])
+        case nil: call.resolve([:])
+        }
+      }
+      if !shown { call.reject("Unable to present the menu") }
+    }
+  }
+
   @objc func avatarMakerEdit(_ call: CAPPluginCall) {
     let config = call.getObject("config") ?? [:]
     let parts = (config["parts"] as? [String: Any] ?? [:]).compactMapValues { $0 as? Int }
@@ -111,6 +148,25 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
           ])
         }
       } catch { call.reject(error.localizedDescription) }
+    }
+  }
+
+  @objc func previewPng(_ call: CAPPluginCall) {
+    Task { @MainActor in
+      guard let encoded = call.getString("base64"),
+        let bytes = Data(base64Encoded: encoded),
+        let image = UIImage(data: bytes),
+        let host = self.bridge?.viewController,
+        host.view.window != nil,
+        host.presentedViewController == nil
+      else {
+        call.reject("Unable to present the image preview")
+        return
+      }
+      ImagePreviewController.present(
+        image, title: call.getString("title") ?? "", shareLabel: call.getString("shareLabel") ?? "",
+        closeLabel: call.getString("closeLabel") ?? "", from: host
+      ) { shared in call.resolve(["shared": shared]) }
     }
   }
 
@@ -175,10 +231,19 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     return nil
   }
 
-  @MainActor private func bindNavigationIntent(to host: SilverhandNavigationController) {
+  @MainActor private func bindNavigationEvents(to host: SilverhandNavigationController) {
     host.onIntent = { [weak self] intent in self?.notifyListeners("navigation", data: intent) }
+    host.onComposerEvent = { [weak self] event in self?.notifyListeners("composer", data: event) }
   }
 
+  @objc public func setLocale(_ call: CAPPluginCall) {
+    Task { @MainActor in
+      if NativeCopy.set(call.getString("locale")) {
+        navigationHost?.applyLocale()
+      }
+      call.resolve()
+    }
+  }
   @objc public func navigationBadges(_ call: CAPPluginCall) {
     Task { @MainActor in
       navigationHost?.badges(call)
@@ -191,7 +256,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         call.reject("Native navigation host unavailable")
         return
       }
-      bindNavigationIntent(to: host)
+      bindNavigationEvents(to: host)
       call.resolve(["tabBarHeight": host.sync(call)])
     }
   }
@@ -211,7 +276,15 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         status: state["status"] as? String,
         searchPlaceholder: state["searchPlaceholder"] as? String ?? "",
         searchShortcut: state["searchShortcut"] as? String ?? "",
-        dark: state["dark"] as? Bool ?? false)
+        dark: state["dark"] as? Bool ?? false,
+        actions: (state["actions"] as? JSArray ?? []).compactMap { value in
+          guard let item = value as? JSObject, let id = item["id"] as? String else { return nil }
+          return BarAction(
+            id: id, label: item["label"] as? String ?? "",
+            accessibilityLabel: item["accessibilityLabel"] as? String,
+            icon: item["icon"] as? String ?? "",
+            selected: item["selected"] as? Bool ?? false, dot: item["dot"] as? Bool ?? false)
+        })
     }
     Task { @MainActor [self] in
       if let host = navigationHost {
@@ -320,15 +393,42 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
           },
           title: activity["title"] as? String ?? "", detail: activity["detail"] as? String ?? "",
           label: activity["label"] as? String ?? "", since: activity["since"] as? Double ?? 0)
+      },
+      frame: (state["frame"] as? JSObject).map {
+        ComposerFrame(
+          left: CGFloat($0["left"] as? Double ?? 0), width: CGFloat($0["width"] as? Double ?? 0),
+          bottom: CGFloat($0["bottom"] as? Double ?? 0))
       })
     Task { @MainActor [self] in
+      navigationHost?.showComposer(next)
+      call.resolve()
+    }
+  }
+  @objc public func selectionBarSync(_ call: CAPPluginCall) {
+    guard let state = call.getObject("state"), let key = state["key"] as? String else {
+      call.reject("Missing selection bar state")
+      return
+    }
+    let next = SelectionBarState(
+      key: key, count: state["count"] as? String ?? "",
+      cancelLabel: state["cancelLabel"] as? String ?? "",
+      copyLabel: state["copyLabel"] as? String ?? "",
+      saveLabel: state["saveLabel"] as? String ?? "",
+      enabled: state["enabled"] as? Bool ?? false, busy: state["busy"] as? Bool ?? false)
+    Task { @MainActor [self] in
       if let host = navigationHost {
-        host.composer.onEvent = { [weak self] event in self?.notifyListeners("composer", data: event) }
-        host.composer.onMetrics = { [weak self] metrics in
-          self?.publishState("composerMetrics", metrics)
+        host.selectionBar.onEvent = { [weak self] event in
+          self?.notifyListeners("selectionBar", data: event)
         }
-        host.showComposer(next)
+        host.showSelectionBar(next)
       }
+      call.resolve()
+    }
+  }
+  @objc public func selectionBarRemove(_ call: CAPPluginCall) {
+    let key = call.getString("key")
+    Task { @MainActor in
+      navigationHost?.removeSelectionBar(key: key)
       call.resolve()
     }
   }
@@ -355,9 +455,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
   @objc public func composerRemove(_ call: CAPPluginCall) {
     let key = call.getString("key")
     Task { @MainActor in
-      if let composer = navigationHost?.composer, key == nil || composer.state?.key == key {
-        composer.remove()
-      }
+      navigationHost?.removeComposer(key: key)
       call.resolve()
     }
   }
@@ -367,7 +465,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     let caret = call.getInt("caret") ?? (text as NSString).length
     let focus = call.getBool("focus") ?? false
     Task { @MainActor in
-      navigationHost?.composer.setText(key: key, text: text, caret: caret, focus: focus)
+      navigationHost?.setComposerText(key: key, text: text, caret: caret, focus: focus)
       call.resolve()
     }
   }
@@ -408,9 +506,16 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
   @objc public func authState(_ call: CAPPluginCall) { run(call) { try await $0.authState() } }
+  @objc public func serverInfo(_ call: CAPPluginCall) { run(call) { try await $0.serverInfo() } }
   @objc public func authenticate(_ call: CAPPluginCall) {
     run(call) {
       try await $0.authenticate(
+        action: call.getString("action") ?? "", body: call.getString("body") ?? "{}")
+    }
+  }
+  @objc public func passwordRecovery(_ call: CAPPluginCall) {
+    run(call) {
+      try await $0.passwordRecovery(
         action: call.getString("action") ?? "", body: call.getString("body") ?? "{}")
     }
   }
@@ -508,8 +613,13 @@ class SilverhandViewController: CAPBridgeViewController {
     let start, end: CGFloat
   }
 
+  private struct BarMetrics: Equatable {
+    let bottom, tabs: CGFloat
+    let vertical: Bool
+  }
+
   private let plugin = SilverhandClientPlugin()
-  private var barMetrics: [String: CGFloat] = [:]
+  private var barMetrics: BarMetrics?
   // Last published value; the event fires only on change.
   private var fold: Fold?
 
@@ -556,13 +666,15 @@ class SilverhandViewController: CAPBridgeViewController {
   }
 
   /// Where the page's bars end, for the page to clear them: `bottom` of the
-  /// navigation bar (on iPhone Duo, of the title under it), `large` with a
-  /// large title, and the height of the view tabs under that.
-  func publishBarMetrics(bottom: CGFloat, tabs: CGFloat) {
-    let next = ["bottom": bottom, "tabs": tabs]
+  /// navigation bar (on iPhone Duo, of the title under it), the height of the
+  /// view tabs under the bar, and whether the bars stand on a side edge
+  /// (iPhone Duo).
+  func publishBarMetrics(bottom: CGFloat, tabs: CGFloat, vertical: Bool) {
+    let next = BarMetrics(bottom: bottom, tabs: tabs, vertical: vertical)
     guard next != barMetrics else { return }
     barMetrics = next
-    plugin.publishState("barMetrics", next)
+    plugin.publishState(
+      "barMetrics", ["bottom": bottom, "tabs": tabs, "vertical": vertical])
   }
 }
 

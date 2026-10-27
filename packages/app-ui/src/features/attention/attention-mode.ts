@@ -16,6 +16,7 @@
 // after a direct manipulation reads as lag.
 import type { ChannelAttentionMode } from "@silverhand/shared";
 import type { UnreadBadgeTier } from "@/components/layout/sidebar-shared";
+import { t } from "@/lib/i18n";
 
 /**
  * The EFFECTIVE tier for one channel: the workspace mute suppressor collapses any
@@ -54,8 +55,10 @@ export function resolveWorkspaceMuteToggle(muted: boolean | undefined): {
   /** The value a click writes; `null` = current unknown, offer no action. */
   next: boolean | null;
 } {
-  if (muted === undefined) return { label: "Mute", next: null };
-  return muted ? { label: "Unmute", next: false } : { label: "Mute", next: true };
+  if (muted === undefined) return { label: t("attention.mute"), next: null };
+  return muted
+    ? { label: t("attention.unmute"), next: false }
+    : { label: t("attention.mute"), next: true };
 }
 
 /** What a sidebar row should show in its status slot: a count at one of the

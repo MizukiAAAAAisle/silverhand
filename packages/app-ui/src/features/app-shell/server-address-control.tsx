@@ -1,10 +1,18 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { ErrorIcon, RetryIcon, SpinnerIcon } from "@/icons";
 import { getPlatform } from "@/platform";
 import { Button } from "@/components/ui/button";
 import { Input, Label } from "@/components/ui/input";
 import { validateServerUrlDraft } from "@/features/settings/model/server-url-validation";
-import { describeProfileSaveForGate } from "./backend-unreachable-gate";
+import {
+  refreshServerEnvironment,
+  useServerEnvironment,
+} from "@/features/session/server-environment";
+import { describeProbeOutcome } from "@/features/settings/model/describe-probe-outcome";
+import type { SaveServerUrlBanner } from "@/features/settings/model/describe-save-server-url-outcome";
+import type { ProfileSaveWithTestResult } from "@silverhand/client";
+import { t } from "@/lib/i18n";
 
 /** Remote-only auth gates offer an escape to a different self-hosted origin. */
 export function ServerAddressControl({
@@ -16,64 +24,52 @@ export function ServerAddressControl({
   onEditingChange?: (editing: boolean) => void;
   onRetry?: () => void;
 }) {
-  const [url, setUrl] = useState("");
+  const qc = useQueryClient();
+  const environment = useServerEnvironment();
   const [draft, setDraft] = useState("");
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  useEffect(() => {
-    let cancelled = false;
-    void getPlatform()
-      .client.getConnectionInfo()
-      .then((info) => {
-        if (!cancelled) {
-          setUrl(info?.url ?? "");
-          setDraft(info?.url ?? "");
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setError("Could not read server address.");
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  const url = environment.data?.url ?? "";
+  const error = saveError ?? (environment.isError ? t("appShell.server.readFailed") : null);
+
   const save = async () => {
     if (saving || disabled) return;
     setSaving(true);
-    setError(null);
+    setSaveError(null);
     try {
       const policy = await getPlatform().client.getConnectionPolicy();
       if (
         validateServerUrlDraft(draft, { allowInsecureRemote: policy.allow_insecure_remote })
           .kind !== "ok"
       ) {
-        setError("Enter a valid HTTPS server address.");
+        setSaveError(t("appShell.server.invalid"));
         return;
       }
       const result = await getPlatform().client.saveServerConnectionProfile({
         serverUrl: draft.trim(),
       });
       if (result.ok) {
-        setUrl(result.profile.server_url);
+        await refreshServerEnvironment(qc);
         setEditing(false);
         onEditingChange?.(false);
         onRetry?.();
       } else {
         const message = describeProfileSaveForGate(result);
-        setError(message.description ?? message.title);
+        setSaveError(message.description ?? message.title);
       }
-    } catch (error) {
-      setError(String(error));
+    } catch (err) {
+      setSaveError(String(err));
     } finally {
       setSaving(false);
     }
   };
   return (
-    <section className="space-y-2 text-sm" aria-label="Server address">
+    <section className="space-y-2 text-sm" aria-label={t("appShell.server.address")}>
       {editing ? (
         <>
-          <Label htmlFor="login-server">Server address</Label>
+          <Label htmlFor="login-server">{t("appShell.server.address")}</Label>
           <Input
             id="login-server"
             type="url"
@@ -98,7 +94,7 @@ export function ServerAddressControl({
                 void save();
               }}
             >
-              {saving ? "Checking…" : "Save"}
+              {saving ? t("common.checking") : t("common.save")}
             </Button>
             <Button
               type="button"
@@ -107,23 +103,23 @@ export function ServerAddressControl({
               disabled={saving || disabled}
               onClick={() => {
                 setEditing(false);
-                setError(null);
+                setSaveError(null);
                 onEditingChange?.(false);
               }}
             >
-              Cancel
+              {t("common.cancel")}
             </Button>
           </div>
         </>
       ) : (
         <div className="flex min-w-0 items-baseline gap-2 text-text-muted">
-          <span className="shrink-0">Server</span>
+          <span className="shrink-0">{t("appShell.server.label")}</span>
           <span className="min-w-0 flex-1 truncate font-medium text-text-primary" title={url}>
-            {url ? url.replace(/^https?:\/\//, "").replace(/\/$/, "") : "Not set"}
+            {url ? url.replace(/^https?:\/\//, "").replace(/\/$/, "") : t("appShell.server.notSet")}
           </span>
           <button
             type="button"
-            aria-label="Change server"
+            aria-label={t("appShell.server.change")}
             className="shrink-0 font-medium text-text-primary underline underline-offset-3 hover:text-text-secondary focus-outline disabled:opacity-50 max-md:min-h-11"
             disabled={saving || disabled}
             onClick={() => {
@@ -132,7 +128,7 @@ export function ServerAddressControl({
               onEditingChange?.(true);
             }}
           >
-            Change
+            {t("common.change")}
           </button>
         </div>
       )}
@@ -160,7 +156,7 @@ export function ServerConnectionStatus({
     return (
       <div role="status" className="mt-3 flex items-center gap-2 text-xs text-text-muted">
         <SpinnerIcon className="size-3.5 animate-spin" aria-hidden="true" />
-        Checking server…
+        {t("appShell.server.checking")}
       </div>
     );
   }
@@ -171,30 +167,61 @@ export function ServerConnectionStatus({
   const secure = /TLS|SSL|certificate|secure connection/i.test(status);
 
   return (
-    <section className="mt-3 flex flex-col gap-2 text-xs" aria-label="Server connection">
+    <section
+      className="mt-3 flex flex-col gap-2 text-xs"
+      aria-label={t("appShell.server.connection")}
+    >
       <div role="alert" className="flex items-start gap-2">
         <ErrorIcon className="mt-px size-3.5 shrink-0 text-error" aria-hidden="true" />
         <p className="min-w-0 leading-relaxed text-text-secondary">
           <span className="font-medium text-text-primary">
-            {secure ? "Secure connection failed." : "Cannot connect to server."}
+            {secure ? t("appShell.server.secureFailed") : t("appShell.server.cannotConnect")}
           </span>{" "}
-          {secure
-            ? "Sign-in is unavailable until the connection can be verified."
-            : "Check your connection or change the server address."}
+          {secure ? t("appShell.server.signInUnavailable") : t("appShell.server.checkConnection")}
         </p>
       </div>
       <div className="flex items-start justify-between gap-3 pl-5.5">
         <details className="min-w-0 text-text-muted">
-          <summary className="cursor-pointer focus-outline">Technical details</summary>
+          <summary className="cursor-pointer focus-outline">{t("common.technicalDetails")}</summary>
           <p className="mt-1 break-words leading-relaxed">{status.replace(/^Error:\s*/, "")}</p>
         </details>
         {onRetry && (
           <Button type="button" variant="neutral" size="sm" className="shrink-0" onClick={onRetry}>
             <RetryIcon className="size-3.5" aria-hidden="true" />
-            Retry
+            {t("common.retry")}
           </Button>
         )}
       </div>
     </section>
   );
+}
+
+export function describeProfileSaveForGate(result: ProfileSaveWithTestResult): SaveServerUrlBanner {
+  if (result.ok) {
+    return {
+      tone: "success",
+      title: t("appShell.unreachable.savedRetrying"),
+      description: t("appShell.unreachable.using", { url: result.profile.server_url }),
+    };
+  }
+  if (result.phase === "test") {
+    const banner = describeProbeOutcome(result.test);
+    return {
+      tone: banner.tone === "success" ? "success" : "error",
+      title: banner.title,
+      description: banner.description,
+    };
+  }
+  if (result.phase === "commit_guard") {
+    return {
+      tone: "error",
+      title: t("appShell.unreachable.commitGuard"),
+      description: result.message,
+    };
+  }
+  return {
+    tone: "error",
+    title: t("appShell.unreachable.writeFailed"),
+    description: result.detail ?? t("appShell.unreachable.writeFailedDetail"),
+  };
 }

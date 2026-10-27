@@ -1,8 +1,8 @@
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { app, autoUpdater as nativeUpdater } from 'electron';
-import { MacUpdater } from 'electron-updater';
-import { AppUpdateController, type AppUpdateEngine } from './app-update-controller.js';
+import { existsSync } from "node:fs";
+import { join } from "node:path";
+import { app, autoUpdater as nativeUpdater } from "electron";
+import { MacUpdater } from "electron-updater";
+import { AppUpdateController, type AppUpdateEngine } from "./app-update-controller.js";
 
 interface UpdaterLogger {
   info(message?: unknown): void;
@@ -10,7 +10,7 @@ interface UpdaterLogger {
   error(message?: unknown): void;
 }
 
-type NativeUpdater = Pick<typeof nativeUpdater, 'on' | 'off' | 'checkForUpdates'>;
+type NativeUpdater = Pick<typeof nativeUpdater, "on" | "off" | "checkForUpdates">;
 
 /** Wraps electron-updater so it never downloads or installs without a user action. */
 export function createElectronUpdaterEngine(
@@ -27,11 +27,11 @@ export function createElectronUpdaterEngine(
     async download(onProgress) {
       const listener = (p: { transferred: number; total: number }) =>
         onProgress(p.transferred, p.total || null);
-      updater.on('download-progress', listener);
+      updater.on("download-progress", listener);
       try {
         await updater.downloadUpdate();
       } finally {
-        updater.off('download-progress', listener);
+        updater.off("download-progress", listener);
       }
     },
     // With autoInstallOnAppQuit off, MacUpdater stops after pointing Squirrel's
@@ -40,14 +40,14 @@ export function createElectronUpdaterEngine(
     stage() {
       return new Promise<void>((resolve, reject) => {
         const settle = (err?: Error): void => {
-          native.off('update-downloaded', onReady);
-          native.off('error', settle);
+          native.off("update-downloaded", onReady);
+          native.off("error", settle);
           if (err) reject(err);
           else resolve();
         };
         const onReady = (): void => settle();
-        native.on('update-downloaded', onReady);
-        native.on('error', settle);
+        native.on("update-downloaded", onReady);
+        native.on("error", settle);
         native.checkForUpdates();
       });
     },
@@ -62,8 +62,8 @@ export function createElectronUpdaterEngine(
  * variant's feed); every other build has no update channel.
  */
 export function createAppUpdateController(logger?: UpdaterLogger): AppUpdateController | null {
-  if (process.platform !== 'darwin' || !app.isPackaged) return null;
-  if (!existsSync(join(process.resourcesPath, 'app-update.yml'))) return null;
+  if (process.platform !== "darwin" || !app.isPackaged) return null;
+  if (!existsSync(join(process.resourcesPath, "app-update.yml"))) return null;
   const updater = new MacUpdater();
   updater.logger = logger ?? null;
   return new AppUpdateController(createElectronUpdaterEngine(updater), app.getVersion());

@@ -16,6 +16,7 @@ import { useNav } from "@/router";
 import { useConversationIdentity } from "@/features/conversations/conversation-identity";
 import { cn } from "@/lib/cn";
 import { useAgentSchedules, useCancelAgentSchedule } from "../hooks/hooks";
+import { t } from "@/lib/i18n";
 
 import "./agent-schedules-card.css";
 
@@ -25,12 +26,12 @@ interface AgentSchedulesCardProps {
   agentId: string;
 }
 
-const STATUS_FILTERS: Array<{ value: ScheduleListStatusFilter; label: string }> = [
-  { value: "active", label: "Active" },
-  { value: "all", label: "All" },
-  { value: "done", label: "Done" },
-  { value: "cancelled", label: "Cancelled" },
-  { value: "failed", label: "Failed" },
+const statusFilters = (): Array<{ value: ScheduleListStatusFilter; label: string }> => [
+  { value: "active", label: t("agents.active") },
+  { value: "all", label: t("agents.all") },
+  { value: "done", label: t("agents.done") },
+  { value: "cancelled", label: t("agents.cancelled2") },
+  { value: "failed", label: t("agents.failed2") },
 ];
 
 /** Creation is agent-only; this surface exposes schedule status and cancellation. */
@@ -54,8 +55,8 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
           disabled={query.isFetching}
           data-panel-control="row-action"
           className="inline-flex min-w-7 shrink-0 items-center justify-center px-1.5 text-(length:--text-meta) text-text-muted transition-colors hover:bg-bg-hover hover:text-text-primary disabled:opacity-50"
-          aria-label="Refresh schedules"
-          title="Refresh"
+          aria-label={t("agents.refreshSchedules")}
+          title={t("agents.refresh")}
         >
           <ReloadIcon className={`size-3 ${query.isFetching ? "animate-spin" : ""}`} />
         </button>
@@ -66,7 +67,7 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
           data-panel-card="placeholder"
           className="border border-dashed border-error/40 bg-error/5 px-3 py-2 text-xs text-error"
         >
-          Failed to load schedules.
+          {t("agents.failedToLoadSchedules")}
         </div>
       ) : null}
 
@@ -77,7 +78,11 @@ export function AgentSchedulesCard({ agentId }: AgentSchedulesCardProps): JSX.El
           data-panel-card="placeholder"
           className="border border-dashed border-border-subtle px-4 py-6 text-center text-xs text-text-muted"
         >
-          {filter === "active" ? "No active schedules." : `No schedules with status ${filter}.`}
+          {filter === "active"
+            ? t("agents.noActiveSchedules")
+            : t("agents.noSchedulesWithStatus", {
+                status: statusFilters().find((opt) => opt.value === filter)?.label ?? filter,
+              })}
         </div>
       ) : (
         <ul className="flex flex-col gap-2">
@@ -125,7 +130,7 @@ function ScheduleItem({
           <span
             className="inline-flex h-5 shrink-0 items-center gap-1 font-medium leading-5 text-text-secondary"
             title={cancellable ? dayjs(row.next_fire_at).toISOString() : undefined}
-            aria-label={cancellable ? "Next trigger" : "Schedule status"}
+            aria-label={cancellable ? t("agents.nextTrigger") : t("agents.scheduleStatus")}
           >
             {cancellable ? <ClockIcon className="size-3 shrink-0" aria-hidden="true" /> : null}
             {cancellable ? dayjs(row.next_fire_at).fromNow() : row.status}
@@ -141,8 +146,8 @@ function ScheduleItem({
           disabled={cancelling}
           data-panel-control="row-action"
           className="schedule-cancel inline-flex size-7 shrink-0 items-center justify-center text-text-muted transition-all duration-150 hover:scale-110 hover:text-text-primary focus-outline disabled:opacity-50 disabled:hover:scale-100"
-          aria-label="Cancel schedule"
-          title="Cancel"
+          aria-label={t("agents.cancelSchedule")}
+          title={t("common.cancel")}
         >
           <CancelledIcon className="size-3.5" />
         </button>
@@ -217,7 +222,7 @@ function ScheduleTarget({
       onClick={() => setRequested(true)}
       disabled={requested}
       title={label}
-      aria-label={`Open ${label}`}
+      aria-label={t("agents.openTarget", { target: label })}
     >
       {label}
     </button>
@@ -249,7 +254,7 @@ function FilterTabs({
       data-panel-tabs
       className="scrollbar-hide flex min-w-0 items-center overflow-x-auto border border-border-subtle bg-bg-base p-0.5"
     >
-      {STATUS_FILTERS.map((opt) => (
+      {statusFilters().map((opt) => (
         <button
           key={opt.value}
           type="button"

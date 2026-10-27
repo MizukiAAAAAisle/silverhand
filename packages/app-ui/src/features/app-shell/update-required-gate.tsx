@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { AppUpdateInline } from "@/features/app-update/app-update-inline";
 import { useAppUpdateState } from "@/features/app-update/app-update-store";
 import { getPlatform } from "@/platform";
+import { t } from "@/lib/i18n";
 
 export interface UpdateRequiredGateProps {
   direction: "app" | "server";
@@ -18,14 +19,13 @@ export function UpdateRequiredGate({
   const appUpdate = useAppUpdateState();
   const inline = direction === "app" && appUpdate !== null;
   const storeUrl = direction === "app" && !inline ? getPlatform().storeUrl : undefined;
-  const title = direction === "app" ? "Update Silverhand to continue" : "Server update required";
+  const title =
+    direction === "app" ? t("appShell.update.appTitle") : t("appShell.serverUpdateRequired");
   const description = inline
-    ? "This version of the app is older than what the server supports."
+    ? t("appShell.update.appOlder")
     : direction === "app"
-      ? "This version of the app is older than what the server supports. " +
-        "Install the latest Silverhand release, then try again."
-      : "The server this app is connected to runs an older API generation " +
-        "than this build requires. Upgrade the server deployment, then try again.";
+      ? t("appShell.update.appInstall")
+      : t("appShell.update.serverOlder");
   return (
     <main
       data-gate="update-required"
@@ -44,7 +44,7 @@ export function UpdateRequiredGate({
         </header>
         <p className="mb-4 text-xs leading-relaxed text-text-muted">{description}</p>
         <p className="mb-4 text-(length:--text-meta) text-text-muted">
-          Server API generation: {serverApiEpoch}
+          {t("appShell.update.apiGeneration", { epoch: serverApiEpoch })}
         </p>
         {inline ? (
           <AppUpdateInline state={appUpdate} onRecheck={onRetry} />
@@ -58,7 +58,7 @@ export function UpdateRequiredGate({
                 onClick={() => void getPlatform().files.openExternal(storeUrl)}
               >
                 <OpenExternalIcon className="size-3.5" />
-                Update in App Store
+                {t("appShell.update.appStore")}
               </Button>
             ) : null}
             <Button
@@ -68,7 +68,7 @@ export function UpdateRequiredGate({
               onClick={onRetry}
             >
               <RefreshIcon className="size-3.5" />
-              Check again
+              {t("appShell.update.checkAgain")}
             </Button>
           </div>
         )}

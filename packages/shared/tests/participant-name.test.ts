@@ -47,13 +47,9 @@ describe('participant name grammar (#task:1826)', () => {
 
 describe('email → handle suggestion (#task:1830)', () => {
   it('suggests the readable form of an email local-part', () => {
-    expect(suggestParticipantNameFromEmail('alice.smith@example.com')).toBe(
-      'alice-smith',
-    );
+    expect(suggestParticipantNameFromEmail('alice.smith@example.com')).toBe('alice-smith');
     expect(suggestParticipantNameFromEmail('  Alice@Example.COM ')).toBe('alice');
-    expect(suggestParticipantNameFromEmail('2.New.User@example.com')).toBe(
-      'new-user',
-    );
+    expect(suggestParticipantNameFromEmail('2.New.User@example.com')).toBe('new-user');
   });
 
   it('never suggests a value the stored grammar would reject', () => {
@@ -82,10 +78,7 @@ describe('email → handle suggestion (#task:1830)', () => {
       const suggested = suggestParticipantNameFromEmail(email);
       const label = `suggestion ${JSON.stringify(suggested)} for ${JSON.stringify(email)}`;
       if (suggested === '') continue;
-      expect(
-        ParticipantNameSchema.safeParse(suggested).success,
-        label,
-      ).toBe(true);
+      expect(ParticipantNameSchema.safeParse(suggested).success, label).toBe(true);
       expect(suggested.length, label).toBeLessThanOrEqual(ENTITY_NAME_MAX_LENGTH);
       // A prefill that is not addressable would be worse than none.
       expect(addressable(suggested), label).toBe(true);

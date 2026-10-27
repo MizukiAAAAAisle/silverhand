@@ -1,11 +1,12 @@
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { COLLECTION_CARD_CLASS } from "@/components/layout/collection-item-card";
 import { SkeletonBlock, SkeletonRegion } from "@/components/layout/skeleton";
+import { t } from "@/lib/i18n";
 
 /** Root preview and reply footer mirror ThreadRow, without interactive card hooks. */
 export function ThreadsSkeleton(): JSX.Element {
   return (
-    <SkeletonRegion label="Loading threads">
+    <SkeletonRegion label={t("conversationShell.loadingThreads")}>
       <div className="flex flex-col gap-1.5">
         {["w-4/5", "w-3/5", "w-2/3", "w-3/4"].map((width, index) => (
           <div key={width} className={`${COLLECTION_CARD_CLASS} overflow-hidden`}>
@@ -34,7 +35,7 @@ export function ThreadsSkeleton(): JSX.Element {
 /** Date groups, 32px thumbnails and bylines match the attachment surface. */
 export function AttachmentsSkeleton(): JSX.Element {
   return (
-    <SkeletonRegion label="Loading attachments">
+    <SkeletonRegion label={t("conversationShell.loadingAttachments")}>
       {[0, 1].map((group) => (
         <div key={group}>
           <div className="pb-1 pt-2">
@@ -70,7 +71,7 @@ export function AttachmentsSkeleton(): JSX.Element {
 /** Members use a single name/handle line and retain the real responsive groups. */
 export function MembersSkeleton(): JSX.Element {
   return (
-    <SkeletonRegion label="Loading members">
+    <SkeletonRegion label={t("conversationShell.loadingMembers")}>
       <div data-members-groups>
         {[0, 1].map((group) => (
           <div key={group}>

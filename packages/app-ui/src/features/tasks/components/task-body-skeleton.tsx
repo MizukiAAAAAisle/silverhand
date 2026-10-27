@@ -1,7 +1,8 @@
 import { SkeletonBlock as Block, SkeletonRegion as Region } from "@/components/layout/skeleton";
+import { t } from "@/lib/i18n";
 export function TaskBodySkeleton(): JSX.Element {
   return (
-    <Region label="Loading task">
+    <Region label={t("tasks.loadingTask")}>
       <div className="border-b border-border-subtle px-5 py-4 space-y-3">
         <Block className="h-2.5 w-16" />
         <Block className="h-5 w-3/5" />
@@ -17,7 +18,7 @@ export function TaskBodySkeleton(): JSX.Element {
           ))}
         </div>
         <div className="w-60 shrink-0 border-l border-border-subtle p-4 space-y-5">
-          {["Status", "Assignee", "Created"].map((label) => (
+          {[t("tasks.status"), t("tasks.assignee"), t("tasks.created")].map((label) => (
             <div key={label} className="space-y-2">
               <span className="text-xs text-text-muted">{label}</span>
               <Block className="h-3 w-20" />
@@ -31,7 +32,7 @@ export function TaskBodySkeleton(): JSX.Element {
 
 export function TaskCardsSkeleton(): JSX.Element {
   return (
-    <Region label="Loading tasks">
+    <Region label={t("tasks.loadingTasks")}>
       <div className="space-y-1.5">
         {["w-4/5", "w-3/5", "w-2/3"].map((width) => (
           <div

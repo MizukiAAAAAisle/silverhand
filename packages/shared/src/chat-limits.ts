@@ -17,8 +17,7 @@ export const MAX_MESSAGE_CONTENT_LABEL = '64KiB';
  * envelope headroom (attachment ids, target, freshness fields). Bodies
  * over this are rejected before buffering/parsing.
  */
-export const MESSAGE_SEND_MAX_BODY_BYTES =
-  6 * MAX_MESSAGE_CONTENT_BYTES + 128 * 1024;
+export const MESSAGE_SEND_MAX_BODY_BYTES = 6 * MAX_MESSAGE_CONTENT_BYTES + 128 * 1024;
 
 /** Max attachment refs on one message. Enforced by the send schemas
  *  (`MessageAttachmentIdsInputSchema`) and consumed by clients that must

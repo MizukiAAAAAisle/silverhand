@@ -7,10 +7,7 @@
  * novel remainder of a response-loss retry without turning every normal batch
  * into singleton runtime turns.
  */
-import {
-  resolveAttachmentLabels,
-  type AttachmentSnapshot,
-} from './api/attachment.js';
+import { resolveAttachmentLabels, type AttachmentSnapshot } from './api/attachment.js';
 import type { Reference } from './reference.js';
 
 export const RUNTIME_DELIVERY_INSTRUCTION_SIGNALS = [
@@ -46,15 +43,11 @@ export interface RuntimeDeliveryHeaderInput {
 
 /** Format the fixed-order header once sender, address and timestamp authorities answered. */
 export function formatRuntimeDeliveryHeader(input: RuntimeDeliveryHeaderInput): string {
-  const task = input.task === null
-    ? ''
-    : ` task=#${input.task.number} status=${input.task.status}`;
+  const task = input.task === null ? '' : ` task=#${input.task.number} status=${input.task.status}`;
   switch (input.sender.kind) {
     case 'agent': {
       const sender = input.sender.handle === null ? 'agent' : `@${input.sender.handle}`;
-      const computer = input.sender.computer === null
-        ? ''
-        : ` computer=${input.sender.computer}`;
+      const computer = input.sender.computer === null ? '' : ` computer=${input.sender.computer}`;
       return `[msg_id=${input.messageId} sender=${sender} type=agent${computer} target=${input.target} time=${input.timestamp}${task}]`;
     }
     case 'human': {
@@ -74,12 +67,13 @@ export function formatRuntimeDeliveryAttachmentSuffix(
   const labels = resolveAttachmentLabels(attachments);
   const lines = attachments.map(
     (attachment, index) =>
-      `  - ${labels[index]} — id=${attachment.id} filename=${JSON.stringify(attachment.filename)} `
-      + `content_type=${attachment.content_type} size=${attachment.size}`,
+      `  - ${labels[index]} — id=${attachment.id} filename=${JSON.stringify(attachment.filename)} ` +
+      `content_type=${attachment.content_type} size=${attachment.size}`,
   );
-  const header = attachments.length === 1
-    ? '[1 attachment — the label (e.g. `Image #1`) is how the sender refers to it; use `silverhand file view --attachment-id <id>` with the id below to read it]'
-    : `[${attachments.length} attachments — the label (e.g. \`Image #1\`) is how the sender refers to each; use \`silverhand file view --attachment-id <id>\` with each id below to read them]`;
+  const header =
+    attachments.length === 1
+      ? '[1 attachment — the label (e.g. `Image #1`) is how the sender refers to it; use `silverhand file view --attachment-id <id>` with the id below to read it]'
+      : `[${attachments.length} attachments — the label (e.g. \`Image #1\`) is how the sender refers to each; use \`silverhand file view --attachment-id <id>\` with each id below to read them]`;
   return `\n\n${header}\n${lines.join('\n')}`;
 }
 
@@ -89,10 +83,10 @@ export function runtimeDeliveryInstructionSignal(input: {
   readonly references: readonly Reference[];
   readonly recipientAgentName: string | undefined;
 }): RuntimeDeliveryInstructionSignal {
-  const addressesRecipient = input.recipientAgentName !== undefined
-    && input.references.some(
-      reference =>
-        reference.kind === 'agent' && reference.handle === input.recipientAgentName,
+  const addressesRecipient =
+    input.recipientAgentName !== undefined &&
+    input.references.some(
+      (reference) => reference.kind === 'agent' && reference.handle === input.recipientAgentName,
     );
   if (input.fromKind === 'user') {
     return input.references.length === 0 || addressesRecipient
@@ -117,7 +111,7 @@ export function composeRuntimeDeliveryPresentation(
     entries.length === 1
       ? 'You have one message waiting since you were last active:'
       : `You have ${entries.length} messages waiting since you were last active (oldest first):`;
-  const body = entries.map(entry => entry.body).join('\n\n---\n\n');
+  const body = entries.map((entry) => entry.body).join('\n\n---\n\n');
   return `${header}\n\n${body}\n\n${composeRuntimeDeliveryInstruction(entries, sendMessageTool)}`;
 }
 
@@ -126,7 +120,7 @@ export function composeRuntimeDeliveryInstruction(
   entries: readonly RuntimeDeliveryPresentation[],
   sendMessageTool: string,
 ): string {
-  const signals = new Set(entries.map(entry => entry.instruction));
+  const signals = new Set(entries.map((entry) => entry.instruction));
   if (signals.has('user_for_recipient')) {
     return (
       `Respond as appropriate — call \`${sendMessageTool}\` with a brief reply, ` +
@@ -148,7 +142,7 @@ export function composeRuntimeDeliveryInstruction(
       `Complete ALL your work before stopping.`
     );
   }
-  if (entries.every(entry => entry.instruction === 'system')) {
+  if (entries.every((entry) => entry.instruction === 'system')) {
     return (
       `Respond as appropriate. System messages do not require a reply ` +
       `unless they explicitly ask for one.`

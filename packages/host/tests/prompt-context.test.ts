@@ -6,10 +6,7 @@ import { agentHomeWorkspaceId } from '@silverhand/shared';
 import { buildPromptContextFromRuntimeStartOptions } from '../src/daemon/prompt-context.js';
 import { resolveRuntimeStartPaths } from '../src/daemon/runtime-start-resolve.js';
 import { RuntimeStartWorkspaceRefSchema } from '../src/protocol.js';
-import {
-  testRuntimeStartResolveDeps,
-  testStartOptions,
-} from './_helpers/runtime-start-options.js';
+import { testRuntimeStartResolveDeps, testStartOptions } from './_helpers/runtime-start-options.js';
 
 describe('buildPromptContextFromRuntimeStartOptions', () => {
   it.each([
@@ -54,8 +51,7 @@ describe('buildPromptContextFromRuntimeStartOptions', () => {
           computerId: 'computer-1',
         }),
       );
-      const context =
-        await buildPromptContextFromRuntimeStartOptions(resolved);
+      const context = await buildPromptContextFromRuntimeStartOptions(resolved);
 
       expect(context.roleSystemPrompt).toBe('resolved role');
     } finally {
@@ -175,16 +171,14 @@ describe('buildPromptContextFromRuntimeStartOptions', () => {
         ),
       );
 
-      const foreign = context.workspaceMemoryIndex.find(e =>
-        e.label.startsWith('other-home'),
-      );
+      const foreign = context.workspaceMemoryIndex.find((e) => e.label.startsWith('other-home'));
       expect(foreign).toBeDefined();
       expect(foreign!.label).not.toContain('(Agent Space)');
       // Differential, so the cell cannot pass by resolving nothing at all: the
       // agent's OWN home in the same list still carries the label.
-      expect(
-        context.workspaceMemoryIndex.some(e => e.label.includes('(Agent Space)')),
-      ).toBe(true);
+      expect(context.workspaceMemoryIndex.some((e) => e.label.includes('(Agent Space)'))).toBe(
+        true,
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

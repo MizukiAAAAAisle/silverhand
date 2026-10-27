@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState, type RefObje
 import { createPortal } from "react-dom";
 import { CopyIcon, QuoteSelectionIcon } from "@/icons";
 import { clampToolbarCenterX, requestQuoteToComposer } from "@/features/messages/quote-to-composer";
+import { t } from "@/lib/i18n";
 
 /**
  * Floating Quote / Copy toolbar for a text selection inside a message
@@ -189,7 +190,7 @@ export function SelectionQuoteToolbar({
     <div
       ref={toolbarRef}
       role="toolbar"
-      aria-label="Selection actions"
+      aria-label={t("messages.selectionActions")}
       // Keep the text selection intact when the toolbar is clicked — a
       // mousedown that stole focus would collapse the range before the
       // button handler reads it.
@@ -207,12 +208,12 @@ export function SelectionQuoteToolbar({
     >
       <SelectionQuoteButton
         icon={<QuoteSelectionIcon className="size-3.5" />}
-        label="Quote"
+        label={t("messages.quote")}
         onClick={runQuote}
       />
       <SelectionQuoteButton
         icon={<CopyIcon className="size-3.5" />}
-        label="Copy"
+        label={t("messages.copy")}
         onClick={runCopy}
       />
     </div>,

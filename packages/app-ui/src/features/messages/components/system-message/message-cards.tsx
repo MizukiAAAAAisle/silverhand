@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   AddMemberIcon,
   ChevronRightIcon,
@@ -20,6 +20,7 @@ import { Markdown } from "@/features/messages/components/markdown";
 import { presentAuthor } from "@/features/messages/model/author-presentation";
 import { AuthorName } from "@/features/messages/components/author-avatar-view";
 import { type RendererProps, GenericNarrationFallback, firstLine, useUserResolver } from "./shared";
+import { t, tRich } from "@/lib/i18n";
 
 // ─── mention_cc card ───────────────────────────────────────────────────
 
@@ -92,7 +93,7 @@ export function MentionCcCard({
     sourceFromKind === "user" || fetched?.message.from_kind === "user"
       ? formatUserDisplayName(sourceFromUserId ?? fetched?.message.from_user_id, userResolver)
       : sourceFromKind === "agent" || fetched?.message.from_kind === "agent"
-        ? "an agent"
+        ? t("messages.anAgent")
         : null;
 
   // In-card nav to the origin conversation. The `mention_external`
@@ -140,27 +141,20 @@ export function MentionCcCard({
     )
   ) : null;
 
+  const sourceAuthorNode = sourcePresentation ? (
+    <AuthorName presentation={sourcePresentation} className="text-text-secondary" />
+  ) : sourceFallbackLabel ? (
+    <span className="text-text-secondary">{sourceFallbackLabel}</span>
+  ) : null;
+
   return (
     <div className="w-full min-w-0 max-w-full px-4 py-2 [contain:inline-size]">
       <div className="flex flex-wrap items-center justify-center gap-2 text-center text-xs leading-5 text-text-muted">
         <MentionIcon aria-hidden className="size-3.5 shrink-0" />
         {collapseByline ? (
-          <span>Mention in {sourceLocationNode}</span>
+          <span>{tRich("messages.mentionIn", { place: sourceLocationNode })}</span>
         ) : (
-          <span>
-            {sourcePresentation ? (
-              <AuthorName presentation={sourcePresentation} className="text-text-secondary" />
-            ) : sourceFallbackLabel ? (
-              <span className="text-text-secondary">{sourceFallbackLabel}</span>
-            ) : null}
-            {sourcePresentation || sourceFallbackLabel ? " mentioned" : "Mention"}
-            {sourceLocationNode ? (
-              <>
-                {" in "}
-                {sourceLocationNode}
-              </>
-            ) : null}
-          </span>
+          <span>{mentionByline(sourceAuthorNode, sourceLocationNode)}</span>
         )}
         <button
           type="button"
@@ -168,7 +162,7 @@ export function MentionCcCard({
           aria-expanded={expanded}
           onClick={() => setExpanded((value) => !value)}
         >
-          {expanded ? "Hide message" : "View message"}
+          {expanded ? t("messages.hideMessage") : t("messages.viewMessage")}
         </button>
       </div>
       {expanded ? (
@@ -183,7 +177,7 @@ export function MentionCcCard({
               humansByName={humansByName}
             />
           ) : (
-            <div className="text-xs text-text-muted">(loading original…)</div>
+            <div className="text-xs text-text-muted">{t("messages.loadingOriginal")}</div>
           )}
         </div>
       ) : null}
@@ -192,6 +186,19 @@ export function MentionCcCard({
 }
 
 // ─── session_cleared audit row ────────────────────────────────────────
+
+function mentionByline(author: ReactNode, place: ReactNode): ReactNode {
+  if (author && place) {
+    return tRich("messages.mentionedIn", { author, place });
+  }
+  if (author) {
+    return tRich("messages.mentioned", { author });
+  }
+  if (place) {
+    return tRich("messages.mentionIn", { place });
+  }
+  return t("messages.mention");
+}
 
 export function SessionClearedCard({
   message,
@@ -233,22 +240,26 @@ function SessionClearedRow({ meta }: { meta: SessionClearedMetadata }): JSX.Elem
   const userResolver = useUserResolver();
   const actorLabel = meta.actor_user_id
     ? formatUserDisplayName(meta.actor_user_id, userResolver)
-    : "a user";
+    : t("messages.aUser");
   return (
     <div
       className="flex flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5 px-4 py-1 text-center text-text-muted"
       data-session-cleared="1"
     >
       <UndoIcon aria-hidden className="size-3.5 shrink-0 opacity-60" />
-      <span
-        className="text-text-secondary"
-        data-session-cleared-actor={meta.actor_user_id ?? "unknown"}
-      >
-        {actorLabel}
+      <span>
+        {tRich("messages.sessionReset", {
+          actor: (
+            <span
+              className="text-text-secondary"
+              data-session-cleared-actor={meta.actor_user_id ?? "unknown"}
+            >
+              {actorLabel}
+            </span>
+          ),
+          agent: <span className="font-medium text-text-primary">{meta.agent_name}</span>,
+        })}
       </span>
-      <span>reset</span>
-      <span className="font-medium text-text-primary">{meta.agent_name}</span>
-      <span>'s session context</span>
     </div>
   );
 }
@@ -285,7 +296,7 @@ export function OnboardingRow({
           className="inline-flex items-center text-(length:--text-badge) font-semibold uppercase tracking-wider text-accent"
           data-onboarding-badge="1"
         >
-          Onboarding
+          {t("messages.onboarding")}
         </span>
       </button>
       <div className={"w-full min-w-0 " + (expanded ? "" : "truncate")}>
@@ -321,7 +332,7 @@ export function RenameRow(props: RendererProps): JSX.Element {
       className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
     >
       <EditIcon aria-hidden className="size-3.5 shrink-0 opacity-60" />
-      <span>{isConversation ? "channel renamed" : "project renamed"}</span>
+      <span>{isConversation ? t("messages.channelRenamed") : t("messages.projectRenamed")}</span>
       <span className="text-text-secondary">{meta.old_name}</span>
       <span aria-hidden>→</span>
       <span className="font-medium text-text-primary">{meta.new_name}</span>
@@ -355,22 +366,28 @@ export function ConversationMemberChangeRow(props: RendererProps): JSX.Element {
       className="flex flex-wrap items-center justify-center gap-1.5 px-4 py-1 text-text-muted"
     >
       <Icon aria-hidden className="size-3.5 shrink-0 opacity-60" />
-      <span className="text-text-secondary">
-        {participantLabel({
-          kind: meta.actor_kind,
-          name: meta.actor_name,
-          displayName: meta.actor_display_name,
+      <span>
+        {tRich(removed ? "messages.memberRemoved" : "messages.memberAdded", {
+          actor: (
+            <span className="text-text-secondary">
+              {participantLabel({
+                kind: meta.actor_kind,
+                name: meta.actor_name,
+                displayName: meta.actor_display_name,
+              })}
+            </span>
+          ),
+          member: (
+            <span className="font-medium text-text-primary">
+              {participantLabel({
+                kind: meta.member_kind,
+                name: meta.member_name,
+                displayName: meta.member_display_name,
+              })}
+            </span>
+          ),
         })}
       </span>
-      <span>{removed ? "removed" : "added"}</span>
-      <span className="font-medium text-text-primary">
-        {participantLabel({
-          kind: meta.member_kind,
-          name: meta.member_name,
-          displayName: meta.member_display_name,
-        })}
-      </span>
-      <span>{removed ? "from this conversation" : "to this conversation"}</span>
     </div>
   );
 }

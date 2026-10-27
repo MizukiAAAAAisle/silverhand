@@ -278,3 +278,19 @@ export type ChangePasswordInput = z.infer<typeof ChangePasswordInputSchema>;
 export const ChangePasswordResponseSchema = z.object({ ok: z.literal(true) }).strict();
 export const PasswordStatusResponseSchema = z.object({ has_password: z.boolean() }).strict();
 export type PasswordStatusResponse = z.infer<typeof PasswordStatusResponseSchema>;
+
+/** The caller's own `GET /api/me` adds its email; no other projection carries it. */
+export const SelfEmailSchema = z.object({ email: z.string().nullable().optional() });
+
+export const PasswordRecoveryRequestInputSchema = z
+  .object({ email: z.string().trim().min(1) })
+  .strict();
+export type PasswordRecoveryRequestInput = z.infer<typeof PasswordRecoveryRequestInputSchema>;
+export const PasswordRecoveryResetInputSchema = z
+  .object({
+    email: z.string().trim().min(1),
+    code: z.string().regex(/^\d{6}$/),
+    new_password: NewPasswordSchema,
+  })
+  .strict();
+export type PasswordRecoveryResetInput = z.infer<typeof PasswordRecoveryResetInputSchema>;

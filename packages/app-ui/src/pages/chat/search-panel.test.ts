@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { SearchIdentities } from "@silverhand/shared";
 import { SearchPanel, SEARCH_FILTER_DEFAULT } from "./search-panel";
+import { t } from "@/lib/i18n";
 
 vi.mock("@/navigation/layout", () => ({ useCompactLayout: () => true }));
 vi.mock("@/platform", () => ({ getPlatform: () => ({}) }));
@@ -81,7 +82,7 @@ beforeEach(() => {
 it("requests identities and renders only the server identity without a directory join", () => {
   expect(render()).toContain("Server Identity");
   expect(state.filters.include_identities).toBe(true);
-  expect(render()).not.toContain("No matches");
+  expect(render()).not.toContain(t("chat.noMatches"));
 });
 it("uses the server's filtered state rather than applying a second frontend filter", () => {
   state.identities = {
@@ -89,19 +90,19 @@ it("uses the server's filtered state rather than applying a second frontend filt
     humans: { results: [], total: 0, truncated: false },
     agents: { results: [], total: 0, truncated: false },
   };
-  expect(render()).toContain("Clear project, sender and time filters");
+  expect(render()).toContain(t("chat.clearProjectSenderAnd"));
 });
 it("does not turn query failure into empty identities or show retained identity data", () => {
   state.error = true;
   const html = render();
-  expect(html).toContain("Search failed.");
-  expect(html).toContain("Retry");
+  expect(html).toContain(t("chat.searchFailed"));
+  expect(html).toContain(t("common.retry"));
   expect(html).not.toContain("Server Identity");
-  expect(html).not.toContain("No matches");
+  expect(html).not.toContain(t("chat.noMatches"));
 });
 it("has a real empty state when the server has no identity or content hits", () => {
   state.identities!.humans = { results: [], total: 0, truncated: false };
-  expect(render()).toContain("No matches");
+  expect(render()).toContain(t("chat.noMatches"));
 });
 
 it("keeps the search visible while compact filters start collapsed", () => {

@@ -1,4 +1,3 @@
-import { getPlatform } from "@/platform";
 import {
   AVATAR_DESIGN_FIELD,
   apiPaths,
@@ -8,6 +7,7 @@ import {
 } from "@silverhand/shared";
 import { api, apiUpload, ApiError } from "@/lib/api";
 import type { ProfileSetupValues } from "./profile-setup-form";
+import { t } from "@/lib/i18n";
 
 export type SetupPhase =
   | "checking"
@@ -42,13 +42,6 @@ export function setupErrorCode(error: unknown): string | null {
 }
 
 export const setupTransport = {
-  mode: async () => {
-    const info = await getPlatform().client.getConnectionInfo();
-    if (!info) {
-      throw new Error("Backend not ready");
-    }
-    return info.mode;
-  },
   request: (method: "GET" | "PUT", body?: string) =>
     api(apiPaths.embeddedProfileSetup, { method, body }),
   upload: async (file: File, design: string | null) => {
@@ -124,7 +117,7 @@ export class EmbeddedProfileSetup {
       }
     } catch {
       if (this.current(generation)) {
-        this.publish("read-error", "Unable to load profile setup. Retry to continue.");
+        this.publish("read-error", t("appShell.profile.loadFailed"));
       }
     } finally {
       if (this.current(generation)) {
@@ -142,7 +135,7 @@ export class EmbeddedProfileSetup {
       display_name: values.displayName,
     });
     if (!input.success) {
-      this.publish("required", "Check your display name and username.");
+      this.publish("required", t("appShell.profile.checkFields"));
       return;
     }
     this.busy = true;
@@ -162,7 +155,7 @@ export class EmbeddedProfileSetup {
           return;
         }
         if (setupErrorCode(error) === "name_taken") {
-          this.publish("required", "This username is already taken.");
+          this.publish("required", t("appShell.handleTaken"));
           return;
         }
         // A lost response can follow a committed write. Read before offering another submission.
@@ -172,13 +165,13 @@ export class EmbeddedProfileSetup {
         return;
       }
       if (required) {
-        this.publish("required", "Profile setup was not completed. Please try again.");
+        this.publish("required", t("appShell.profile.notCompleted"));
         return;
       }
       await this.upload(generation);
     } catch {
       if (this.current(generation)) {
-        this.publish("read-error", "Unable to confirm profile setup. Retry to check its status.");
+        this.publish("read-error", t("appShell.profile.confirmFailed"));
       }
     } finally {
       if (this.current(generation)) {
@@ -199,7 +192,7 @@ export class EmbeddedProfileSetup {
         this.avatar = null;
       } catch {
         if (this.current(generation)) {
-          this.publish("avatar-error", "Profile saved. Profile photo could not be uploaded.");
+          this.publish("avatar-error", t("appShell.profile.photoFailed"));
         }
         return;
       }

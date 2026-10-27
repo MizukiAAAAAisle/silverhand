@@ -25,16 +25,24 @@ export function patchFavoritesUnread(
 ): "patched" | "unchanged" | "absent" | "cold" {
   const prev = qc.getQueryData<ListFavoritesDto>(favoritesKey);
   if (!prev) return "cold"; // list not loaded → no-op
+  const count = payload.conversation_unread_count;
   const idx = prev.items.findIndex((it) => it.entity_id === payload.conversation_id);
-  if (idx < 0) return "absent"; // no such favorite row → no-op (never insert)
   const row = prev.items[idx];
-  if (!row) return "absent"; // unreachable (idx >= 0) — narrows the index access
-  if (row.unread_count === payload.conversation_unread_count) {
-    return "unchanged";
+  if (row) {
+    if (row.unread_count === count) return "unchanged";
+    const items = prev.items.slice();
+    items[idx] = { ...row, unread_count: count };
+    qc.setQueryData<ListFavoritesDto>(favoritesKey, { ...prev, items });
+    return "patched";
   }
-  const items = prev.items.slice();
-  items[idx] = { ...row, unread_count: payload.conversation_unread_count };
-  qc.setQueryData<ListFavoritesDto>(favoritesKey, { ...prev, items });
+  const pairs = prev.direct_pairs ?? [];
+  const pairIdx = pairs.findIndex((it) => it.conversation_id === payload.conversation_id);
+  const pair = pairs[pairIdx];
+  if (!pair) return "absent"; // no such favorite row → no-op (never insert)
+  if (pair.unread_count === count) return "unchanged";
+  const directPairs = pairs.slice();
+  directPairs[pairIdx] = { ...pair, unread_count: count };
+  qc.setQueryData<ListFavoritesDto>(favoritesKey, { ...prev, direct_pairs: directPairs });
   return "patched";
 }
 
@@ -95,7 +103,40 @@ export function useStarMembership(conversationId: string | null): StarMembership
   const { data, status } = useFavoritesList();
   if (conversationId === null) return "unknown";
   if (!data) return status === "error" ? "unstarred" : "unknown";
-  return data.items.some((it) => it.entity_id === conversationId) ? "starred" : "unstarred";
+  return starredConversationIds(data).has(conversationId) ? "starred" : "unstarred";
+}
+
+/** Every starred conversation id, channels and direct pairs alike. */
+export function starredConversationIds(data: ListFavoritesDto | undefined): Set<string> {
+  const ids = new Set<string>();
+  for (const item of data?.items ?? []) ids.add(item.entity_id);
+  for (const pair of data?.direct_pairs ?? []) ids.add(pair.conversation_id);
+  return ids;
+}
+
+/** Star / unstar a direct pair. It has no workspace list to patch, so only the
+ *  favorites projection is refetched. */
+export function useStarDirectPair() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async ({
+      conversationId,
+      starred,
+    }: {
+      conversationId: string;
+      starred: boolean;
+    }) => {
+      await api<unknown>(apiPaths.channelStar(conversationId), {
+        method: starred ? "POST" : "DELETE",
+      });
+    },
+    onSettled: () => {
+      void qc.invalidateQueries({ queryKey: favoritesKey });
+    },
+    onError: (_e, { starred }) => {
+      toast.error(starred ? "Failed to star, please retry" : "Failed to unstar, please retry");
+    },
+  });
 }
 
 /** Minimal WS frame shape {@link decideFavoritesInvalidation} consumes, so the

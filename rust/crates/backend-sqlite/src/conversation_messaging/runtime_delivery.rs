@@ -5,7 +5,7 @@ use std::{collections::HashSet, path::Path, time::Duration};
 use serde::Serialize;
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
-        FromKind, MessageContent, MessageId, ReferencePositions,
+        FromKind, MessageContent, MessageId, NotificationId, ReferencePositions,
         collaboration::{
             BoundRuntimeControlSeat, ClearSessionAuditWitness, ClearSessionCommitReceipt,
             CliSessionId, RuntimeControlObservedStatus, RuntimeControlSeatPort,
@@ -29,12 +29,12 @@ use silverhand_backend_core::{
     host_runtime::runtime_credential::{RuntimeGeneration, RuntimePrincipal, RuntimeScope},
     host_runtime::runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
-        ProjectRuntimeStatus, RefineRuntimeToolCallInput, RefinedRuntimeActivity,
-        RuntimeActivityCommitResult, RuntimeActivityFact, RuntimeActivityKind,
-        RuntimeActivityPayload, RuntimeConsumedCommitResult, RuntimeEventAdmission,
-        RuntimeExitCommitResult, RuntimeExitDisposition, RuntimeSessionInitCommitResult,
-        RuntimeStatusCommitResult, RuntimeStatusTarget, RuntimeToolCallInputCommitResult,
-        StampRuntimePresence, UpsertRuntimeTextActivity,
+        ProjectRuntimeStatus, RecordRuntimeStartFailure, RefineRuntimeToolCallInput,
+        RefinedRuntimeActivity, RuntimeActivityCommitResult, RuntimeActivityFact,
+        RuntimeActivityKind, RuntimeActivityPayload, RuntimeConsumedCommitResult,
+        RuntimeEventAdmission, RuntimeExitCommitResult, RuntimeExitDisposition,
+        RuntimeSessionInitCommitResult, RuntimeStatusCommitResult, RuntimeStatusTarget,
+        RuntimeToolCallInputCommitResult, StampRuntimePresence, UpsertRuntimeTextActivity,
     },
     identity_access::agents::{runtime::RuntimeKind, session_scope::AgentSessionScope},
 };
@@ -216,6 +216,25 @@ impl SqliteRuntimeDeliveryStore {
                     endpoint_b_agent.name AS endpoint_b_agent_name,
                     endpoint_b_user.name AS endpoint_b_user_name,
                     w.name AS workspace_name,
+                    CASE WHEN i.delivery_kind = 'observe' AND m.thread_root_id IS NOT NULL THEN (
+                        SELECT COUNT(*) FROM messages r
+                         WHERE r.conversation_id = m.conversation_id
+                           AND r.thread_root_id = m.thread_root_id
+                           AND r.seq < m.seq
+                           AND NOT (r.from_kind = 'agent' AND r.from_agent_id = i.agent_id)
+                           AND NOT EXISTS (
+                               SELECT 1 FROM conversation_inboxes x
+                                WHERE x.conversation_id = r.conversation_id
+                                  AND x.agent_id = i.agent_id AND x.message_id = r.id)
+                           AND NOT EXISTS (
+                               SELECT 1 FROM messages q
+                                 JOIN conversation_inboxes y
+                                   ON y.conversation_id = q.conversation_id
+                                  AND y.agent_id = i.agent_id AND y.message_id = q.id
+                                WHERE q.conversation_id = m.conversation_id
+                                  AND q.thread_root_id = m.thread_root_id
+                                  AND q.seq > r.seq AND q.seq < m.seq)
+                    ) ELSE 0 END AS omitted_replies,
                     strftime('%Y-%m-%dT%H:%M:%S', m.created_at / 1000.0,
                              'unixepoch', 'localtime') AS local_time,
                     CAST(ROUND((
@@ -1041,6 +1060,27 @@ impl RuntimeInboxCustodyPort for SqliteRuntimeDeliveryStore {
     }
 }
 
+/// The owner-scoped facts of one start-failure notice. Binds: payload JSON,
+/// source conversation, agent.
+macro_rules! start_failure_source {
+    () => {
+        "SELECT a.id AS agent_id, a.created_by_user_id AS owner,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM workspace_users wu
+                     WHERE wu.workspace_id = c.workspace_id AND wu.user_id = a.created_by_user_id)
+                THEN c.workspace_id END AS workspace_id,
+                CASE WHEN EXISTS (
+                    SELECT 1 FROM conversation_users cu
+                     WHERE cu.conversation_id = c.id AND cu.user_id = a.created_by_user_id)
+                  OR (c.endpoint_a_kind = 'human' AND c.endpoint_a_id = a.created_by_user_id)
+                  OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = a.created_by_user_id)
+                THEN c.id END AS conversation_id,
+                json_set(?, '$.agent_name', COALESCE(NULLIF(a.display_name, ''), a.name))
+                  AS payload
+           FROM agents a JOIN conversations c ON c.id = ? WHERE a.id = ?"
+    };
+}
+
 impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
     async fn runtime_activity_targets(
         &self,
@@ -1054,6 +1094,31 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
         let targets = status_targets_for(&mut tx, admission.principal(), &origin).await?;
         tx.commit().await.map_err(persistence)?;
         Ok(Some(targets))
+    }
+
+    async fn has_pending_turn(
+        &self,
+        admission: RuntimeEventAdmission,
+        conversation: ConversationId,
+    ) -> Result<bool, PersistenceFailure> {
+        let mut tx = self.pool.begin().await.map_err(persistence)?;
+        if !principal_is_current_in_tx(&mut tx, &admission).await? {
+            return Ok(false);
+        }
+        let pending: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM conversation_inboxes
+                WHERE conversation_id = ? AND agent_id = ?
+                  AND delivered_at IS NULL AND failed_at IS NULL
+                  AND in_flight_owner IS NULL
+                  AND COALESCE(delivery_kind, 'turn') = 'turn')",
+        )
+        .bind(conversation.as_str())
+        .bind(admission.principal().agent().as_str())
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(persistence)?;
+        tx.commit().await.map_err(persistence)?;
+        Ok(pending)
     }
 
     async fn current_admission(
@@ -1593,6 +1658,67 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
         tx.commit().await.map_err(persistence)?;
         Ok(Some(viewers))
     }
+
+    async fn record_start_failure(
+        &self,
+        event: RecordRuntimeStartFailure,
+    ) -> Result<Option<UserId>, PersistenceFailure> {
+        let environment = crate::conversation_messaging::messaging::HostEnvironment;
+        let id = NotificationId::mint(&environment).map_err(PersistenceFailure::from_source)?;
+        let now = environment
+            .now_unix_ms()
+            .map_err(PersistenceFailure::from_source)?;
+        let payload = serde_json::json!({ "reason": event.reason, "error": event.message });
+        // One unread notice per agent, refreshed in place with the latest reason so a
+        // stale unread row never hides a newer failure and retries never stack toasts.
+        // Coordinates are attached only where the owner can read them.
+        let mut tx = self
+            .pool
+            .begin_with(ROOT_WRITE_BEGIN)
+            .await
+            .map_err(persistence)?;
+        let mut owner: Option<String> = sqlx::query_scalar(concat!(
+            "UPDATE notifications SET payload = s.payload, conversation_id = s.conversation_id,
+                    workspace_id = s.workspace_id, created_at = ?
+               FROM (",
+            start_failure_source!(),
+            ") s
+              WHERE notifications.kind = 'agent_start_failed'
+                AND notifications.agent_id = s.agent_id AND notifications.user_id = s.owner
+                AND notifications.read_at IS NULL
+             RETURNING notifications.user_id"
+        ))
+        .bind(now)
+        .bind(payload.to_string())
+        .bind(event.conversation.as_str())
+        .bind(event.agent.as_str())
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(persistence)?;
+        if owner.is_none() {
+            owner = sqlx::query_scalar(concat!(
+                "INSERT INTO notifications (id, kind, user_id, agent_id, workspace_id,
+                        conversation_id, payload, created_at)
+                 SELECT ?, 'agent_start_failed', s.owner, s.agent_id, s.workspace_id,
+                        s.conversation_id, s.payload, ? FROM (",
+                start_failure_source!(),
+                ") s RETURNING user_id"
+            ))
+            .bind(id.as_str())
+            .bind(now)
+            .bind(payload.to_string())
+            .bind(event.conversation.as_str())
+            .bind(event.agent.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(persistence)?;
+        }
+        tx.commit().await.map_err(persistence)?;
+        owner
+            .map(UserId::parse)
+            .transpose()
+            .map_err(PersistenceFailure::from_source)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -2008,7 +2134,8 @@ fn decode_delivery(
         .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok());
     let task = task_header(metadata.as_ref());
     let sender = sender_header(row, from)?;
-    let presentation = render_delivery_presentation(
+    let omitted: i64 = row.try_get("omitted_replies").map_err(persistence)?;
+    let mut presentation = render_delivery_presentation(
         &message_id,
         &sender,
         &target,
@@ -2017,12 +2144,22 @@ fn decode_delivery(
         content.as_str(),
         &attachment_suffix(metadata.as_ref()),
     );
+    if omitted > 0 {
+        let history = shell_single_quote(&target);
+        presentation.push_str(&format!(
+            "\n\n[{omitted} earlier replies in this thread are not included. Read them with `silverhand message history --target {history} --before-seq {seq}`.]"
+        ));
+    }
     Ok(ClaimedInboxDelivery::decoded(
         id,
         seq,
         presentation,
         instruction,
     ))
+}
+
+fn shell_single_quote(raw: &str) -> String {
+    format!("'{}'", raw.replace('\'', "'\\''"))
 }
 
 fn render_delivery_presentation(

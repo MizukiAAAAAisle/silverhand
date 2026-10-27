@@ -101,10 +101,7 @@ export interface DeliveryOwnerContext {
  * offending connection — but it never dispatches `runtime_deliver` under a
  * guessed owner.
  */
-export function resolveDeliveryOwner(
-  owner: string | undefined,
-  ingress: string,
-): string {
+export function resolveDeliveryOwner(owner: string | undefined, ingress: string): string {
   if (owner === undefined || owner.length === 0) {
     throw new Error(
       `${ingress}: command has no minted delivery owner — refusing to dispatch under a guessed owner (#task:1417 §11.4.1)`,
@@ -168,15 +165,11 @@ export interface SupervisorContract {
    * re-drives them. Never clears another owner's custody; idempotent.
    */
   cleanupDeferredForOwner(owner: string): void;
-  status(
-    params: RuntimeStatusParams,
-  ): RuntimeStatusResult | Promise<RuntimeStatusResult>;
+  status(params: RuntimeStatusParams): RuntimeStatusResult | Promise<RuntimeStatusResult>;
   clearSession(
     params: RuntimeClearSessionParams,
   ): RuntimeClearSessionResult | Promise<RuntimeClearSessionResult>;
-  stopAll(
-    params: RuntimeStopAllParams,
-  ): RuntimeStopAllResult | Promise<RuntimeStopAllResult>;
+  stopAll(params: RuntimeStopAllParams): RuntimeStopAllResult | Promise<RuntimeStopAllResult>;
   /** Terminal daemon teardown: fence new spawns and drain owned runtimes. */
   shutdown(): Promise<void>;
   closeActivityLog(

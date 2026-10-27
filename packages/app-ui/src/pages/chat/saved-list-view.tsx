@@ -39,6 +39,7 @@ import {
   type DateFilterValue,
 } from "@/components/ui/date-filter-select";
 import { FloatingPaneChrome, PaneHeader, PaneShell } from "../../components/layout/pane-shell";
+import { t } from "@/lib/i18n";
 
 /** Saved-view filter selection. Lifted to App so it survives pane switches
  *  for the app session (shiki #task:1258 follow-up) — NOT persisted, so a
@@ -180,7 +181,7 @@ export function SavedListView({
       <FloatingPaneChrome>
         <PaneHeader
           icon={<BookmarkIcon className="size-3.5 fill-current" />}
-          title="Saved"
+          title={t("chat.saved")}
           count={data ? items.length : undefined}
           trailing={
             showFilters ? (
@@ -198,7 +199,7 @@ export function SavedListView({
             className="shrink-0 border-b border-border-subtle px-4 py-3"
           >
             <div className="flex flex-wrap items-end gap-3">
-              <FilterBlock label="Project" className="w-full sm:w-72">
+              <FilterBlock label={t("chat.project")} className="w-full sm:w-72">
                 <WorkspaceFilterSelect
                   value={workspace}
                   workspaces={workspaces}
@@ -206,18 +207,22 @@ export function SavedListView({
                   allIcon={<LayersIcon className="size-3.5" />}
                 />
               </FilterBlock>
-              <FilterBlock label="Sender" className="w-full sm:w-60">
+              <FilterBlock label={t("chat.sender")} className="w-full sm:w-60">
                 <SenderFilterSelect
                   value={sender}
                   agents={agents}
                   users={users}
                   userResolver={userResolver}
                   onChange={setSender}
-                  ariaLabel="Saved sender filter"
+                  ariaLabel={t("chat.savedSenderFilter")}
                 />
               </FilterBlock>
-              <FilterBlock label="Saved date" className="w-full sm:w-48">
-                <DateFilterSelect value={date} onChange={setDate} ariaLabel="Saved date filter" />
+              <FilterBlock label={t("chat.savedDate")} className="w-full sm:w-48">
+                <DateFilterSelect
+                  value={date}
+                  onChange={setDate}
+                  ariaLabel={t("chat.savedDateFilter")}
+                />
               </FilterBlock>
             </div>
           </FilterPanel>
@@ -229,7 +234,7 @@ export function SavedListView({
           <SavedListSkeleton />
         ) : items.length === 0 ? (
           <div className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-text-muted">
-            {hasFilters ? "No matches" : "No saved messages"}
+            {hasFilters ? t("chat.noMatches") : t("chat.noSavedMessages")}
           </div>
         ) : (
           <ul className="space-y-2">
@@ -305,7 +310,7 @@ function SavedItem({
   // directory re-join by `from_*_id`. A saved system message (`author === null`)
   // reads as "System" with a neutral person square.
   const presentation = item.message.author ? presentAuthor(item.message.author) : null;
-  const sender = presentation?.label ?? "System";
+  const sender = presentation?.label ?? t("chat.system");
   const when = useMemo(() => dayjs(item.saved_at).format("YYYY-MM-DD HH:mm"), [item.saved_at]);
 
   // The saved's "where" lives in its discriminated `place` (#task:2055): a
@@ -410,8 +415,8 @@ function SavedItem({
               onUnsave();
             }}
             className="ml-auto text-accent hover:text-accent-hover"
-            title="Remove from saved"
-            aria-label="Remove from saved"
+            title={t("chat.removeFromSaved")}
+            aria-label={t("chat.removeFromSaved")}
           >
             <BookmarkIcon className="size-3.5 fill-current" />
           </button>

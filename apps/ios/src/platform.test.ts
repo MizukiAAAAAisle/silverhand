@@ -1,12 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
-import {
-  apiPaths,
-  authPaths,
-  DESKTOP_SERVER_API_EPOCH,
-  MINIMUM_SERVER_API_EPOCH,
-} from "@silverhand/shared";
-import admission from "../../../packages/shared/src/backend-admission.json";
+import { DESKTOP_SERVER_API_EPOCH, MINIMUM_SERVER_API_EPOCH } from "@silverhand/shared";
+import { nativeProtocol, nativeProtocolJson } from "../native-protocol";
 import { createIOSPlatform } from "./platform";
 import type { NativeBridge } from "./bridge";
 
@@ -16,6 +11,7 @@ function harness() {
     navigationSync: vi.fn(async () => ({ tabBarHeight: 0 })),
     navigationReset: vi.fn(async () => {}),
     navigationAvatar: vi.fn(async () => {}),
+    setLocale: vi.fn(async () => {}),
     titlebar: vi.fn(async () => {}),
     titlebarEndSearch: vi.fn(async () => {}),
     pageBar: vi.fn(async () => {}),
@@ -23,6 +19,8 @@ function harness() {
     composerSync: vi.fn(async () => {}),
     composerRemove: vi.fn(async () => {}),
     composerSetText: vi.fn(async () => {}),
+    selectionBarSync: vi.fn(async () => {}),
+    selectionBarRemove: vi.fn(async () => {}),
     bannerShow: vi.fn(async () => {}),
     getProfile: vi.fn(async () => ({ server_url: "https://server.example", updated_at: 1 })),
     authState: vi.fn(async () => ({
@@ -40,6 +38,18 @@ function harness() {
         }),
       },
     })),
+    serverInfo: vi.fn(async () => ({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      bodyText: JSON.stringify({
+        signup_enabled: true,
+        desktop_api: {
+          current_epoch: DESKTOP_SERVER_API_EPOCH,
+          minimum_client_epoch: DESKTOP_SERVER_API_EPOCH,
+        },
+      }),
+    })),
     saveProfile: vi.fn(),
     clearProfile: vi.fn(),
     request: vi.fn(),
@@ -50,11 +60,15 @@ function harness() {
       bodyText: "{}",
     })),
     authenticate: vi.fn(),
+    passwordRecovery: vi.fn(),
     logout: vi.fn(),
     addListener: vi.fn(async () => ({ remove: vi.fn() })),
     saveAttachment: vi.fn(async () => ({ completed: true })),
     sharePng: vi.fn(async () => ({ completed: true })),
+    previewPng: vi.fn(async () => ({ shared: true })),
     avatarMakerEdit: vi.fn(async () => ({})),
+    contextMenuAvailable: vi.fn(async () => ({ available: true })),
+    contextMenuShow: vi.fn(async () => ({})),
     openExternal: vi.fn(),
     appVersion: vi.fn(async () => ({ version: "1.0" })),
     openSocket: vi.fn(),
@@ -155,9 +169,44 @@ describe("iOS platform", () => {
       url: "https://server.example",
       mode: "remote",
     });
-    expect(await platform.client.getAuthState()).toEqual({
-      status: "unauthenticated",
-      signup_enabled: true,
+    expect(await platform.client.getAuthState()).toEqual({ status: "unauthenticated" });
+  });
+
+  it("reads server info from the selected server and rejects a failed discovery", async () => {
+    const { native, platform } = harness();
+    native.serverInfo.mockResolvedValueOnce({
+      status: 200,
+      statusText: "OK",
+      headers: {},
+      bodyText: JSON.stringify({
+        signup_enabled: true,
+        features: { signup_enabled: false, account_deletion_enabled: true },
+      }),
+    });
+    expect(await platform.client.getServerInfo()).toMatchObject({
+      features: { signup_enabled: false, account_deletion_enabled: true },
+    });
+    native.serverInfo.mockResolvedValueOnce({
+      status: 503,
+      statusText: "Unavailable",
+      headers: {},
+      bodyText: "",
+    });
+    await expect(platform.client.getServerInfo()).rejects.toThrow("503");
+  });
+
+  it("routes password recovery natively without a session", async () => {
+    const { native, platform } = harness();
+    native.passwordRecovery.mockResolvedValue({ status: 202, bodyText: '{"ok":true}' });
+    expect(
+      await platform.client.passwordRecovery({
+        action: "request",
+        body: '{"email":"u@example.com"}',
+      }),
+    ).toEqual({ status: 202, bodyText: '{"ok":true}' });
+    expect(native.passwordRecovery).toHaveBeenCalledWith({
+      action: "request",
+      body: '{"email":"u@example.com"}',
     });
   });
 
@@ -231,22 +280,14 @@ describe("iOS platform", () => {
   });
 
   it("keeps native admission and route resource tied to shared authority", () => {
-    const native = JSON.parse(
-      readFileSync(
-        new URL("../native/Sources/SilverhandNative/Resources/Protocol.json", import.meta.url),
-        "utf8",
-      ),
+    const committed = readFileSync(
+      new URL("../native/Sources/SilverhandNative/Resources/Protocol.json", import.meta.url),
+      "utf8",
     );
-    expect(native).toEqual({
-      ...admission,
+    expect(committed).toBe(nativeProtocolJson());
+    expect(nativeProtocol()).toMatchObject({
       desktopApi: DESKTOP_SERVER_API_EPOCH,
       desktopMinServer: MINIMUM_SERVER_API_EPOCH,
-      serverInfo: apiPaths.serverInfo,
-      me: apiPaths.me,
-      mePassword: apiPaths.mePassword,
-      login: authPaths.login,
-      signup: authPaths.signup,
-      logout: authPaths.logout,
     });
   });
 

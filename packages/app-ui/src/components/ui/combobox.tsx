@@ -4,6 +4,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { ChevronDownIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import { dropdownPanelProps } from "./dropdown-panel";
+import { t } from "@/lib/i18n";
 
 /**
  * Editable combobox — a free-text input paired with a suggestions dropdown.
@@ -115,7 +116,7 @@ export function Combobox({
             <button
               type="button"
               tabIndex={-1}
-              aria-label="Show suggestions"
+              aria-label={t("ui.showSuggestions")}
               // Keep input focus; just toggle the list.
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {

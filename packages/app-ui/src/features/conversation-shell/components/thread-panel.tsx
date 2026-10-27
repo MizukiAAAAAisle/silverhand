@@ -63,6 +63,7 @@ import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import { useJoinChannel } from "@/features/workspaces/hooks";
 import type { ChannelGate } from "@/features/channels/membership";
 import { classifyTopShift } from "@/features/conversation-shell/model/message-list-virtualization";
+import { t, useLocale } from "@/lib/i18n";
 
 interface ThreadPanelProps {
   /** Parent channel conversation. Replies live in this conversation with
@@ -847,12 +848,13 @@ export function ThreadPanel({
     );
 
   const following = followers.data && canParticipate ? viewerFollowing : null;
+  const locale = useLocale();
   const nativeBar = useMemo<PageBarDeclaration>(() => {
     const actions = [
       findAvailable
         ? {
             id: "find",
-            label: "Search this thread",
+            label: t("conversationShell.searchThisThread"),
             icon: iconMarkup(SearchIcon),
             selected: find.open,
           }
@@ -860,25 +862,31 @@ export function ThreadPanel({
       following !== null
         ? {
             id: "follow",
-            label: following ? "Unfollow thread" : "Follow thread",
+            label: following
+              ? t("conversationShell.unfollowThread")
+              : t("conversationShell.followThread"),
             icon: iconMarkup(following ? BellOffIcon : BellIcon),
             selected: following,
           }
         : null,
       onViewInChannel
-        ? { id: "view", label: "View in channel", icon: iconMarkup(ArrowUpRightIcon) }
+        ? {
+            id: "view",
+            label: t("conversationShell.viewInChannel2"),
+            icon: iconMarkup(ArrowUpRightIcon),
+          }
         : null,
     ].filter((action) => action !== null);
 
     return {
-      title: parentTitle || "Thread",
-      subtitle: `Thread ${replyCount} ${replyCount === 1 ? "reply" : "replies"}`,
+      title: parentTitle || t("conversationShell.thread"),
+      subtitle: t("conversationShell.threadReplies", { count: replyCount }),
       titleAction: null,
       actions: actions.length > 0 ? [actions] : [],
       tabs: null,
       addTabs: null,
     };
-  }, [findAvailable, find.open, following, onViewInChannel, parentTitle, replyCount]);
+  }, [locale, findAvailable, find.open, following, onViewInChannel, parentTitle, replyCount]);
 
   return (
     <TaskRefContextProvider value={taskRefContext}>
@@ -916,9 +924,9 @@ export function ThreadPanel({
                   data-sticker-size="md"
                   data-sticker-tone="neutral"
                   onClick={find.open ? find.close : find.openFind}
-                  aria-label="Search this thread"
+                  aria-label={t("conversationShell.searchThisThread")}
                   aria-pressed={find.open}
-                  title="Search this thread"
+                  title={t("conversationShell.searchThisThread")}
                   className={
                     "flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) " +
                     (find.open
@@ -935,9 +943,17 @@ export function ThreadPanel({
                   data-sticker
                   data-sticker-size="md"
                   data-sticker-tone="neutral"
-                  aria-label={viewerFollowing ? "Unfollow thread" : "Follow thread"}
+                  aria-label={
+                    viewerFollowing
+                      ? t("conversationShell.unfollowThread")
+                      : t("conversationShell.followThread")
+                  }
                   aria-pressed={viewerFollowing}
-                  title={viewerFollowing ? "Unfollow thread" : "Follow thread"}
+                  title={
+                    viewerFollowing
+                      ? t("conversationShell.unfollowThread")
+                      : t("conversationShell.followThread")
+                  }
                   onClick={toggleFollow}
                   disabled={followPending}
                   className={
@@ -960,8 +976,8 @@ export function ThreadPanel({
                   data-sticker
                   data-sticker-size="md"
                   data-sticker-tone="neutral"
-                  aria-label="View in channel"
-                  title="View in channel"
+                  aria-label={t("conversationShell.viewInChannel2")}
+                  title={t("conversationShell.viewInChannel2")}
                   onClick={onViewInChannel}
                   className="flex size-7 shrink-0 items-center justify-center rounded-(--control-radius) text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 >
@@ -973,12 +989,8 @@ export function ThreadPanel({
         >
           <SidePanelHeaderTitle
             icon={<ThreadIcon className="size-3.5 shrink-0 text-text-muted" />}
-            title={parentTitle || "Thread"}
-            subtitle={
-              <>
-                Thread {replyCount} {replyCount === 1 ? "reply" : "replies"}
-              </>
-            }
+            title={parentTitle || t("conversationShell.thread")}
+            subtitle={t("conversationShell.threadReplies", { count: replyCount })}
           />
         </SidePanelHeader>
 
@@ -999,7 +1011,7 @@ export function ThreadPanel({
                   sender: advancedSearchSender,
                 })
               }
-              placeholder="Search this thread"
+              placeholder={t("conversationShell.searchThisThread")}
             />
           </div>
         ) : null}
@@ -1009,7 +1021,7 @@ export function ThreadPanel({
           // Distinct from "no replies yet" — the thread can't be shown at
           // all, and replying would have no valid target.
           <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
-            This message can't be loaded. It may have been deleted.
+            {t("conversationShell.thisMessageCantBe")}
           </div>
         ) : rootCtx.isLoading && !rootCtx.root ? (
           // Root still loading: the shared message skeleton under the thread
@@ -1030,12 +1042,13 @@ export function ThreadPanel({
               }}
               workspaceId={workspaceId}
               conversationId={channelId}
+              selectionKey={`${channelId}#cluster#${rootMessageId}`}
               channelTitle={parentChannelTitle}
             />
             <div
               ref={scrollRef}
               onScroll={onScroll}
-              className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-1 py-2"
+              className="scrollbar-hide flex min-h-0 flex-1 flex-col overflow-y-auto px-(--message-list-gutter) py-2"
             >
               {/* Load earlier replies (between the root and the tail window). */}
               {cluster.hasPreviousPage ? (
@@ -1045,7 +1058,9 @@ export function ThreadPanel({
                   onClick={() => void cluster.fetchPreviousPage()}
                   className="mx-auto mb-1 rounded px-2 py-1 text-xs text-text-muted hover:text-text-primary disabled:opacity-50"
                 >
-                  {cluster.isFetchingPreviousPage ? "Loading…" : "Load earlier replies"}
+                  {cluster.isFetchingPreviousPage
+                    ? t("conversationShell.loading")
+                    : t("conversationShell.loadEarlierReplies")}
                 </button>
               ) : null}
 
@@ -1063,13 +1078,13 @@ export function ThreadPanel({
                 2px poster ink is reserved for FRAME borders (things enclosed on
                 all sides + hard shadow); using it here read as a frame fragment
                 next to the header hairline (#task:1735 shiki feedback). Full-bleed
-                horizontally (`-mx-1` cancels the scroll container's `px-1`) so it
+                horizontally (its negative margin cancels the scroll container's gutter) so it
                 runs edge to edge. `shrink-0` keeps it a hairline in the flex
                 column even when the "No replies yet" empty state claims the
                 remaining height. Gated on the root so it reads as the root's own
                 bottom edge — present whether or not there are replies yet. */}
               {rootCtx.root ? (
-                <div className="-mx-1 my-2 shrink-0 border-t border-border-subtle" />
+                <div className="-mx-(--message-list-gutter) my-2 shrink-0 border-t border-border-subtle" />
               ) : null}
 
               {threadClusterShowsLoader({
@@ -1089,7 +1104,7 @@ export function ThreadPanel({
                 <MessageRowsSkeleton />
               ) : replyMessages.length === 0 ? (
                 <div className="flex flex-1 items-center justify-center px-4 text-center text-xs text-text-muted">
-                  No replies yet
+                  {t("conversationShell.noRepliesYet")}
                 </div>
               ) : (
                 items.map((item) => {
@@ -1121,8 +1136,16 @@ export function ThreadPanel({
                 data-sticker
                 data-sticker-size="lg"
                 data-sticker-tone="neutral"
-                aria-label={shouldResetToLatest ? "Jump to latest reply" : "Scroll to bottom"}
-                title={shouldResetToLatest ? "Jump to latest reply" : "Scroll to bottom"}
+                aria-label={
+                  shouldResetToLatest
+                    ? t("conversationShell.jumpToLatestReply")
+                    : t("conversationShell.scrollToBottom")
+                }
+                title={
+                  shouldResetToLatest
+                    ? t("conversationShell.jumpToLatestReply")
+                    : t("conversationShell.scrollToBottom")
+                }
                 onClick={handleScrollBottomClick}
                 className="absolute bottom-4 left-1/2 z-(--z-sticky) flex size-9 -translate-x-1/2 items-center justify-center rounded-(--pill-radius) bg-accent text-text-on-accent shadow-lg transition-all hover:opacity-90 active:opacity-75"
               >

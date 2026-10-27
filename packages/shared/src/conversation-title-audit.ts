@@ -27,9 +27,7 @@
 // A detector that has never been shown detecting is not evidence, so each defect
 // class below is fault-injected in the tests by direct SQL — the only way to
 // produce them, which is the point.
-import {
-  canonicalizeStoredConversationTitle,
-} from './conversation-title.js';
+import { canonicalizeStoredConversationTitle } from './conversation-title.js';
 
 /**
  * One workspace-placed conversation, as the audit needs to see it.
@@ -192,9 +190,7 @@ const SAMPLE_LIMIT = 20;
  * `"  design"` and `"design"` print identically, which would make the report
  * useless precisely where it matters.
  */
-export function describeConversationTitleAudit(
-  report: ConversationTitleAuditReport,
-): string {
+export function describeConversationTitleAudit(report: ConversationTitleAuditReport): string {
   if (report.defects.length === 0) {
     return `title addresses clean: ${report.scanned} workspace conversation(s) scanned`;
   }
@@ -226,7 +222,7 @@ function describeDefect(defect: ConversationTitleDefect): string {
       return `unnormalized_title: conversation ${defect.id} in workspace ${defect.workspaceId} stores ${JSON.stringify(defect.title)}, canonical form is ${JSON.stringify(defect.canonicalTitle)}`;
     case 'folded_collision':
       return `folded_collision: workspace ${defect.workspaceId} key ${JSON.stringify(defect.key)} claimed by ${defect.members
-        .map(member => `${member.id} ${JSON.stringify(member.title)}`)
+        .map((member) => `${member.id} ${JSON.stringify(member.title)}`)
         .join(', ')}`;
   }
 }

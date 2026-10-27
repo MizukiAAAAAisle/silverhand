@@ -6,6 +6,7 @@ import {
   conversationPaneDescriptorFromIdentity,
   resolveConversationIdentity,
 } from "./conversation-identity";
+import { t } from "@/lib/i18n";
 
 /**
  * Composition of the two identity faces (#task:2038). Every case here is a claim
@@ -300,7 +301,7 @@ describe("conversationPaneDescriptorFromIdentity", () => {
       placement: "direct_pair",
       pair: deletedPair,
     });
-    expect(out.title).toBe("Deleted user");
+    expect(out.title).toBe(t("directPairs.deletedUser"));
     expect(out.read_only).toBe(true);
     expect(out.workspace_id).toBeNull();
   });

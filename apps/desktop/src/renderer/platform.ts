@@ -20,9 +20,11 @@ export function createDesktopPlatform(
     },
     client: {
       getAuthState: () => bridge.getAuthState(),
+      getServerInfo: () => bridge.getServerInfo(),
       signup: (input) => bridge.signup(input),
       login: (input) => bridge.login(input),
       logout: () => bridge.logout(),
+      passwordRecovery: (input) => bridge.passwordRecovery(input),
       backendRequest: (input) => bridge.backendRequest(input),
       backendUpload: (input) => bridge.backendUpload(input),
       recordEventWsDiagnostic: (input) => bridge.recordEventWsDiagnostic(input),
@@ -67,6 +69,7 @@ export function createDesktopPlatform(
       retryPartialApply: () => bridge.retryPartialApply(),
       pickDirectory: (input) => bridge.pickDirectory(input),
     },
+    setLocale: (locale) => bridge.setLocale(locale),
     shell: {
       setPinchZoom: (enabled) => bridge.setPinchZoom(enabled),
       onShutdownProgress: (handler) => bridge.onShutdownProgress(handler),

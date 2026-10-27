@@ -1,6 +1,13 @@
-import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
 import { useLayoutEffect, useRef, type CSSProperties, type ReactNode } from "react";
-import { nativeActionBar, useNativeBar, type NativeBarAction } from "./native-page-bar";
+import {
+  nativeActionBar,
+  useNativeBar,
+  useNativeBarPlatform,
+  type NativeBarAction,
+} from "./native-page-bar";
+import { MobileNavigationSlot, useHeaderSectionVisible } from "./mobile-header-slot";
+import { useTitlebarActionsClaim } from "./titlebar-actions";
+import { usePageLive } from "@/navigation/page-stack";
 import { cn } from "@/lib/cn";
 import { type PanelRole, paneChrome } from "./pane-chrome";
 
@@ -54,6 +61,7 @@ export function PaneShell({
  *
  * On compact iOS the native bar draws it: a Tab's root page shows the title
  * large, a pushed page centred, and `nativeActions` stand in for `trailing`.
+ * Beside a vertical tab bar the wide layout's titlebar carries them instead.
  */
 export function PaneHeader({
   icon,
@@ -88,6 +96,12 @@ export function PaneHeader({
     nativeActions,
   );
   const native = useNativeBar(bar, handlers);
+  // Where the wide layout's titlebar carries the header's buttons, it takes
+  // the ones `trailing` shows; the page hides `trailing` (vertical-bar.css).
+  const visible = useHeaderSectionVisible();
+  const live = usePageLive();
+  const compactNative = useNativeBarPlatform();
+  useTitlebarActionsClaim(visible && live && !compactNative && trailing ? nativeActions : null);
 
   if (native.active) {
     return native.clearance;

@@ -17,6 +17,7 @@ import type { TaskDetailFailure } from "@/features/tasks/model/task-detail";
 import { useConversationMembers } from "@/features/conversations/use-conversation-members";
 import { useDirectPairPane, projectDirectPairAssignee } from "@/features/direct-pairs/hooks";
 import { cn } from "@/lib/cn";
+import { t } from "@/lib/i18n";
 
 /**
  * Substance shared by the two task-detail surfaces — the modal
@@ -37,25 +38,25 @@ export type EditingField = "title" | "content" | null;
 
 // ── Failure copy ────────────────────────────────────────────────────
 
-export const FAILURE_COPY: Record<TaskDetailFailure, { header: string; body: string }> = {
+export const failureCopy = (): Record<TaskDetailFailure, { header: string; body: string }> => ({
   not_found: {
-    header: "Task not found",
+    header: t("tasks.taskNotFound"),
     // Both causes answer 404 and the viewer can't tell them apart, so the copy
     // names both rather than asserting the one we can't verify.
-    body: "This task was deleted, or it belongs to a conversation you can’t read.",
+    body: t("tasks.thisTaskWasDeleted"),
   },
   unreachable: {
-    header: "Can’t reach the server",
+    header: t("tasks.cantReachTheServer"),
     // No Retry here: the app-status banner already owns this signal and its
     // retry. A second, narrower retry button would be a competing control for
     // the same recovery.
-    body: "The task can’t be loaded while the connection is down.",
+    body: t("tasks.theTaskCantBe"),
   },
   transient: {
-    header: "Couldn’t load this task",
-    body: "The request failed.",
+    header: t("tasks.couldntLoadThisTask"),
+    body: t("tasks.theRequestFailed"),
   },
-};
+});
 
 // ── Single write slot ───────────────────────────────────────────────
 
@@ -151,7 +152,7 @@ export function useTaskMetaRows({
   const rows: TaskMetaRowSpec[] = [
     {
       key: "task",
-      label: "Task",
+      label: t("tasks.task"),
       value: (
         <span className="font-mono text-(length:--text-meta) text-text-secondary">
           #{view.task_number}
@@ -160,8 +161,8 @@ export function useTaskMetaRows({
     },
     {
       key: "status",
-      label: "Status",
-      error: statusFailed ? "Couldn’t update status." : null,
+      label: t("tasks.status"),
+      error: statusFailed ? t("tasks.couldntUpdateStatus") : null,
       value: (
         <span className="flex items-center gap-1.5">
           <TaskStatusBadge status={view.status} {...(busy ? {} : { onChange: onStatusChange })} />
@@ -171,8 +172,8 @@ export function useTaskMetaRows({
     },
     {
       key: "assignee",
-      label: "Assignee",
-      error: assignFailed ? "Couldn’t update assignee." : null,
+      label: t("tasks.assignee"),
+      error: assignFailed ? t("tasks.couldntUpdateAssignee") : null,
       value: (
         // Clearing is an inline ✕ on the current value (not a picker row), so
         // the dropdown holds only candidates. Revealed on row hover / focus so
@@ -194,7 +195,7 @@ export function useTaskMetaRows({
           {canAssign && !busy && view.assignee ? (
             <MiniIconButton
               icon={CloseIcon}
-              label="Clear assignee"
+              label={t("tasks.clearAssignee")}
               onClick={() => onAssign(null)}
               className="ml-1 opacity-0 transition-opacity group-hover/assignee:opacity-100 focus-visible:opacity-100"
             />
@@ -207,7 +208,7 @@ export function useTaskMetaRows({
       // "From", not "Creator": answers where the task came from and reads as the
       // counterpart of the Assignee row rather than a second ownership claim.
       key: "from",
-      label: "From",
+      label: t("tasks.from"),
       value: (
         <span className="flex min-w-0 items-center gap-1.5">
           {view.creator.type !== "system" && view.creator.id ? (
@@ -230,7 +231,7 @@ export function useTaskMetaRows({
       ? [
           {
             key: "channel",
-            label: "Channel",
+            label: t("tasks.channel"),
             value: (
               <span className="flex min-w-0 items-center gap-1.5">
                 <ChannelIcon variant="sticker" density="sm" className="text-text-muted" />
@@ -244,7 +245,7 @@ export function useTaskMetaRows({
       : []),
     {
       key: "created",
-      label: "Created",
+      label: t("tasks.created"),
       value: <Timestamp at={view.created_at} />,
     },
   ];
@@ -255,7 +256,7 @@ export function useTaskMetaRows({
   if (editor && editedAt !== null) {
     rows.push({
       key: "edited",
-      label: "Edited",
+      label: t("tasks.edited"),
       value: (
         <span className="flex min-w-0 flex-col gap-1">
           <span className="flex min-w-0 items-center gap-1.5">
@@ -277,7 +278,7 @@ export function useTaskMetaRows({
   if (view.closed_at !== null) {
     rows.push({
       key: "closed",
-      label: "Closed",
+      label: t("tasks.closed"),
       value: <Timestamp at={view.closed_at} />,
     });
   }
@@ -308,7 +309,7 @@ function AssigneeValue({
   directory: PersonDirectory;
 }): JSX.Element {
   if (!view.assignee) {
-    return <span className="italic text-text-muted">Unassigned</span>;
+    return <span className="italic text-text-muted">{t("tasks.unassigned2")}</span>;
   }
   return (
     <span className="flex min-w-0 items-center gap-1.5">
@@ -370,8 +371,8 @@ function AssigneePicker({
       <Popover.Trigger asChild>
         <button
           type="button"
-          aria-label="Change assignee"
-          title="Change assignee"
+          aria-label={t("tasks.changeAssignee")}
+          title={t("tasks.changeAssignee")}
           // Hover = a slight fade, the same affordance the status chip uses — no
           // ground, no border; two editable rows in one column answer "I'm
           // clickable" the same way.
@@ -477,7 +478,7 @@ function CandidateList({
             {c.isCurrent ? (
               <CheckIcon
                 className="size-3.5 shrink-0 text-text-muted"
-                aria-label="Current assignee"
+                aria-label={t("tasks.currentAssignee")}
               />
             ) : null}
           </button>
@@ -523,7 +524,7 @@ function WorkspacePickerBody({
   return (
     <CandidateList
       candidates={candidates}
-      placeholder={roster.status === "loading" ? "Loading…" : "No other agents here."}
+      placeholder={roster.status === "loading" ? t("tasks.loading") : t("tasks.noOtherAgentsHere")}
       directory={directory}
       onChoose={onChoose}
     />
@@ -557,10 +558,10 @@ function DirectPairPickerBody({
   const view = projectDirectPairAssignee(paneState, currentAgentId);
   const placeholder =
     view.status === "loading"
-      ? "Loading…"
+      ? t("tasks.loading")
       : view.status === "error"
-        ? "Couldn’t load."
-        : "No agent to assign.";
+        ? t("tasks.couldntLoad")
+        : t("tasks.noAgentToAssign");
   return (
     <CandidateList
       candidates={view.candidates}
@@ -693,18 +694,18 @@ export function InlineFieldEditor({
 
   const errorMsg =
     blocked === "empty"
-      ? "Title can’t be empty."
+      ? t("tasks.titleCantBeEmpty")
       : blocked === "over"
-        ? `Keep it under ${TASK_CONTENT_MAX_LEN} characters.`
+        ? t("tasks.keepUnder", { max: TASK_CONTENT_MAX_LEN })
         : edit.isError
-          ? "Couldn’t save changes. Try again."
+          ? t("tasks.couldntSaveChangesTry")
           : null;
 
   return (
     <div className="flex flex-col gap-1">
       <Textarea
         ref={ref}
-        aria-label={isTitle ? "Task title" : "Task description"}
+        aria-label={isTitle ? t("tasks.taskTitle") : t("tasks.taskDescription")}
         rows={1}
         value={value}
         onChange={(e) => {

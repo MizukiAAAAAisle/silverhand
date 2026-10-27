@@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { MessageDto, TaskSummaryDto } from "@silverhand/shared";
 import { decodeMessageSeq } from "@silverhand/shared";
 import { SystemActivityCluster } from "./system-activity-cluster";
+import { t } from "@/lib/i18n";
 import { TaskRefContextProvider } from "@/features/tasks/components/task-ref-context";
 import { taskBoardCacheScope, taskByNumberKey } from "@/features/tasks/hooks/use-task-by-number";
 
@@ -114,24 +115,75 @@ describe("SystemActivityCluster (PR-10)", () => {
     expect(html).toMatch(/^<div[^>]*\bdata-system-activity-cluster="2"/);
   });
 
-  it('renders one inner system event-row per cluster member, each tagged with `data-system-event-row="1"`', () => {
-    // Drift guard: SystemActivityCluster delegates per-row rendering to
-    // SystemMessage. The cluster CSS in `chrome.css` uses
-    // `.system-activity-cluster [data-system-event-row="1"] > *` to
-    // override the row body's chunky padding. If the SystemMessage
-    // wrapper ever drops the `data-system-event-row` attribute, the
-    // cluster CSS hook would silently break — the rows would still
-    // render, just no longer in tight 2px stacking.
+  it("folds consecutive events on one task into its latest line, and keeps other tasks apart", () => {
+    const a = makeSystemMessage("task_claim", fullTaskMeta(), { id: "a" });
+    const b = makeSystemMessage("task_status", fullTaskMeta({ task_status: "in_review" }), {
+      id: "b",
+    });
+    const c = makeSystemMessage("task_unclaim", fullTaskMeta({ task_status: "todo" }), { id: "c" });
+    const folded = renderCluster([a, b, c], [seededTask()]);
+    expect(folded.match(/data-system-event-row="1"/g) ?? []).toHaveLength(1);
+    expect(folded).toContain(t("messages.activityRecords", { count: 3 }));
+
+    const other = makeSystemMessage("task_create", fullTaskMeta({ task_number: 7 }), { id: "d" });
+    const apart = renderCluster([a, other], [seededTask()]);
+    expect(apart.match(/data-system-event-row="1"/g) ?? []).toHaveLength(2);
+    expect(apart).not.toContain("data-activity-fold-toggle");
+  });
+
+  it("opens the fold that holds an early jump target, flashing only that event once", () => {
+    const a = makeSystemMessage("task_claim", fullTaskMeta(), { id: "a" });
+    const b = makeSystemMessage("task_status", fullTaskMeta({ task_status: "in_review" }), {
+      id: "b",
+    });
+    const c = makeSystemMessage("task_unclaim", fullTaskMeta({ task_status: "todo" }), { id: "c" });
+    const otherA = makeSystemMessage("task_create", fullTaskMeta({ task_number: 7 }), { id: "d" });
+    const otherB = makeSystemMessage("task_claim", fullTaskMeta({ task_number: 7 }), { id: "e" });
+    const html = renderCluster([a, b, c, otherA, otherB], [seededTask()], "a");
+    expect(html).toContain('data-activity-fold="open"');
+    // Each event is painted exactly once — no summary/history echo.
+    for (const id of ["a", "b", "c"]) {
+      expect(html.match(new RegExp(`data-system-message-id="${id}"`, "g")) ?? []).toHaveLength(1);
+    }
+    // The unrelated folded task stays closed: only its latest event is painted.
+    expect(html.match(/data-system-message-id="e"/g) ?? []).toHaveLength(1);
+    expect(html.match(/data-system-message-id="d"/g) ?? []).toHaveLength(0);
+    expect(html.match(/data-system-event-row="1"/g) ?? []).toHaveLength(4);
+    // Only the jump target flashes, and it is the target we asked for.
+    expect(html.match(/msg-jump-flash/g) ?? []).toHaveLength(1);
+    expect(html).toMatch(/msg-jump-flash[^>]*data-system-message-id="a"/);
+    // The unrelated two-event task keeps the upstream default closed fold.
+    expect(html).toContain('data-activity-fold="closed"');
+    expect(html).toContain(t("messages.activityRecords", { count: 2 }));
+  });
+
+  it("opens the fold that holds the latest jump target, flashing only that event once", () => {
+    const a = makeSystemMessage("task_claim", fullTaskMeta(), { id: "a" });
+    const b = makeSystemMessage("task_status", fullTaskMeta({ task_status: "in_review" }), {
+      id: "b",
+    });
+    const c = makeSystemMessage("task_unclaim", fullTaskMeta({ task_status: "todo" }), { id: "c" });
+    const html = renderCluster([a, b, c], [seededTask()], "c");
+    expect(html).toContain('data-activity-fold="open"');
+    expect(html.match(/data-system-event-row="1"/g) ?? []).toHaveLength(3);
+    for (const id of ["a", "b", "c"]) {
+      expect(html.match(new RegExp(`data-system-message-id="${id}"`, "g")) ?? []).toHaveLength(1);
+    }
+    expect(html.match(/msg-jump-flash/g) ?? []).toHaveLength(1);
+    expect(html).toMatch(/msg-jump-flash[^>]*data-system-message-id="c"/);
+  });
+
+  it("keeps the upstream default fold closed when nothing is jumped to", () => {
     const a = makeSystemMessage("task_claim", fullTaskMeta(), { id: "a" });
     const b = makeSystemMessage("task_status", fullTaskMeta({ task_status: "in_review" }), {
       id: "b",
     });
     const c = makeSystemMessage("task_unclaim", fullTaskMeta({ task_status: "todo" }), { id: "c" });
     const html = renderCluster([a, b, c], [seededTask()]);
-    // Three rows → three system event-row wrappers, keyed on the PR-10
-    // data attribute (not the class name).
-    const matches = html.match(/data-system-event-row="1"/g) ?? [];
-    expect(matches).toHaveLength(3);
+    expect(html).toContain('data-activity-fold="closed"');
+    expect(html.match(/data-system-event-row="1"/g) ?? []).toHaveLength(1);
+    expect(html).toContain("data-activity-fold-toggle");
+    expect(html).not.toContain("msg-jump-flash");
   });
 
   it("faithfully renders whatever subtypes it is handed, without re-gating (defensive passthrough)", () => {

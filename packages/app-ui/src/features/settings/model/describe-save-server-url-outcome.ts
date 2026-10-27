@@ -1,4 +1,5 @@
 import type { LocalHostSaveServerUrlResult } from "@silverhand/client";
+import { t } from "@/lib/i18n";
 
 export interface SaveServerUrlBanner {
   /**
@@ -39,8 +40,8 @@ export function describeSaveServerUrlOutcome(
       case "reloaded":
         return {
           tone: "success",
-          title: "Saved. Reconnected to the server.",
-          description: `Verified in ${formatMs(result.elapsedMs)}.`,
+          title: t("settings.save.reconnected"),
+          description: t("settings.save.verifiedIn", { duration: formatMs(result.elapsedMs) }),
         };
       case "unchanged":
         // No-op write. The bytes were already what the user typed —
@@ -49,7 +50,7 @@ export function describeSaveServerUrlOutcome(
         // (the existing connection is whatever it was before).
         return {
           tone: "info",
-          title: "No changes — the address was already that value.",
+          title: t("settings.save.unchanged"),
           description: "",
         };
       case "connectivity_unverified":
@@ -62,15 +63,15 @@ export function describeSaveServerUrlOutcome(
         // so the user knows to either wait or undo the change.
         return {
           tone: "info",
-          title: "Saved. Reconnecting…",
-          description: `No connection was confirmed within ${formatMs(result.elapsedMs)}. The server may still be starting or unreachable.`,
+          title: t("settings.connection.savedReconnecting"),
+          description: t("settings.save.noConfirm", { duration: formatMs(result.elapsedMs) }),
           dismissOnReady: true,
         };
       case "reloaded_remote":
         return {
           tone: "info",
-          title: "Saved. Reconnecting…",
-          description: "Watch “This computer” for the live connection status.",
+          title: t("settings.connection.savedReconnecting"),
+          description: t("settings.save.watchStatus"),
           dismissOnReady: true,
         };
       default: {
@@ -95,8 +96,8 @@ export function describeSaveServerUrlOutcome(
     case "config_write_failed":
       return {
         tone: "error",
-        title: "Could not save the address.",
-        description: "Check that Silverhand can write to its app data folder, then try again.",
+        title: t("appShell.unreachable.saveFailed"),
+        description: t("settings.save.failedDetail"),
       };
     case "reload_rejected": {
       // The raw daemon message is deliberately NOT surfaced: it carries
@@ -107,7 +108,7 @@ export function describeSaveServerUrlOutcome(
       return {
         tone: "error",
         title: describeReloadReason(result.reason),
-        description: retryable ? "Try saving the address again." : "",
+        description: retryable ? t("settings.save.tryAgain") : "",
       };
     }
     case "no_attachment_controller":
@@ -117,8 +118,8 @@ export function describeSaveServerUrlOutcome(
       // message withheld — it names an internal controller type.
       return {
         tone: "info",
-        title: "Saved. Connection check is not available in this mode.",
-        description: "The address was saved, but this build cannot verify the connection.",
+        title: t("settings.save.noCheck"),
+        description: t("settings.save.noCheckDetail"),
       };
     default: {
       const _exhaustive: never = result;
@@ -132,15 +133,15 @@ function describeClassifyReason(
 ): string {
   switch (reason) {
     case "malformed_url":
-      return "Server URL is not a valid URL.";
+      return t("settings.save.malformed");
     case "unsupported_scheme":
-      return "Server URL must start with http:// or https://.";
+      return t("settings.save.scheme");
     case "non_origin_url":
-      return "Server URL must be an origin (scheme + host + port). Drop the path / query / fragment.";
+      return t("settings.save.origin");
     case "insecure_remote_http_disallowed":
-      return "Server URL must use https:// for non-loopback addresses (or set SILVERHAND_ALLOW_INSECURE_REMOTE=1 for dev use).";
+      return t("settings.save.insecure");
     case "obfuscated_loopback_disallowed":
-      return "Server URL looks like a disguised loopback address (e.g. 0x7f000001 / [0:0:0:0:0:0:0:1]). Use a literal loopback host (127.0.0.1, localhost, [::1]) if loopback was intended.";
+      return t("settings.save.obfuscated");
     default: {
       const _exhaustive: never = reason;
       return _exhaustive;
@@ -153,13 +154,13 @@ function describeReloadReason(
 ): string {
   switch (reason) {
     case "not_attached":
-      return "This computer is not connected yet — sign in first.";
+      return t("settings.save.notAttached");
     case "config_unreadable":
-      return "Could not read the saved address. Retry the save.";
+      return t("settings.save.readFailed");
     case "parse_failed":
-      return "Could not apply the saved address. Retry the save.";
+      return t("settings.save.applyFailed");
     case "invalid_server_url":
-      return "The saved address was rejected.";
+      return t("settings.save.rejected");
     default: {
       const _exhaustive: never = reason;
       return _exhaustive;

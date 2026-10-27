@@ -29,7 +29,9 @@ import {
   SILVERHAND_CONVERSATION_ID_ENV,
   SILVERHAND_SERVER_URL_ENV,
   type RuntimeDeliveryPresentation,
+  runtimeCatalogEntry,
 } from '@silverhand/shared';
+import { compareToMinimum, parsedVersion } from '../../drivers/version-gate.js';
 
 import {
   getDriver as getDefaultDriver,
@@ -1499,10 +1501,27 @@ export class Supervisor implements SupervisorContract {
 
     const driver = this.driverFor(runtimeKind);
     const resolved = await this.resolveRuntime(runtimeKind, driver.binary);
+    const label = runtimeCatalogEntry(runtimeKind).cliLabel;
     if (!resolved) {
-      throw new Error(
-        `runtime_start: binary "${driver.binary}" for runtime "${runtimeKind}" not found on PATH`,
+      throw new RuntimeStartResolveError(
+        'runtime_binary_missing',
+        `${label} is not installed on this computer.`,
       );
+    }
+    if (driver.minimumVersion) {
+      const verdict = compareToMinimum(resolved.version, driver.minimumVersion);
+      if (verdict === 'below') {
+        throw new RuntimeStartResolveError(
+          'runtime_version_unsupported',
+          `${label} ${parsedVersion(resolved.version)} is not supported. Update to ${driver.minimumVersion} or newer.`,
+        );
+      }
+      if (verdict === 'unknown') {
+        this.logger.warn(
+          { runtime: runtimeKind, minimum: driver.minimumVersion },
+          'runtime_start: CLI version unknown; starting without the version gate',
+        );
+      }
     }
     const binary = resolved.binary;
     // #task:1909 — pin version-derived driver capabilities (qoder's

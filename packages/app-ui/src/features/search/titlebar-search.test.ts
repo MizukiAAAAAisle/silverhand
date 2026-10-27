@@ -3,6 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { SearchIdentities } from "@silverhand/shared";
 import { TitlebarSearch } from "./titlebar-search";
+import { t } from "@/lib/i18n";
 
 const state = vi.hoisted(() => ({
   identities: undefined as SearchIdentities | undefined,
@@ -34,6 +35,10 @@ vi.mock("@/features/search/hooks", () => ({
 }));
 vi.mock("@/features/agents/hooks/hooks", () => ({ useAgents: () => ({ data: [] }) }));
 vi.mock("@/features/direct-pairs/hooks", () => ({ useDirectPairs: () => [] }));
+vi.mock("@/features/conversations/latest/use-recent-conversations", () => ({
+  useRecentConversations: () => [],
+}));
+vi.mock("@/features/users/avatar-hooks", () => ({ useUserAvatarObjectUrls: () => new Map() }));
 vi.mock("@/features/agents/hooks/avatar-hooks", () => ({
   useAgentAvatarObjectUrls: () => new Map(),
 }));
@@ -105,7 +110,7 @@ it("uses server identities for titlebar rows and typed DM navigation with an emp
 it("shows search failure instead of presenting stale identities or a false no-results state", () => {
   state.error = true;
   const html = renderToStaticMarkup(createElement(TitlebarSearch, { nav }));
-  expect(html).toContain("Search failed");
+  expect(html).toContain(t("search.searchFailed"));
   expect(html).not.toContain("Discover Human");
-  expect(html).not.toContain("No results");
+  expect(html).not.toContain(t("search.noResults"));
 });

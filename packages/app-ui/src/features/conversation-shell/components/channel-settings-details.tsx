@@ -3,6 +3,7 @@ import { ArchiveIcon, LeaveIcon, LockIcon, SpinnerIcon, UnarchiveIcon, UnlockIco
 import type { ChannelLeaveBlockedReason, ConversationVisibility } from "@silverhand/shared";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { t } from "@/lib/i18n";
 
 const SECTION_TITLE_CLASS = "text-xs font-semibold uppercase tracking-wide text-text-secondary";
 const ROW_CLASS = "flex min-h-10 w-full items-center gap-2.5 px-3 py-2 text-left text-xs";
@@ -48,11 +49,11 @@ interface ChannelSettingsDetailsProps {
 function leaveBlockedCopy(reason: ChannelLeaveBlockedReason | null | undefined): string | null {
   switch (reason) {
     case "channel_owner":
-      return "As the owner, you can't leave this channel.";
+      return t("conversationShell.asTheOwnerYou");
     case "last_human_member":
-      return "As the last member, you can't leave this channel.";
+      return t("conversationShell.asTheLastMember");
     case "channel_archived":
-      return "Restore the channel before leaving.";
+      return t("conversationShell.restoreTheChannelBefore");
     default:
       return null;
   }
@@ -166,7 +167,7 @@ export function ChannelSettingsDetails({
       <div className="flex items-center gap-2">
         <Input
           id="channel-settings-name"
-          aria-label="Channel name"
+          aria-label={t("conversationShell.channelName")}
           value={title}
           maxLength={MAX_TITLE_LENGTH}
           spellCheck={false}
@@ -175,7 +176,7 @@ export function ChannelSettingsDetails({
         />
         <Button type="submit" variant="primary" className="shrink-0" disabled={saveDisabled}>
           {saving ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
-          Save
+          {t("common.save")}
         </Button>
       </div>
       {error ? <p className="text-xs text-error">{error}</p> : null}
@@ -194,8 +195,10 @@ export function ChannelSettingsDetails({
           ) : (
             <UnlockIcon className={ROW_ICON_CLASS} />
           )}
-          <span className="min-w-0 flex-1">Visibility</span>
-          <span className="text-text-muted">{isPrivate ? "Private" : "Public"}</span>
+          <span className="min-w-0 flex-1">{t("conversationShell.visibility")}</span>
+          <span className="text-text-muted">
+            {isPrivate ? t("conversationShell.private") : t("conversationShell.public")}
+          </span>
           <Button
             type="button"
             variant="neutral"
@@ -205,7 +208,7 @@ export function ChannelSettingsDetails({
             onClick={() => void handleToggleVisibility()}
           >
             {visSaving ? <SpinnerIcon className="size-3.5 animate-spin" /> : null}
-            {isPrivate ? "Make public" : "Make private"}
+            {isPrivate ? t("conversationShell.makePublic") : t("conversationShell.makePrivate")}
           </Button>
         </div>
       ),
@@ -230,7 +233,9 @@ export function ChannelSettingsDetails({
             <ArchiveIcon className={ROW_ICON_CLASS} />
           )}
           <span className="min-w-0 flex-1">
-            {isArchived ? "Restore channel" : "Archive channel"}
+            {isArchived
+              ? t("conversationShell.restoreChannel")
+              : t("conversationShell.archiveChannel")}
           </span>
         </button>
       ),
@@ -251,15 +256,15 @@ export function ChannelSettingsDetails({
             onClick={() => setLeaveConfirm(true)}
           >
             <LeaveIcon className={ROW_ICON_CLASS} />
-            <span className="min-w-0 flex-1">Leave channel</span>
+            <span className="min-w-0 flex-1">{t("conversationShell.leaveChannel")}</span>
           </button>
           {leaveConfirm ? (
             <div className="flex flex-col gap-2.5 px-3 pb-3">
               <div className="rounded-(--control-radius) bg-(--warning-surface) px-3 py-2.5">
                 <p className="text-sm leading-relaxed text-text-primary">
                   {isPrivate
-                    ? "You won't be able to rejoin unless you're added back."
-                    : "You can rejoin this channel anytime."}
+                    ? t("conversationShell.youWontBeAble")
+                    : t("conversationShell.youCanRejoinThis")}
                 </p>
               </div>
               <div className="flex items-center justify-end gap-2">
@@ -269,7 +274,7 @@ export function ChannelSettingsDetails({
                   disabled={leaving}
                   onClick={() => setLeaveConfirm(false)}
                 >
-                  Cancel
+                  {t("common.cancel")}
                 </Button>
                 <Button
                   variant="destructive-outline"
@@ -282,7 +287,7 @@ export function ChannelSettingsDetails({
                   ) : (
                     <LeaveIcon className="size-3.5" />
                   )}
-                  Leave
+                  {t("conversationShell.leave")}
                 </Button>
               </div>
               {leaveError ? <p className="text-xs text-error">{leaveError}</p> : null}
@@ -293,7 +298,7 @@ export function ChannelSettingsDetails({
         <button type="button" className={ROW_BUTTON_CLASS} disabled>
           <LeaveIcon className={ROW_ICON_CLASS} />
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            Leave channel
+            {t("conversationShell.leaveChannel")}
             {blockedCopy ? <span className="text-text-muted">{blockedCopy}</span> : null}
           </span>
         </button>
@@ -304,9 +309,9 @@ export function ChannelSettingsDetails({
   return (
     <div className="flex flex-col gap-8">
       <section className="flex flex-col gap-3">
-        <h3 className={SECTION_TITLE_CLASS}>Name</h3>
+        <h3 className={SECTION_TITLE_CLASS}>{t("conversationShell.name")}</h3>
         {renameNode ?? <p className="text-sm font-medium">{currentTitle}</p>}
-        {isArchived ? <p className="mt-2 text-xs text-text-muted">Archived</p> : null}
+        {isArchived ? <p className="mt-2 text-xs text-text-muted">{t("common.archived")}</p> : null}
       </section>
       {notifications}
       {archiveError ? (
@@ -316,7 +321,7 @@ export function ChannelSettingsDetails({
       ) : null}
       {rows.length > 0 ? (
         <section className="flex flex-col gap-3">
-          <h3 className={SECTION_TITLE_CLASS}>Channel</h3>
+          <h3 className={SECTION_TITLE_CLASS}>{t("conversationShell.channel")}</h3>
           <div
             data-settings-group
             className="flex flex-col divide-y divide-border-subtle overflow-hidden rounded-(--card-radius) border border-border-subtle bg-bg-floating"

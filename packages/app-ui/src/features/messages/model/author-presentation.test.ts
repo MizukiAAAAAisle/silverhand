@@ -8,6 +8,7 @@ import {
   isSameAuthorGroup,
   presentAuthor,
 } from "./author-presentation";
+import { t } from "@/lib/i18n";
 
 const activeAgent: MessageAuthorDto = {
   kind: "agent",
@@ -96,7 +97,7 @@ describe("presentAuthor", () => {
   it('unresolved agent → "Unknown agent", NO deleted marker, neutral avatar, NOT navigable', () => {
     const p = presentAuthor(unresolvedAgent);
     expect(p).toMatchObject({
-      label: "Unknown agent",
+      label: t("messages.unknownAgent"),
       kind: "agent",
       status: "unresolved",
       isDeleted: false,
@@ -106,7 +107,7 @@ describe("presentAuthor", () => {
   });
 
   it('unresolved user → "Unknown user"', () => {
-    expect(presentAuthor(unresolvedUser).label).toBe("Unknown user");
+    expect(presentAuthor(unresolvedUser).label).toBe(t("messages.unknownUser"));
   });
 });
 
@@ -146,7 +147,7 @@ describe("authorStateLabel", () => {
   });
 
   it('an unresolved author is "Unknown …", NEVER "(deleted account)"', () => {
-    expect(authorStateLabel(presentAuthor(unresolvedAgent))).toBe("Unknown agent");
+    expect(authorStateLabel(presentAuthor(unresolvedAgent))).toBe(t("messages.unknownAgent"));
   });
 });
 

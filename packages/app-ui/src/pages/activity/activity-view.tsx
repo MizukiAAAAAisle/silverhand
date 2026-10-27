@@ -1,6 +1,7 @@
 import { useListReadingPosition } from "@/navigation/view-memory";
+import { plainTextFromMarkdown } from "@/lib/plain-text-from-markdown";
 import { useMemo, useState } from "react";
-import { ActivityIcon, CheckIcon, ThreadIcon, WarningIcon } from "@/icons";
+import { ActivityIcon, CheckAllIcon, CheckIcon, ThreadIcon, WarningIcon } from "@/icons";
 import type { ActivityItemDto, MessageAuthorDto, AgentDto } from "@silverhand/shared";
 import { WorkspaceIcon } from "@/components/workspace-icon";
 import { CollectionItemCard } from "@/components/layout/collection-item-card";
@@ -20,11 +21,18 @@ import type { CounterpartPresentation } from "@/features/direct-pairs/counterpar
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import type { AgentAvatarSource } from "@/features/agents/hooks/avatar-hooks";
-import { useActivity, useClearActivityItem } from "@/features/attention/hooks";
+import {
+  useActivity,
+  useClearActivityItem,
+  useMarkActivityAllRead,
+} from "@/features/attention/hooks";
 import { activityItemSource } from "@/features/attention/observe";
 import { ActivityListSkeleton } from "./activity-list-skeleton";
 import type { MessageJumpTarget } from "@/features/channels/use-message-jump-controller";
 import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
+import { iconMarkup } from "@/components/layout/native-page-bar";
+import { useCompactLayout } from "@/navigation/layout";
+import { t } from "@/lib/i18n";
 
 /**
  * Activity — the human's "queue waiting on me" (#task:1227). Read-side
@@ -65,10 +73,9 @@ import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
  *   - mention / agent_failed (directed) → mark the `notification_id` read.
  *   - unread (ambient)                  → advance the stream cursor via an
  *     EXPLICIT stream-head clear (#task:1231 phase B; knowingly tail-swallows, §2).
- *   Each row exposes a hover-✓ that clears WITHOUT navigating. (A header
- *   "Mark all read" that batched the visible list in one `observe()` call was
- *   removed from the UI — #task:1446 — pending a new home; `useMarkActivityAllRead`
- *   and its batch semantics are kept for when it returns.) Navigating to a source
+ *   Each row exposes a hover-✓ that clears WITHOUT navigating. The header's
+ *   mark-all clears the whole list regardless of the active filter, plus every
+ *   unread directed notification the list cannot show. Navigating to a source
  *   still clears it too (directed on click; ambient via open-time mark-read).
  *
  * `kind=task` is intentionally NOT in Activity v1:
@@ -81,10 +88,10 @@ import { PaneHeader, PaneShell } from "../../components/layout/pane-shell";
 
 type FilterKey = "all" | "mention" | "thread";
 
-const FILTERS: { key: FilterKey; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "mention", label: "Mentions" },
-  { key: "thread", label: "Threads" },
+const filterTabs = (): { key: FilterKey; label: string }[] => [
+  { key: "all", label: t("activity.all") },
+  { key: "mention", label: t("activity.mentions") },
+  { key: "thread", label: t("activity.threads") },
 ];
 
 /** Namespaced key into Activity's ONE avatar object-url batch. A face's identity
@@ -350,6 +357,8 @@ export function ActivityView({
 }: ActivityViewProps): JSX.Element {
   const readingPosition = useListReadingPosition("activity-list");
   const { data, isLoading, isError } = useActivity();
+  const markAllRead = useMarkActivityAllRead();
+  const compact = useCompactLayout();
   const [filter, setFilter] = useState<FilterKey>("all");
 
   const items = data?.items ?? [];
@@ -426,16 +435,47 @@ export function ActivityView({
   const directed = filtered.filter((it) => it.salience === "directed");
   const ambient = filtered.filter((it) => it.salience === "ambient");
 
+  const markAll = () => markAllRead.mutate(items);
+  const canMarkAll = items.length > 0 && !markAllRead.isPending;
+
   return (
     <PaneShell width={width}>
-      <PaneHeader icon={<ActivityIcon className="size-3.5" />} title="Activity" />
+      <PaneHeader
+        icon={<ActivityIcon className="size-3.5" />}
+        title={t("activity.activity")}
+        trailing={
+          canMarkAll ? (
+            <button
+              type="button"
+              title={t("activity.markAllRead")}
+              aria-label={t("activity.markAllRead")}
+              onClick={markAll}
+              className={
+                compact
+                  ? "ml-auto glass-surface glass-round focus-outline"
+                  : "ml-auto grid size-7 place-items-center rounded-(--control-radius) text-text-muted transition-colors hover:bg-(--bg-option-hover) hover:text-text-primary focus-outline"
+              }
+            >
+              <CheckAllIcon size={compact ? 20 : 16} />
+            </button>
+          ) : undefined
+        }
+        nativeActions={[
+          canMarkAll
+            ? {
+                id: "mark-all-read",
+                label: t("activity.markAllRead"),
+                icon: iconMarkup(CheckAllIcon),
+                run: markAll,
+              }
+            : null,
+        ]}
+      />
 
       {/* Filter chips. Selected chips use the theme selection token, never a
-          semantic hue (they must not steal the items' volume budget). (The
-          "Mark all read" action was removed from the UI — #task:1446 — pending a
-          new home; `useMarkActivityAllRead` + the observe machinery are kept.) */}
+          semantic hue (they must not steal the items' volume budget). */}
       <div className="flex shrink-0 items-center gap-1.5 px-4 py-2">
-        {FILTERS.map((f) => {
+        {filterTabs().map((f) => {
           const on = f.key === filter;
           return (
             <button
@@ -467,16 +507,16 @@ export function ActivityView({
           // empty queue.
           <div className="flex flex-col items-center gap-1.5 py-16 text-center">
             <span className="font-serif text-base font-semibold text-text-secondary">
-              Couldn't load Activity
+              {t("activity.couldntLoadActivity")}
             </span>
-            <span className="text-sm text-text-muted">Check your connection and retry</span>
+            <span className="text-sm text-text-muted">{t("activity.checkYourConnectionAnd")}</span>
           </div>
         ) : filtered.length === 0 ? (
           items.length === 0 ? (
             // The whole queue is empty — genuinely caught up.
             <div className="flex flex-col items-center gap-1.5 py-16 text-center">
               <span className="font-serif text-base font-semibold text-text-secondary">
-                All caught up
+                {t("activity.allCaughtUp")}
               </span>
             </div>
           ) : (
@@ -484,7 +524,7 @@ export function ActivityView({
             // whole queue is empty.
             <div className="flex flex-col items-center gap-1.5 py-16 text-center">
               <span className="font-serif text-base font-semibold text-text-secondary">
-                No {FILTERS.find((f) => f.key === filter)?.label.toLowerCase()}
+                {t(`activity.emptyFilter.${filter}`)}
               </span>
             </div>
           )
@@ -492,7 +532,7 @@ export function ActivityView({
           <div className="flex flex-col gap-5">
             {directed.length > 0 ? (
               <ActivitySection
-                label="Requires attention"
+                label={t("activity.requiresAttention")}
                 items={directed}
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
@@ -503,7 +543,7 @@ export function ActivityView({
             ) : null}
             {ambient.length > 0 ? (
               <ActivitySection
-                label="Subscribed"
+                label={t("activity.subscribed")}
                 items={ambient}
                 workspaceRefById={workspaceRefById}
                 agentsById={agentsById}
@@ -640,7 +680,7 @@ function ActivityRow({
   const countEl =
     item.unread_count != null && item.unread_count > 0 ? (
       <span className="shrink-0 rounded-(--control-radius) bg-accent-soft px-1.5 py-px text-xs font-medium leading-tight tabular-nums text-accent">
-        {item.unread_count > 99 ? "99+" : item.unread_count} new
+        {t("activity.newCount", { n: item.unread_count > 99 ? "99+" : item.unread_count })}
       </span>
     ) : null;
 
@@ -723,14 +763,14 @@ function ActivityRow({
             <div className="mt-1 flex items-center gap-2">
               <ThreadIcon aria-hidden className="size-3.5 shrink-0 text-text-muted" />
               <span className="min-w-0 flex-1 truncate text-sm text-text-muted">
-                {item.thread_root_preview}
+                {plainTextFromMarkdown(item.thread_root_preview ?? "")}
               </span>
             </div>
           ) : (
             <SenderMessageLine
               sender={sender}
               objectUrl={senderObjectUrl}
-              content={item.preview ?? location.label}
+              content={item.preview ? plainTextFromMarkdown(item.preview) : location.label}
             />
           )}
 
@@ -740,7 +780,7 @@ function ActivityRow({
             <SenderMessageLine
               sender={sender}
               objectUrl={senderObjectUrl}
-              content={item.preview}
+              content={item.preview ? plainTextFromMarkdown(item.preview) : null}
               className="mt-0.5"
             />
           ) : null}
@@ -761,8 +801,8 @@ function ActivityRow({
           // whole item's vertical center regardless of text-row count.
           <button
             type="button"
-            title="Mark as read"
-            aria-label="Mark as read"
+            title={t("activity.markAsRead")}
+            aria-label={t("activity.markAsRead")}
             onClick={(e) => {
               e.stopPropagation();
               clearItem.mutate(clearSource);

@@ -157,6 +157,24 @@
     "expected_body": { "error": "workspace is not provisioned on the daemon host", "code": "workspace_not_provisioned" }
   },
   {
+    "name": "runtime_binary_missing",
+    "route": "start",
+    "setup": "normal",
+    "provider": "start_runtime_binary_missing",
+    "body": null,
+    "expected_status": 409,
+    "expected_body": { "error": "Pi is not installed on this computer.", "code": "runtime_binary_missing" }
+  },
+  {
+    "name": "runtime_version_unsupported",
+    "route": "start",
+    "setup": "normal",
+    "provider": "start_runtime_version_unsupported",
+    "body": null,
+    "expected_status": 409,
+    "expected_body": { "error": "Grok Build 1.0.23 is not supported. Update to 1.0.24 or newer.", "code": "runtime_version_unsupported" }
+  },
+  {
     "name": "workspace_bundle_missing",
     "route": "start",
     "setup": "normal",

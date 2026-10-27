@@ -1,0 +1,21 @@
+export const conversations = {
+  addMemberToThis: "Add member to this conversation",
+  addMember: "Add member",
+  agents: "AGENTS",
+  humans: "HUMANS",
+  searchMembersOrAdd: "Search members or add someone",
+  everyoneIsAlreadyIn: "Everyone is already in this conversation",
+  youHaveNoAgents: "You have no agents left to add",
+  onlyThePersonWho: "Only the person who created this agent can bring it into the project.",
+  youCanOnlyAdd:
+    "You can only add agents you created. Someone else's needs its creator, or a project admin once it is in this project.",
+  itsComputerIsNot: "Its computer is not connected yet.",
+  thisCandidateNoLonger: "This candidate no longer exists.",
+  severalCandidatesShareThis: "Several candidates share this handle.",
+  thisConversationsMembersAre: "This conversation's members are fixed and can't be changed.",
+  thisConversationIsClosed: "This conversation is closed. Members can't be added.",
+  youDontHavePermission: "You don't have permission to add members here.",
+  thisConversationNoLonger: "This conversation no longer exists.",
+  cantAddTheMember: "Can't add the member. Try again.",
+  addFailedStatus: "Can't add the member (HTTP {status}).",
+} as const;

@@ -68,9 +68,7 @@ export const ClientInfoSchema = z
     app_version: z
       .string()
       .max(40)
-      .regex(
-        /^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?(?:\+[0-9A-Za-z.-]{1,32})?$/,
-      ),
+      .regex(/^\d{1,6}\.\d{1,6}\.\d{1,6}(?:-[0-9A-Za-z.-]{1,32})?(?:\+[0-9A-Za-z.-]{1,32})?$/),
     /** Full 40-hex commit sha, or the `dev` sentinel for un-stamped dev builds. */
     build_commit: z.string().regex(/^(dev|[0-9a-f]{40})$/),
     /** True iff the packaged tree had uncommitted changes at build time. */
@@ -119,10 +117,7 @@ export const ClientInfoSchema = z
       });
       return;
     }
-    if (
-      hasEpoch &&
-      value.minimum_server_api_epoch! > value.desktop_api_epoch!
-    ) {
+    if (hasEpoch && value.minimum_server_api_epoch! > value.desktop_api_epoch!) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'minimum_server_api_epoch must not exceed desktop_api_epoch',
@@ -158,9 +153,7 @@ export function serializeClientInfoHeader(info: ClientInfo): string {
  * Size is measured with `TextEncoder` (not Node `Buffer`) to keep this module
  * host-agnostic per the `@silverhand/shared` boundary.
  */
-export function parseClientInfoHeader(
-  raw: string | string[] | undefined,
-): ClientInfoParseResult {
+export function parseClientInfoHeader(raw: string | string[] | undefined): ClientInfoParseResult {
   if (raw === undefined) return { status: 'missing' };
   // A repeated header arrives as an array — treat as malformed, not "pick one".
   if (Array.isArray(raw)) return { status: 'invalid' };
@@ -176,7 +169,5 @@ export function parseClientInfoHeader(
     return { status: 'invalid' };
   }
   const result = ClientInfoSchema.safeParse(parsed);
-  return result.success
-    ? { status: 'valid', value: result.data }
-    : { status: 'invalid' };
+  return result.success ? { status: 'valid', value: result.data } : { status: 'invalid' };
 }

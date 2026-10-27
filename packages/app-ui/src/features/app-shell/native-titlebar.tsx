@@ -1,12 +1,16 @@
 import { useEffect, useRef } from "react";
 import type { TitlebarCapability } from "@silverhand/client";
 import { NativeTitlebarSearch, type TitlebarSearchNav } from "@/features/search/titlebar-search";
+import { runTitlebarAction, useTitlebarActions } from "@/components/layout/titlebar-actions";
+import { t, useLocale } from "@/lib/i18n";
 
 /**
  * The wide layout's titlebar when the platform draws it natively (iOS). The
  * page keeps the state and the search results; the system bar shows the
  * sidebar toggle, the archive status and the search field above the page's
- * top safe area, and this spacer clears it (`--native-bar-bottom`).
+ * top safe area, and this spacer clears it (`--native-bar-bottom`). On an
+ * open iPhone Duo the vertical bar carries them instead and the spacer only
+ * clears the display's rounded corner.
  */
 export function NativeTitlebar({
   titlebar,
@@ -24,8 +28,10 @@ export function NativeTitlebar({
   searchNav: TitlebarSearchNav;
   darkFrame: boolean;
 }): JSX.Element {
+  const locale = useLocale();
   const toggleRef = useRef(onToggleSidebar);
   toggleRef.current = onToggleSidebar;
+  const actions = useTitlebarActions();
 
   useEffect(() => {
     void titlebar
@@ -33,19 +39,25 @@ export function NativeTitlebar({
         sidebar:
           sidebarShown === null
             ? null
-            : { shown: sidebarShown, label: sidebarShown ? "Hide sidebar" : "Show sidebar" },
-        status: archived ? "Archived" : null,
-        searchPlaceholder: "Search everything",
-        searchShortcut: "Search",
+            : {
+                shown: sidebarShown,
+                label: sidebarShown ? t("appShell.hideSidebar") : t("appShell.showSidebar"),
+              },
+        status: archived ? t("common.archived") : null,
+        searchPlaceholder: t("appShell.searchEverything"),
+        searchShortcut: t("common.search"),
         dark: darkFrame,
+        actions,
       })
       .catch(() => {});
-  }, [titlebar, sidebarShown, archived, darkFrame]);
+  }, [locale, titlebar, sidebarShown, archived, darkFrame, actions]);
 
   useEffect(() => {
     const listening = titlebar.subscribe((event) => {
       if (event.kind === "toggleSidebar") {
         toggleRef.current();
+      } else if (event.kind === "action") {
+        runTitlebarAction(event.id);
       }
     });
 
@@ -56,7 +68,10 @@ export function NativeTitlebar({
   }, [titlebar]);
 
   return (
-    <div className="h-(--native-bar-bottom,env(safe-area-inset-top,0px)) shrink-0">
+    <div
+      data-native-titlebar
+      className="h-(--native-bar-bottom,env(safe-area-inset-top,0px)) shrink-0"
+    >
       <NativeTitlebarSearch nav={searchNav} titlebar={titlebar} />
     </div>
   );

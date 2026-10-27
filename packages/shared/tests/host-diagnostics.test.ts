@@ -74,37 +74,51 @@ describe('buildHostDiagnosticsText', () => {
     };
     input.auth_token = 'top-level-token-value';
     input.error_message = 'GET https://example.invalid?connect_token=token-value failed';
-    (input.app as typeof input.app & {
-      auth_token: string;
-      refresh_token: string;
-    }).auth_token = 'backend-auth-value';
-    (input.app as typeof input.app & {
-      auth_token: string;
-      refresh_token: string;
-    }).refresh_token = 'backend-refresh-value';
-    (input.computer as typeof input.computer & {
-      host_token: string;
-      connect_token: string;
-    }).host_token = 'host-token-value';
-    (input.computer as typeof input.computer & {
-      host_token: string;
-      connect_token: string;
-    }).connect_token = 'connect-token-value';
-    (input.status!.agents[0] as HostDiagnosticsStatusInput['agents'][number] & {
-      agent_id: string;
-      display_name: string;
-      bearer: string;
-    }).agent_id = 'agent-id-value';
-    (input.status!.agents[0] as HostDiagnosticsStatusInput['agents'][number] & {
-      agent_id: string;
-      display_name: string;
-      bearer: string;
-    }).display_name = 'Agent Display Name';
-    (input.status!.agents[0] as HostDiagnosticsStatusInput['agents'][number] & {
-      agent_id: string;
-      display_name: string;
-      bearer: string;
-    }).bearer = 'agent-bearer-value';
+    (
+      input.app as typeof input.app & {
+        auth_token: string;
+        refresh_token: string;
+      }
+    ).auth_token = 'backend-auth-value';
+    (
+      input.app as typeof input.app & {
+        auth_token: string;
+        refresh_token: string;
+      }
+    ).refresh_token = 'backend-refresh-value';
+    (
+      input.computer as typeof input.computer & {
+        host_token: string;
+        connect_token: string;
+      }
+    ).host_token = 'host-token-value';
+    (
+      input.computer as typeof input.computer & {
+        host_token: string;
+        connect_token: string;
+      }
+    ).connect_token = 'connect-token-value';
+    (
+      input.status!.agents[0] as HostDiagnosticsStatusInput['agents'][number] & {
+        agent_id: string;
+        display_name: string;
+        bearer: string;
+      }
+    ).agent_id = 'agent-id-value';
+    (
+      input.status!.agents[0] as HostDiagnosticsStatusInput['agents'][number] & {
+        agent_id: string;
+        display_name: string;
+        bearer: string;
+      }
+    ).display_name = 'Agent Display Name';
+    (
+      input.status!.agents[0] as HostDiagnosticsStatusInput['agents'][number] & {
+        agent_id: string;
+        display_name: string;
+        bearer: string;
+      }
+    ).bearer = 'agent-bearer-value';
 
     const text = buildHostDiagnosticsText(input);
 

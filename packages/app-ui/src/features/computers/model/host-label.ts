@@ -1,5 +1,6 @@
 import { HOST_DISPLAY_LABEL_MAX_LENGTH, UpdateHostInputSchema } from "@silverhand/shared";
 import type { ZodError } from "zod";
+import { t } from "@/lib/i18n";
 
 /**
  * Client-side gate for every computer-name write (#task:1849).
@@ -35,7 +36,7 @@ export function rejectHostLabel(candidate: string | null): string | null {
 function describeRejection(error: ZodError<unknown>): string {
   const code = error.issues[0]?.code;
   if (code === "too_big") {
-    return `Computer name is limited to ${HOST_DISPLAY_LABEL_MAX_LENGTH} characters.`;
+    return t("computers.nameTooLong", { max: HOST_DISPLAY_LABEL_MAX_LENGTH });
   }
-  return "That computer name cannot be used.";
+  return t("computers.thatComputerNameCannot");
 }
