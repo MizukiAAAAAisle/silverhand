@@ -9,8 +9,8 @@ android {
         applicationId = "com.silverhand.android.stage1"
         minSdk = 28
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1-stage1"
+        versionCode = 2
+        versionName = "0.2-stage1"
         ndk { abiFilters += "arm64-v8a" }
         testInstrumentationRunner = "com.silverhand.android.B1Instrumentation"
     }
@@ -19,7 +19,7 @@ android {
     // internally signed acceptance variant, without adding product endpoints.
     testBuildType = "acceptance"
     buildTypes {
-        getByName("debug") { buildConfigField("boolean", "ACCEPTANCE", "true") }
+        getByName("debug") { buildConfigField("boolean", "ACCEPTANCE", "false") }
         getByName("release") {
             buildConfigField("boolean", "ACCEPTANCE", "false")
             isMinifyEnabled = true
@@ -41,7 +41,6 @@ android {
             layout.buildDirectory.dir("web-assets").get().asFile,
             layout.buildDirectory.dir("core-assets").get().asFile,
         )
-        getByName("debug").assets.srcDir(layout.buildDirectory.dir("acceptance-assets").get().asFile)
         getByName("acceptance").assets.srcDir(layout.buildDirectory.dir("acceptance-assets").get().asFile)
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }

@@ -97,6 +97,8 @@ class SilverhandClientPlugin : Plugin() {
     @PluginMethod fun saveProfile(call: PluginCall) = invoke(call, "saveProfile")
     @PluginMethod fun clearProfile(call: PluginCall) = invoke(call, "clearProfile")
     @PluginMethod fun authState(call: PluginCall) = invoke(call, "authState")
+    @PluginMethod fun serverInfo(call: PluginCall) = invoke(call, "serverInfo")
+    @PluginMethod fun passwordRecovery(call: PluginCall) = invoke(call, "passwordRecovery")
     @PluginMethod fun authenticate(call: PluginCall) = invoke(call, "authenticate")
     @PluginMethod fun logout(call: PluginCall) = invoke(call, "logout")
     @PluginMethod fun request(call: PluginCall) = invoke(call, "request")

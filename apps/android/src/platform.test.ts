@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../../ios/src/bridge', () => ({ nativeBridge: {} }));
 const upstream = {
   client: { marker: 'upstream-auth' },
-  files: { saveAttachment: vi.fn(), openExternal: vi.fn(), sharePngExport: vi.fn() },
+  files: { saveAttachment: vi.fn(), openExternal: vi.fn(), sharePngExport: vi.fn(), previewPngExport: vi.fn() },
   getAppVersion: vi.fn(),
   navigation: {},
   titlebar: {},
@@ -31,5 +31,6 @@ describe('Android stage 1 capability boundary', () => {
     ])
       expect(platform).not.toHaveProperty(capability);
     expect(platform.files.sharePngExport).toBe(upstream.files.sharePngExport);
+    expect(platform.files).not.toHaveProperty('previewPngExport');
   });
 });

@@ -56,6 +56,8 @@ private final class StorageAdapter: SessionStore {
         case "saveProfile": return try await session.saveProfile(text("serverUrl"))
         case "clearProfile": return ["cleared": try session.clearProfile()]
         case "authState": return try await session.authState()
+        case "serverInfo": return try await session.serverInfo()
+        case "passwordRecovery": return try await session.passwordRecovery(action: text("action"), body: text("body", "{}"))
         case "authenticate": return try await session.authenticate(action: text("action"), body: text("body", "{}"))
         case "logout": try await session.logout(); return [:]
         case "request": return try await session.proxy(path: text("path"), method: text("method", "GET"), body: a["bodyText"] as? String, headers: a["headers"] as? [String: String] ?? [:], binary: text("responseType") == "arrayBuffer")

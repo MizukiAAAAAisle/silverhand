@@ -9,7 +9,13 @@ export function createAndroidPlatform(reset: () => void): ClientPlatform {
   const mobile = createIOSPlatform(nativeBridge, reset);
   return {
     client: mobile.client,
-    files: mobile.files,
+    files: {
+      openExternal: mobile.files.openExternal,
+      saveAttachment: mobile.files.saveAttachment,
+      sharePngExport: mobile.files.sharePngExport,
+      savePngExport: mobile.files.savePngExport,
+      copyPngExport: mobile.files.copyPngExport,
+    },
     getAppVersion: mobile.getAppVersion,
     systemBack: createSystemBack(),
   };
