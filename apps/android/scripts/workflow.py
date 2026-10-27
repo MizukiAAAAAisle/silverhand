@@ -600,6 +600,7 @@ def boot(run, log_path=None):
                '-port', '5584', '-no-window', '-no-audio', '-no-snapshot', '-gpu', 'host']
     log = log_path.open('a') if log_path is not None else (run / 'emulator.log').open('x')
     process = subprocess.Popen(command, cwd=REPO, env=ENV, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+    process.silverhand_emulator_pgid = process.pid  # start_new_session binds this group's identity at spawn.
     try:
         deadline = time.monotonic() + 180
         while time.monotonic() < deadline:
@@ -608,7 +609,7 @@ def boot(run, log_path=None):
             try:
                 if adb('shell', 'getprop', 'sys.boot_completed') == '1':
                     config = (Path(ENV['ANDROID_AVD_HOME']) / 'silverhand_stage1_api36.avd/config.ini').read_text()
-                    write(run / 'emulator.json', {'status': 'booted', 'pid': process.pid, 'command': command,
+                    write(run / 'emulator.json', {'status': 'booted', 'pid': process.pid, 'pgid': process.silverhand_emulator_pgid, 'command': command,
                         'repository_cwd': str(REPO), 'ANDROID_AVD_HOME': ENV['ANDROID_AVD_HOME'], 'serial': ENV['ANDROID_SERIAL'],
                         'boot_completed': '1', 'fingerprint': adb('shell', 'getprop', 'ro.build.fingerprint'),
                         'webview': adb('shell', 'dumpsys', 'webviewupdate'),
@@ -631,16 +632,49 @@ def boot(run, log_path=None):
 
 
 def stop_emulator(process, log):
+    # One stop deadline covers parent exit and the actual spawn-owned group.
+    deadline = time.monotonic() + 30
+    report = {'pid': process.pid, 'pgid': getattr(process, 'silverhand_emulator_pgid', None),
+              'budget_seconds': 30, 'status': 'running', 'group_samples': []}
+    primary = None
+    def remaining():
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError('Owned emulator stop deadline; last group: ' + str(report['group_samples'][-1:]))
+        return value
     try:
+        assert type(report['pgid']) is int and report['pgid'] > 1 and report['pgid'] == process.pid, 'Missing spawn-owned emulator group'
         if process.poll() is None:
             try:
-                adb('emu', 'kill')
-                process.wait(timeout=20)
+                command = [str(Path(ENV['ANDROID_HOME']) / 'platform-tools/adb'), '-s', ENV['ANDROID_SERIAL'], 'emu', 'kill']
+                result = subprocess.run(command, capture_output=True, text=True, env=ENV, cwd=REPO,
+                                        timeout=min(10, remaining()), check=True)
+                report['adb_stop'] = {'command': command, 'exit': result.returncode, 'stdout': result.stdout, 'stderr': result.stderr}
+                process.wait(timeout=min(20, remaining()))
             except (subprocess.SubprocessError, OSError):
                 process.terminate()
-                process.wait(timeout=10)
+                process.wait(timeout=min(10, remaining()))
+        while True:
+            members = group_members(report['pgid'], include_zombies=True, timeout=min(3, remaining()))
+            report['group_samples'].append({'at': time.monotonic(), 'members': members})
+            remaining()  # A late empty response does not satisfy the deadline.
+            if not members:
+                break
+            time.sleep(min(.1, remaining()))
+        report['status'] = 'passed'
+    except BaseException as error:
+        primary = error
+        report.update(status='failed', error={'type': type(error).__name__, 'message': str(error)})
+        raise
     finally:
-        log.close()
+        try:
+            log.write('\nEMULATOR_STOP ' + json.dumps(report) + '\n')
+            log.flush()
+        except Exception:
+            if primary is None:
+                raise
+        finally:
+            log.close()
 
 
 def prepared_ca_check(run):
@@ -799,9 +833,9 @@ def finish_b2_packages(run, inputs, evidence=None):
                                   'actual_apk': apk_artifact_check(run)})
 
 
-def group_members(group):
-    probe = subprocess.run(['ps', '-axo', 'pid=,pgid=,stat='], capture_output=True, text=True, env=ENV, timeout=3, check=True)
-    return [int(fields[0]) for line in probe.stdout.splitlines() if len(fields := line.split()) == 3 and int(fields[1]) == group and not fields[2].startswith('Z')]
+def group_members(group, *, include_zombies=False, timeout=3):
+    probe = subprocess.run(['ps', '-axo', 'pid=,pgid=,stat='], capture_output=True, text=True, env=ENV, timeout=timeout, check=True)
+    return [int(fields[0]) for line in probe.stdout.splitlines() if len(fields := line.split()) == 3 and int(fields[1]) == group and (include_zombies or not fields[2].startswith('Z'))]
 
 
 def record_entry(command, out, timeout=1200, grace=(10, 5, 5)):

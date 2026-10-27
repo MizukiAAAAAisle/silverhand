@@ -3,7 +3,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync,writeFileSync,mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { join,resolve } from 'node:path';
 const source=readFileSync(new URL('./acceptance.mjs',import.meta.url),'utf8');
 const start=source.indexOf("let newOrigin;\nif (suite === 'b3') {");
 const end=source.indexOf('const coverage=coverageMetadata',start);
@@ -19,15 +19,21 @@ if(process.env.T2_ENTRY_CONTROL_EVIDENCE){
  writeFileSync(join(process.env.T2_ENTRY_CONTROL_EVIDENCE,'actual-dispatch.js'),dispatch+'\n');
 }
 const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
-const execute=new AsyncFunction('assert','suite','report','unit','selection','active','runB3','c','api','call','adb','input','serial','out','token','fixture',preflight+'\n'+dispatch);
+const execute=new AsyncFunction('assert','suite','report','unit','selection','active','runB3','c','api','call','adb','input','serial','out','token','fixture','resolve',preflight+'\n'+dispatch);
 async function entry(unit,origin,runner){
  const ids=['PRE.controlled'];const data={suite:'b3',unit,selection:{selected_ids:ids},bindings:{packages:{product:{sha256:'controlled'}},reviewed_binding:{path:'/controlled/binding'}}};
  if(origin!==undefined)data.bindings.product_origin=origin;
- return execute(assert,'b3',{data,step:()=>{},observe:()=>{}},unit,undefined,ids,runner,{},()=>{throw Error('Unexpected API');},()=>{throw Error('Unexpected bridge');},()=>{throw Error('Unexpected ADB');},()=>{throw Error('Unexpected input');},'controlled','/controlled/out','controlled',{userId:'A'});
+ return execute(assert,'b3',{data,step:()=>{},observe:()=>{}},unit,undefined,ids,runner,{},()=>{throw Error('Unexpected API');},()=>{throw Error('Unexpected bridge');},()=>{throw Error('Unexpected ADB');},()=>{throw Error('Unexpected input');},'controlled','/controlled/out','controlled',{userId:'A'},resolve);
 }
 test('actual entry preflight and dispatch pass the same new T2 origin object',async()=>{
- const origin={kind:'t2-renewed-ca-asset-origin-v1',server_certificate_der_sha256:'1'.repeat(64)};let calls=0;
- await entry('task-write',origin,async context=>{calls++;assert.equal(context.unit,'task-write');assert.equal(context.newOrigin,origin);});assert.equal(calls,1);
+ for(const origin of [{kind:'t2-renewed-ca-asset-origin-v1',server_certificate_der_sha256:'1'.repeat(64)},{kind:'source-built-acceptance-origin-v1',CA_asset_only_derivation:false,source_build_binding:{path:'/controlled/build/b2-binding.json',sha256:'2'.repeat(64)}}]){
+  let calls=0;await entry('task-write',origin,async context=>{calls++;assert.equal(context.unit,'task-write');assert.equal(context.newOrigin,origin);});assert.equal(calls,1);
+ }
+});
+test('actual source-built entry refuses incomplete binding before runner/business',async()=>{
+ for(const patch of [{},{CA_asset_only_derivation:true,source_build_binding:{path:'/controlled/b2-binding.json',sha256:'2'.repeat(64)}},{CA_asset_only_derivation:false,source_build_binding:{path:'relative.json',sha256:'2'.repeat(64)}},{CA_asset_only_derivation:false,source_build_binding:{path:'/controlled/b2-binding.json',sha256:'short'}}]){
+  let calls=0;await assert.rejects(entry('task-write',{kind:'source-built-acceptance-origin-v1',...patch},async()=>{calls++;}),/Source build entry binding required/);assert.equal(calls,0);
+ }
 });
 test('actual entry refuses missing or wrong T2 kind before runner/business',async()=>{
  for(const origin of [undefined,{}, {kind:'fixed-f7-ca-asset-origin-v1'}, {kind:'t2-renewed-ca-asset-origin-v2'}]){

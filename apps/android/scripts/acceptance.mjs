@@ -64,9 +64,13 @@ if (suite === 'b3') {
   assert.deepEqual(report.data.selection?.selected_ids, active, 'B3 selected cases changed');
   assert(report.data.bindings?.packages?.product && report.data.bindings?.reviewed_binding, 'Missing B3 package/source binding');
   newOrigin = report.data.bindings?.product_origin ?? undefined;
-  const originKinds = { 'task-read': 'fixed-f7-ca-asset-origin-v1', 'task-write': 't2-renewed-ca-asset-origin-v1' };
-  assert(unit !== 'task-write' || newOrigin?.kind === originKinds['task-write'], 'T2 entry requires its new product origin');
-  if (newOrigin) assert(Object.hasOwn(originKinds, unit) && newOrigin.kind === originKinds[unit], 'B3 entry origin unit/kind differs');
+  const originKinds = { 'task-read': ['fixed-f7-ca-asset-origin-v1'], 'task-write': ['t2-renewed-ca-asset-origin-v1', 'source-built-acceptance-origin-v1'] };
+  assert(unit !== 'task-write' || originKinds['task-write'].includes(newOrigin?.kind), 'T2 entry requires its new product origin');
+  if (newOrigin) assert(Object.hasOwn(originKinds, unit) && originKinds[unit].includes(newOrigin.kind), 'B3 entry origin unit/kind differs');
+  if (newOrigin?.kind === 'source-built-acceptance-origin-v1') {
+    const build = newOrigin.source_build_binding;
+    assert(newOrigin.CA_asset_only_derivation === false && typeof build?.path === 'string' && resolve(build.path) === build.path && /^[0-9a-f]{64}$/.test(build.sha256), 'Source build entry binding required');
+  }
 }
 const coverage=coverageMetadata(table,diagnostic);
 if(coverage) assert.deepEqual(report.data.coverage,coverage,'Coverage metadata must match reviewed entry');

@@ -35,7 +35,7 @@ export async function runT2({ c, api, call, adb, input, out, token, fixture, ste
   const state = () => c.evaluate(h.taskStateExpression());
   const until = (name, predicate, read = state) => t2Until(name, predicate, read, { ...clock, unitDeadline: start + 240000, observe });
   function save() { writeFileSync(file + '.next', JSON.stringify(spec), { mode: 0o600 }); renameSync(file + '.next', file); }
-  const click = async (selector, text, name) => { assert(++operations <= 80); return h.searchClick(c, observe, selector, text, name); };
+  const click = async (selector, text, name) => { assert(++operations <= 80); return h.searchClick(c, observe, selector, text, name, { waitUntilReady: read => until(name + '-ready', target => target.ready, read) }); };
   const text = async (selector, value) => { assert(++operations <= 80); await input(selector, value); };
   async function key(key, code, windowsVirtualKeyCode) {
     assert(++operations <= 80); await c.send('Input.dispatchKeyEvent', { type:'keyDown', key, code, windowsVirtualKeyCode });

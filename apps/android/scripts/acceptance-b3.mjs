@@ -147,7 +147,7 @@ export async function completeSearchRestoration({ chats, finalIME, readIdentity,
   });
 }
 
-export async function searchClick(c, observe, selector, text, name) {
+export async function searchClick(c, observe, selector, text, name, { waitUntilReady } = {}) {
   const state = () => c.evaluate(`(${searchPageState.toString()})(document)`);
   let primary;
   const before = await state();
@@ -155,7 +155,16 @@ export async function searchClick(c, observe, selector, text, name) {
     await c.evaluate('delete window.__b2LeftClickTarget');
     // Existing checked-click helper: same-target reference, route and real hit.
     const args = `${JSON.stringify(selector)},${JSON.stringify(text)},${JSON.stringify({ route: before.route })}`;
-    const target = await c.evaluate(`(${leftControlTarget.toString()})(document,${args})`);
+    let last, waitingObserved = false;
+    const readTarget = async () => {
+      last = await c.evaluate(`(${leftControlTarget.toString()})(document,${args})`);
+      if (waitUntilReady && !waitingObserved && !last.ready) { observe(name + '-wait-first', last); waitingObserved = true; }
+      if (waitUntilReady) assert(!last.fatal, 'B3 click identity rejected: ' + last.reason);
+      return last;
+    };
+    let target;
+    try { target = waitUntilReady ? await waitUntilReady(readTarget) : await readTarget(); }
+    catch (error) { if (waitUntilReady && last) observe(name + '-wait-last', last); throw error; }
     observe(name + '-target', target);
     assert(target.ready && !target.fatal, 'B3 click rejected: ' + target.reason);
     const check = await c.evaluate(`(${leftControlTarget.toString()})(document,${args})`);

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import signal
+import ssl
 import subprocess
 import time
 
@@ -25,13 +26,40 @@ def expected_packages(origin, unit='task-read'):
         expected = PRODUCT, TEST
     else:
         # No historical f7 default: a future reviewed binding supplies both identities.
-        assert origin.get('kind') == 't2-renewed-ca-asset-origin-v1', 'T2 origin kind differs'
+        assert origin.get('kind') in {'t2-renewed-ca-asset-origin-v1', 'source-built-acceptance-origin-v1'}, 'T2 origin kind differs'
         product, test = origin['frozen_product'], origin['test']
         assert Path(product['path']).is_absolute() and Path(test['path']).is_absolute(), 'Origin package paths must be absolute'
         assert all(re.fullmatch(r'[0-9a-f]{64}', value) for value in [product['sha256'],test['sha256'],origin['ca_sha256'],origin['server_certificate_der_sha256']]), 'Incomplete new origin identity'
         assert product['sha256'] != PRODUCT, 'T2 requires the new product identity,not historical f7'
+        if origin['kind'] == 'source-built-acceptance-origin-v1':
+            validate_source_build(origin)
         expected = product['sha256'], test['sha256']
     return expected
+
+
+def validate_source_build(origin):
+    """Bind the original build, independently of later acceptance-driver inputs."""
+    reference = origin.get('source_build_binding')
+    assert isinstance(reference, dict), 'Source build binding required'
+    path = Path(reference['path'])
+    assert path.is_absolute() and path.is_file() and not path.is_symlink(), 'Source build binding file differs'
+    assert re.fullmatch(r'[0-9a-f]{64}', reference['sha256']) and hashlib.sha256(path.read_bytes()).hexdigest() == reference['sha256'], 'Source build binding digest differs'
+    build = json.loads(path.read_text())
+    inputs, actual = build['inputs'], build['actual_apk']
+    assert inputs['repository'] and all(re.fullmatch(r'[0-9a-f]{64}', value) for value in inputs['repository'].values()) and re.fullmatch(r'[0-9a-f]{64}', inputs['environment_config']), 'Source build inputs incomplete'
+    assert origin.get('CA_asset_only_derivation') is False, 'Source build cannot be CA-only'
+    for name, item in [('product', origin['frozen_product']), ('test', origin['test'])]:
+        original = build['packages'][name]
+        assert Path(original['path']).is_absolute() and original['sha256'] == item['sha256'], 'Source build package identity differs'
+        assert hashlib.sha256(Path(original['path']).read_bytes()).hexdigest() == item['sha256'], 'Source build package bytes differ'
+    assert actual['apk'] == build['packages']['product']['path'] and actual['apk_sha256'] == origin['frozen_product']['sha256'] and actual['actual_APK_inputs_match'] is True, 'Source build APK evidence differs'
+    assert actual['packaged_input_hashes'] and all(re.fullmatch(r'[0-9a-f]{64}', value) for value in actual['packaged_input_hashes'].values()), 'Source build payload evidence incomplete'
+    assert re.fullmatch(r'[0-9a-f]{64}', actual['core_manifest_sha256']) and hashlib.sha256((path.parent / 'core-build/manifest.json').read_bytes()).hexdigest() == actual['core_manifest_sha256'], 'Source build core manifest differs'
+    assert actual['ca_sha256'] == origin['ca_sha256'], 'Source build CA identity differs'
+    certs = path.parent / 'acceptance/certs'
+    assert hashlib.sha256((certs / 'ca.pem').read_bytes()).hexdigest() == origin['ca_sha256'], 'Source build CA bytes differ'
+    der = ssl.PEM_cert_to_DER_cert((certs / 'server.pem').read_text())
+    assert hashlib.sha256(der).hexdigest() == origin['server_certificate_der_sha256'], 'Source build server DER differs'
 
 
 def instrumentation_terminal(text, returncode, natural_exit):
