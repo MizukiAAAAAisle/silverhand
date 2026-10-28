@@ -151,7 +151,7 @@ def host_resume_inputs(run):
             if path.is_file():
                 inputs[f'{label}/{relative}'] = digest(path)
     for path in [APP / 'toolchain-lock.json', APP / 'scripts/core-extraction.patch',
-                 APP / 'scripts/write-protocol.mjs', REPO / 'pnpm-lock.yaml',
+                 APP / 'scripts/write-protocol.mjs', REPO / 'pnpm-lock.yaml', REPO / 'apps/ios/native-protocol.ts',
                  REPO / 'packages/shared/src/backend-admission.json', REPO / 'packages/shared/src/api/paths.ts']:
         inputs[str(path.relative_to(REPO))] = digest(path)
     inputs['environment-config'] = digest(ENV_ROOT / 'env.sh')

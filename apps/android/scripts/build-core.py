@@ -83,7 +83,7 @@ manifest_path=out/'manifest.json';manifest=json.loads(manifest_path.read_text())
 manifest['extractedSourceHashes']={str(f.relative_to(core)):hashlib.sha256(f.read_bytes()).hexdigest() for f in (core/'Sources').rglob('*') if f.is_file()}
 manifest['packagedLibraryHashes']={f.name:hashlib.sha256(f.read_bytes()).hexdigest() for f in libs.glob('*.so')}
 manifest['generatedBridgeHashes']={str(f.relative_to(dest)):hashlib.sha256(f.read_bytes()).hexdigest() for f in dest.rglob('ClientBridge.kt')}
-inputs=[app/'scripts/core-extraction.patch',app/'scripts/build-core.py',app/'scripts/write-protocol.mjs',app/'native/Package.swift',app/'native/Package.resolved',repo/'pnpm-lock.yaml',repo/'packages/shared/src/backend-admission.json',repo/'packages/shared/src/api/paths.ts']
+inputs=[app/'scripts/core-extraction.patch',app/'scripts/build-core.py',app/'scripts/write-protocol.mjs',app/'native/Package.swift',app/'native/Package.resolved',repo/'pnpm-lock.yaml',repo/'apps/ios/native-protocol.ts',repo/'packages/shared/src/backend-admission.json',repo/'packages/shared/src/api/paths.ts']
 manifest['inputHashes']={str(f.relative_to(repo)):hashlib.sha256(f.read_bytes()).hexdigest() for f in inputs}
 manifest_path.write_text(json.dumps(manifest,indent=2)+'\n')
 print(dest)

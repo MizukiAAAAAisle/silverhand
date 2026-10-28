@@ -208,7 +208,7 @@ class HostResume(unittest.TestCase):
             repo, run = root / 'repo', root / 'run'
             app = repo / 'apps/android'
             (root / 'env.sh').write_text('original environment config')
-            for path in [repo / 'apps/ios/native/Package.swift', app / 'native/Package.swift',
+            for path in [repo / 'apps/ios/native/Package.swift', repo / 'apps/ios/native-protocol.ts', app / 'native/Package.swift',
                          run / 'core-build/core/Package.swift', run / 'core-build/native/Package.swift',
                          app / 'toolchain-lock.json', app / 'scripts/core-extraction.patch',
                          app / 'scripts/write-protocol.mjs', repo / 'pnpm-lock.yaml',
@@ -220,6 +220,8 @@ class HostResume(unittest.TestCase):
                 path.write_text('original')
             for name, code in [('dependencies', 0), ('core', 1)]:
                 w.write(run / 'steps' / (name + '.json'), {'exit_code': code})
+            authority = repo / 'apps/ios/native-protocol.ts'
+            authority.write_text('export function nativeProtocolJson() { return "original"; }\n')
             with patch.object(w, 'REPO', repo), patch.object(w, 'APP', app), patch.object(w, 'ENV_ROOT', root):
                 baseline = {'run': str(run), 'inputs': w.host_resume_inputs(run),
                             'first_evidence': {n: w.digest(run / n) for n in
@@ -228,11 +230,14 @@ class HostResume(unittest.TestCase):
                                 ['core-build/native/.build/plugins/cache/skipstone',
                                  'core-build/native/.build/plugins/cache/skipstone-state.json']}}
                 self.assertEqual(w.validate_host_resume(run, baseline)['status'], 'passed')
-                for target in [run / 'core-build/core/Package.swift', app / 'toolchain-lock.json', root / 'env.sh',
+                legacy_inputs = {k: v for k, v in baseline['inputs'].items() if k != 'apps/ios/native-protocol.ts'}
+                with self.assertRaisesRegex(RuntimeError, 'apps/ios/native-protocol.ts'):
+                    w.validate_host_resume(run, baseline | {'inputs': legacy_inputs})
+                for target in [repo / 'apps/ios/native-protocol.ts', run / 'core-build/core/Package.swift', app / 'toolchain-lock.json', root / 'env.sh',
                                run / 'core-build/native/.build/plugins/cache/skipstone', run / 'core-build/swift-host.log']:
                     with self.subTest(target=target):
                         original = target.read_bytes()
-                        target.write_text('changed')
+                        target.write_bytes(original.replace(b'"original"', b'"changed"') if target == authority else b'changed')
                         with self.assertRaises(RuntimeError):
                             w.validate_host_resume(run, baseline)
                         target.write_bytes(original)
@@ -303,7 +308,7 @@ class AndroidResume(unittest.TestCase):
             repo, run = root / 'repo', root / 'runs/fixture-run'
             app = repo / 'apps/android'
             previous = run / 'attempts/002-host'
-            paths = [repo / 'apps/ios/native/Package.swift', app / 'native/Package.swift',
+            paths = [repo / 'apps/ios/native/Package.swift', repo / 'apps/ios/native-protocol.ts', app / 'native/Package.swift',
                      run / 'core-build/core/Package.swift', run / 'core-build/native/Package.swift',
                      app / 'toolchain-lock.json', app / 'scripts/core-extraction.patch',
                      app / 'scripts/write-protocol.mjs', repo / 'pnpm-lock.yaml',
@@ -326,6 +331,7 @@ class AndroidResume(unittest.TestCase):
             for path in paths:
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('original fixture input')
+            (repo / 'apps/ios/native-protocol.ts').write_text('export function nativeProtocolJson() { return "original"; }\n')
             for path in [app / 'native/Package.resolved', run / 'core-build/native/Package.resolved']:
                 w.write(path, {'pins': [{'identity': 'skip', 'state': {'revision': 'fixture-revision'}}]})
             for path, code in [(run / 'steps/dependencies.json', 0), (run / 'steps/core.json', 1),
@@ -354,7 +360,10 @@ class AndroidResume(unittest.TestCase):
     def test_guard_binds_host_outputs_previous_results_cross_cache_and_inputs(self):
         with self.fixture() as (root, run, previous, baseline):
             self.assertEqual(w.validate_android_resume(run, baseline)['status'], 'passed')
-            for target in [run / 'core-build/core/Package.swift', root / 'env.sh',
+            legacy_inputs = {k: v for k, v in baseline['inputs'].items() if k != 'apps/ios/native-protocol.ts'}
+            with self.assertRaisesRegex(RuntimeError, 'source/locked inputs changed'):
+                w.validate_android_resume(run, baseline | {'inputs': legacy_inputs})
+            for target in [root / 'repo/apps/ios/native-protocol.ts', run / 'core-build/core/Package.swift', root / 'env.sh',
                            run / 'core-build/cross/plugins/cache/skipstone',
                            run / 'core-build/cross/plugins/cache/skipstone-state.json',
                            run / 'core-build/cross/workspace-state.json',
@@ -363,7 +372,8 @@ class AndroidResume(unittest.TestCase):
                            previous / 'core-logs/swift-host.exit.json', previous / 'core-logs/swift-android-release.log']:
                 with self.subTest(target=target):
                     original = target.read_bytes()
-                    target.write_bytes(original + b'changed')
+                    authority = root / 'repo/apps/ios/native-protocol.ts'
+                    target.write_bytes(original.replace(b'"original"', b'"changed"') if target == authority else original + b'changed')
                     with self.assertRaises(RuntimeError):
                         w.validate_android_resume(run, baseline)
                     target.write_bytes(original)
