@@ -1,6 +1,6 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.INTERNET"/>
-  <application android:name=".SilverhandApplication" android:allowBackup="false" android:icon="@mipmap/ic_launcher" android:label="Silverhand Stage 1" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/AppTheme" android:usesCleartextTraffic="false">
+  <application android:name=".SilverhandApplication" android:allowBackup="false" android:icon="@mipmap/ic_launcher" android:label="Silverhand" android:roundIcon="@mipmap/ic_launcher" android:theme="@style/AppTheme" android:usesCleartextTraffic="false">
     <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.shared-images" android:exported="false" android:grantUriPermissions="true">
       <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/shared_image_paths"/>
     </provider>
