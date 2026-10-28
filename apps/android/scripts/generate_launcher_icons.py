@@ -262,6 +262,20 @@ def expected_files(paths, transform, box, workdir, height_dp):
     return files
 
 
+def png_identical(expected: bytes, actual: bytes):
+    """True when both PNGs decode to the same pixels (byte layout may differ)."""
+    ew, eh, erows, ech = png_pixels(expected)
+    aw, ah, arows, ach = png_pixels(actual)
+    if (ew, eh) != (aw, ah) or ech != ach:
+        return False, f'dimensions/channels {aw}x{ah}/{ach} != {ew}x{eh}/{ech}'
+    for y, (er, ar) in enumerate(zip(erows, arows)):
+        if er != ar:
+            for x in range(ew):
+                if er[x * ech:(x + 1) * ech] != ar[x * ach:(x + 1) * ach]:
+                    return False, f'first differing pixel at ({x},{y})'
+    return True, ''
+
+
 def check(files, res: pathlib.Path):
     problems = []
     for name, data in sorted(files.items()):
@@ -269,13 +283,21 @@ def check(files, res: pathlib.Path):
         if not target.is_file():
             problems.append(f'missing {name}')
             continue
+        actual = target.read_bytes()
         if name.endswith('.png'):
-            want = DENSITIES[name.split('/')[0].removeprefix('mipmap-')]
-            actual = png_size(target.read_bytes())
-            if actual[:2] != (want, want):
-                problems.append(f'{name}: {actual[0]}x{actual[1]} != {want}x{want}')
+            if actual == data:
+                # Geometry is still asserted so a correct-looking size cannot hide content drift.
+                if dark_box(actual) != dark_box(data):
+                    problems.append(f'{name}: glyph geometry differs')
+                continue
+            same, detail = png_identical(data, actual)
+            if not same:
+                problems.append(f'{name}: content differs ({detail})')
+                continue
+            if dark_box(actual) != dark_box(data):
+                problems.append(f'{name}: glyph geometry differs')
             continue
-        if target.read_bytes() != data:
+        if actual != data:
             problems.append(f'{name}: content differs')
     for line in problems:
         print('FAIL ' + line)
@@ -284,18 +306,67 @@ def check(files, res: pathlib.Path):
     print(f'OK {len(files)} generated files match committed resources')
 
 
+def self_test(paths, transform, box, height_dp):
+    """Prove the checker rejects same-size wrong content (no repo writes)."""
+    with tempfile.TemporaryDirectory(prefix='launcher-icons-selftest-') as tmp:
+        tmp_path = pathlib.Path(tmp)
+        workdir = tmp_path / 'work'
+        workdir.mkdir()
+        res = tmp_path / 'res'
+        res.mkdir()
+        files = expected_files(paths, transform, box, workdir, height_dp)
+        for name, data in files.items():
+            target = res / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+        try:
+            check(files, res)
+        except SystemExit as error:
+            fail(f'self-test control failed: pristine tree rejected ({error})')
+        # Same dimensions, wrong pixels: must be refused.
+        victim = res / 'mipmap-mdpi/ic_launcher.png'
+        width, height, _, channels = png_pixels(victim.read_bytes())
+        blank = bytes(255 for _ in range(width * height * channels))
+        victim.write_bytes(crop_png(_blank_screenshot(width, height, tmp_path), width))
+        try:
+            check(files, res)
+        except SystemExit:
+            print('OK self-test: same-size wrong content rejected')
+            return 0
+        fail('self-test control failed: same-size wrong content accepted')
+
+
+def _blank_screenshot(width: int, height: int, workdir: pathlib.Path) -> bytes:
+    """A white PNG of the given size, used only by self_test()."""
+    out = bytearray()
+    row = b'\xff' * (width * 3)
+    for _ in range(height):
+        out.append(0)
+        out += row
+
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (struct.pack('>I', len(payload)) + kind + payload
+                + struct.pack('>I', zlib.crc32(kind + payload) & 0xFFFFFFFF))
+    header = struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)
+    return (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', header)
+            + chunk(b'IDAT', zlib.compress(bytes(out), 9)) + chunk(b'IEND', b''))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--write', action='store_true', help='write resources into the repo')
     parser.add_argument('--check', action='store_true', help='verify committed resources')
+    parser.add_argument('--self-test', action='store_true', help='prove the checker rejects same-size wrong content')
     parser.add_argument('--res', type=pathlib.Path, default=RES, help='target resource directory')
     parser.add_argument('--glyph-height-dp', type=float, default=GLYPH_HEIGHT_DP)
     args = parser.parse_args()
-    if not args.write and not args.check:
-        parser.error('choose --write or --check')
+    if sum([args.write, args.check, args.self_test]) != 1:
+        parser.error('choose exactly one of --write / --check / --self-test')
     paths, transform = read_source()
     box = glyph_box(paths, transform)
     print('glyph bbox (viewBox): x=[%.3f, %.3f] y=[%.3f, %.3f]' % (box[0], box[2], box[1], box[3]))
+    if args.self_test:
+        return self_test(paths, transform, box, args.glyph_height_dp)
     workdir = pathlib.Path(chrome.profile)
     files = expected_files(paths, transform, box, workdir, args.glyph_height_dp)
     if args.check:
