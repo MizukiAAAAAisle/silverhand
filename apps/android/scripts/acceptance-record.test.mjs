@@ -1,4 +1,5 @@
-import { test } from 'node:test';
+import { test, mock } from 'node:test';
+import { continueAfterRestart, reconnectWebView, coverageMetadata, groupedB1Observation } from './acceptance-continuation.mjs';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -1413,33 +1414,34 @@ test('B1 standalone initial connection retains direct connect and its original c
 });
 
 async function b1ParentTailFixture(mode) {
-  const source = readFileSync(new URL('./acceptance.mjs', import.meta.url), 'utf8');
-  const reconnect = source.slice(source.indexOf('async function reconnect()'), source.indexOf('async function waitPersisted'));
-  const tail = source.slice(source.indexOf("  if (!diagnostic || diagnostic === 'coverage-b1') {", source.indexOf('    await runB2(')));
   const events = []; let oldClosed = 0, newClosed = 0, clock = 0, childCalled = false;
   const originalError = Error('controlled child failure');
   const next = { close: () => { newClosed++; } };
-  let thrown;
+  let c = { close: () => { oldClosed++; }, evaluate: async () => {} }, thrown;
+  const now = mock.method(Date, 'now', () => { clock += 8000; return clock; });
   try {
-    await runInNewContext(`(async()=>{let c=initialClient;${reconnect}\ntry{${tail}\n})()`, {
-      initialClient: { close: () => { oldClosed++; }, evaluate: async () => {} },
-      connect: async () => { if (mode === 'connect-failure') throw Error('controlled socket'); return next; },
-      adb: (...args) => { events.push(args); return args.includes('pidof') ? '4242' : ''; },
-      Date: { now: () => { clock += 8000; return clock; } },
-      setTimeout: (fn) => setTimeout(fn, 0), assert,
-      diagnostic: undefined, suite: 'b2', root: '/controlled/acceptance/', out: '/controlled/out', resolve: (...parts) => parts.join('/'),
-      wait: async () => {}, call: async () => ({}), record: () => {}, table: { B1_affected: [4, 5, 6, 9, 10, 11, 12] },
-      report: { step: () => {}, observe: () => {}, complete: () => {}, fail: () => {} },
+    await continueAfterRestart({
+      suite: 'b2', diagnostic: undefined,
+      runB2: async () => { if (mode === 'b2-failure') throw originalError; },
+      logout: async () => 'controlled logout', record: () => {}, report: {},
+      b1Context: { reconnect: async () => {
+        c = await reconnectWebView(c, (...args) => { events.push(args); return args.includes('pidof') ? '4242' : ''; },
+          async () => { if (mode === 'connect-failure') throw Error('controlled socket'); return next; });
+        return c;
+      } },
+      selectedB1: [4, 5, 6, 9, 10, 11, 12],
+      releaseParent: () => { c = null; },
       runB1: async (context) => {
         childCalled = true;
         if (mode === 'before-transfer-failure') throw originalError;
         const client = await context.reconnect();
-        assert.equal(client, next); // Original return contract retained.
+        assert.equal(client, next);
         try { if (mode === 'after-transfer-failure') throw originalError; }
         finally { client.close(); }
       },
     });
   } catch (error) { thrown = error; }
+  finally { now.mock.restore(); c?.close(); }
   return { events, oldClosed, newClosed, childCalled, thrown, originalError };
 }
 
@@ -1448,6 +1450,13 @@ test('B2 to B1 transfers the actual reconnect result and avoids both parent doub
   assert.equal(result.thrown, undefined); assert.equal(result.childCalled, true);
   assert.equal(result.oldClosed, 1); assert.equal(result.newClosed, 1);
   assert.deepEqual(result.events, [['shell', 'pidof', 'com.silverhand.android.stage1'], ['forward', 'tcp:19322', 'localabstract:webview_devtools_remote_4242']]);
+});
+
+test('B2 failure before B1 dispatch keeps its primary error and prior ownership', async () => {
+  const result = await b1ParentTailFixture('b2-failure');
+  assert.equal(result.thrown, result.originalError);
+  assert.equal(result.childCalled, false);
+  assert.equal(result.oldClosed, 1); assert.equal(result.newClosed, 0);
 });
 
 test('B2 to B1 failures before transfer or during reconnect release only the owned prior client', async () => {
@@ -2154,10 +2163,7 @@ test('short context expired existing deadline performs no right input or menu re
 });
 
 const coverageTable=JSON.parse(readFileSync(new URL('./acceptance-scenarios.json',import.meta.url)));
-function actualCoverageMetadata() {
-  const s=readFileSync(new URL('./acceptance.mjs',import.meta.url),'utf8');
-  return runInNewContext(s.slice(s.indexOf('function coverageMetadata('),s.indexOf('function groupedB1Observation('))+'\ncoverageMetadata');
-}
+const actualCoverageMetadata = () => coverageMetadata;
 
 test('grouped coverage selects exactly2/2/10 and preserves the original33 and old diagnostic plans',()=>{
   const metadata=actualCoverageMetadata(),full=[...coverageTable.original12,...coverageTable.B2.filter(r=>r.scope==='device').map(r=>'B2.'+r.id),...coverageTable.B1_affected.map(i=>'B1.'+coverageTable.B1[i-1])];assert.equal(full.length,33);
@@ -2190,7 +2196,7 @@ function groupedObserverFixture(change) {
   const dir=mkdtempSync(join(tmpdir(),'grouped-b1-'));const names=coverageTable.diagnostics['coverage-b1'];const report=new AcceptanceRecord(dir,names);report.pass(names[0],'controlled real login');report.pass(names[1],'controlled actual logout');
   writeFileSync(join(dir,'b1-fixture.json'),JSON.stringify({workspace:'w',channel:'c'}));const value={route:'#/chat/w/w/c/c',freshFixture:true,historicalPassesUsed:false,selectedCases:coverageTable.B1_affected.slice(),identity:{activity:1,webViewIdentity:2}};
   if(change==='route')value.route='#/chat';if(change==='cases')value.selectedCases=[4];if(change==='identity')delete value.identity.webViewIdentity;if(change==='provenance')value.freshFixture=false;if(change==='fixture')writeFileSync(join(dir,'b1-fixture.json'),'{}');
-  const s=readFileSync(new URL('./acceptance.mjs',import.meta.url),'utf8'),fn=runInNewContext(s.slice(s.indexOf('function groupedB1Observation('),s.indexOf('const report = new AcceptanceRecord'))+'\ngroupedB1Observation',{assert,readFileSync});
+  const fn = groupedB1Observation;
   return{dir,report,value,observe:fn(report,dir+'/',coverageTable)};
 }
 
@@ -2226,15 +2232,39 @@ test('grouped workflow metadata matches Node and seal rejects wrong attempts sel
 });
 
 async function groupedParentFixture(mode) {
-  const dir=mkdtempSync(join(tmpdir(),'grouped-parent-')),report=new AcceptanceRecord(dir,coverageTable.diagnostics['coverage-b1']);report.pass('DIAG.real-page-login','controlled login');writeFileSync(join(dir,'b1-fixture.json'),JSON.stringify({workspace:'w',channel:'c'}));
-  const source=readFileSync(new URL('./acceptance.mjs',import.meta.url),'utf8'),reconnect=source.slice(source.indexOf('async function reconnect()'),source.indexOf('async function waitPersisted')),observer=source.slice(source.indexOf('function groupedB1Observation('),source.indexOf('const report = new AcceptanceRecord'));
-  const tail=source.slice(source.indexOf("  if (suite === 'b2' && diagnostic !== 'coverage-b1')"));const primary=Error('controlled init failure');let oldClosed=0,newClosed=0,b2Calls=0,caseBodies=0;const next={close:()=>{newClosed++;}};let error;
-  try{await runInNewContext(`(async()=>{let c=initialClient;${reconnect}\n${observer}\ntry{${tail}\n})()`,{assert,readFileSync,report,table:coverageTable,diagnostic:'coverage-b1',suite:'b2',root:dir+'/',out:dir,resolve:()=>dir,
-    initialClient:{close:()=>{oldClosed++;},evaluate:async()=>{}},connect:async()=>next,Date,setTimeout,adb:(...args)=>args.includes('pidof')?'4242':'',wait:async()=>{},call:async()=>({}),record:()=>{throw Error('Ordinary33 record must not run');},
-    runB2:async()=>{b2Calls++;throw Error('B2 file chain must not run');},
-    runB1:async(context,selected)=>{if(mode==='before-transfer')throw primary;const client=await context.reconnect();try{context.observe('continuation-preconditions.json',{route:mode==='wrong-route'?'#/wrong':'#/chat/w/w/c/c',selectedCases:selected,identity:{activity:1,webViewIdentity:2},freshFixture:true,historicalPassesUsed:false});for(const i of selected)await context.step('B1.'+coverageTable.B1[i-1],async()=>{caseBodies++;if(mode==='case-failure')throw primary;return'controlled case';});}finally{client.close();}},
-  });}catch(e){error=e;}
-  const raw=JSON.parse(readFileSync(join(dir,'raw.json'))),counts=JSON.parse(readFileSync(join(dir,'counts.json')));rmSync(dir,{recursive:true,force:true});return{error,primary,raw,counts,oldClosed,newClosed,b2Calls,caseBodies};
+  const dir=mkdtempSync(join(tmpdir(),'grouped-parent-')),report=new AcceptanceRecord(dir,coverageTable.diagnostics['coverage-b1']);
+  report.pass('DIAG.real-page-login','controlled login');
+  writeFileSync(join(dir,'b1-fixture.json'),JSON.stringify({workspace:'w',channel:'c'}));
+  const primary=Error('controlled init failure');let oldClosed=0,newClosed=0,b2Calls=0,caseBodies=0,error;
+  const next={close:()=>{newClosed++;}};
+  let c={close:()=>{oldClosed++;},evaluate:async()=>{}};
+  try {
+    await continueAfterRestart({
+      suite:'b2',diagnostic:'coverage-b1',report,
+      logout:async()=> 'controlled logout',
+      record:()=>{throw Error('Ordinary33 record must not run');},
+      runB2:async()=>{b2Calls++;throw Error('B2 file chain must not run');},
+      releaseParent:()=>{c=null;},selectedB1:coverageTable.B1_affected,
+      b1Context:{
+        reconnect:async()=>{c=await reconnectWebView(c,(...args)=>args.includes('pidof')?'4242':'',async()=>next);return c;},
+        step:(...args)=>report.step(...args),
+        observe:groupedB1Observation(report,dir+'/',coverageTable),
+      },
+      runB1:async(context,selected)=>{
+        if(mode==='before-transfer')throw primary;
+        const client=await context.reconnect();
+        try{
+          context.observe('continuation-preconditions.json',{route:mode==='wrong-route'?'#/wrong':'#/chat/w/w/c/c',selectedCases:selected,identity:{activity:1,webViewIdentity:2},freshFixture:true,historicalPassesUsed:false});
+          for(const i of selected)await context.step('B1.'+coverageTable.B1[i-1],async()=>{caseBodies++;if(mode==='case-failure')throw primary;return'controlled case';});
+        }finally{client.close();}
+      },
+    });
+    report.complete();
+  }catch(e){error=e;report.fail(e);}
+  finally{c?.close();}
+  const raw=JSON.parse(readFileSync(join(dir,'raw.json'))),counts=JSON.parse(readFileSync(join(dir,'counts.json')));
+  rmSync(dir,{recursive:true,force:true});
+  return{error,primary,raw,counts,oldClosed,newClosed,b2Calls,caseBodies};
 }
 
 test('grouped B1 parent path skips all B2 handlers counts readiness separately and transfers connection ownership once',async()=>{

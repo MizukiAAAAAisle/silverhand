@@ -109,7 +109,7 @@ test('PRE readiness and five business cases count independently; first failure l
 test('scenario extension preserves every legacy subtree and adds B3 only at the top level', () => {
   const table = JSON.parse(readFileSync(new URL('./acceptance-scenarios.json', import.meta.url)));
   const { B3, ...legacy } = table;
-  assert.deepEqual(Object.keys(B3), ['search-normal', 'search-isolation', 'task-read', 'task-read-faults']);
+  assert.deepEqual(Object.keys(B3).sort(), ['search-isolation', 'search-normal', 'task-read', 'task-read-faults', 'task-write']);
   const sorted = value => Array.isArray(value) ? value.map(sorted) : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, sorted(value[key])])) : value;
   assert.equal(createHash('sha256').update(JSON.stringify(sorted(B3['search-normal']))).digest('hex'), '40f7aee8adeca2c8945ad270271b23aa977eeed462e816fc60d6bc62dd306356');
   assert.equal(createHash('sha256').update(JSON.stringify(sorted(B3['search-isolation']))).digest('hex'), 'e300bb6699daf14419c8f10b84e04b73c3bb02dd0982b89e718b4d8a8ce8979e');

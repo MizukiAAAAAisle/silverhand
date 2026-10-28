@@ -7,6 +7,7 @@ import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { runB1 } from './acceptance-b1.mjs';
+import { continueAfterRestart, reconnectWebView, coverageMetadata, groupedB1Observation } from './acceptance-continuation.mjs';
 import { runB2 } from './acceptance-b2.mjs';
 import { runB3, b3ScenarioKey } from './acceptance-b3.mjs';
 import { AcceptanceRecord } from './acceptance-record.mjs';
@@ -35,27 +36,6 @@ const active = suite === 'b3' ? [...table.B3[scenarioKey].preconditions, ...tabl
       ]
     : []),
 ];
-function coverageMetadata(table, diagnostic) {
-  if (!['coverage-short','coverage-bars','coverage-b1'].includes(diagnostic)) return null;
-  const full=[...table.original12,...table.B2.filter(row=>row.scope==='device').map(row=>'B2.'+row.id),...table.B1_affected.map(i=>'B1.'+table.B1[i-1])], selected=table.diagnostics[diagnostic];
-  return {kind:'grouped',selector:diagnostic,planned:selected.length,selected_ids:selected,ordinary33_count:full.length,ordinary33_selected:full.filter(id=>selected.includes(id)),ordinary33_not_selected:full.filter(id=>!selected.includes(id)),partial_of:table.coverage_partial?.[diagnostic]??null,group_counts_not_aggregated:true};
-}
-function groupedB1Observation(report, root, table) {
-  let prepared=false;
-  return (name,value)=>{
-    report.observe(name,value);
-    if(name!=='continuation-preconditions.json')return;
-    assert(!prepared,'Repeated B1 initialization observation');
-    const current=JSON.parse(readFileSync(root+'b1-fixture.json'));
-    assert(typeof current.workspace==='string'&&current.workspace&&typeof current.channel==='string'&&current.channel,'B1 fixture identity missing');
-    assert.equal(value.route,'#/chat/w/'+current.workspace+'/c/'+current.channel,'B1 initialization route does not match current fixture');
-    assert.deepEqual(value.selectedCases,table.B1_affected,'B1 initialization case set changed');
-    assert(value.freshFixture===true&&value.historicalPassesUsed===false,'B1 initialization fixture provenance changed');
-    assert(Number.isSafeInteger(value.identity?.activity)&&value.identity.activity>=0&&Number.isSafeInteger(value.identity?.webViewIdentity)&&value.identity.webViewIdentity>=0,'B1 initialization identity missing');
-    prepared=true;
-    report.pass('DIAG.b1-preconditions',{route:value.route,selectedCases:value.selectedCases,identity:value.identity,credit:'readiness only; no B1 functional case credited',source:'existing runB1 instrumentation/fixture/reconnect/React login and textarea checks before this observation'});
-  };
-}
 const report = new AcceptanceRecord(out, active);
 let newOrigin;
 if (suite === 'b3') {
@@ -141,19 +121,8 @@ const fixture = { email, password, workspace: workspace.id, channel: channel.id,
 // Disposable credentials stay in ignored evidence, never committed or printed.
 writeFileSync(suite === 'b3' ? out + '/fixture-private.json' : root + 'fixture.json', JSON.stringify(fixture), { mode: 0o600 });
 async function reconnect() {
-  c.close();
-  const deadline = Date.now() + 15000;
-  while (Date.now() < deadline) {
-    try {
-      const pid = adb('shell', 'pidof', 'com.silverhand.android.stage1');
-      adb('forward', 'tcp:19322', 'localabstract:webview_devtools_remote_' + pid);
-      c = await connect();
-      return c;
-    } catch {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  throw Error('WebView reconnect timeout');
+  c = await reconnectWebView(c, adb, connect);
+  return c;
 }
 async function waitPersisted(text) {
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -385,7 +354,22 @@ try {
     'Different process PID restored encrypted native session and real conversation',
   );
   }
-  if (suite === 'b2' && diagnostic !== 'coverage-b1')
+  const logout = async () => {
+  await c.evaluate("location.hash='/settings?settingsSection=account'");
+  await wait(
+    `Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='Log out')`,
+  );
+  await c.evaluate(
+    `Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Log out').click()`,
+  );
+  await wait(`!!document.querySelector('#auth-email')`);
+  const state = await call('authState');
+  assert(!state.me || state.me.status !== 200);
+    return 'Native credential cleared and shared login page restored';
+  };
+  await continueAfterRestart({
+    suite, diagnostic, logout, report, record, runB1,
+    runB2: async () => {
     await runB2({
       c,
       reconnect,
@@ -406,38 +390,15 @@ try {
       startupDiagnostic,
       diagnostic,
     });
-  if (suite !== 'b3' && (!diagnostic || diagnostic === 'coverage-b1')) {
-  const logout = async () => {
-  await c.evaluate("location.hash='/settings?settingsSection=account'");
-  await wait(
-    `Array.from(document.querySelectorAll('button')).some(b=>b.textContent.trim()==='Log out')`,
-  );
-  await c.evaluate(
-    `Array.from(document.querySelectorAll('button')).find(b=>b.textContent.trim()==='Log out').click()`,
-  );
-  await wait(`!!document.querySelector('#auth-email')`);
-  const state = await call('authState');
-  assert(!state.me || state.me.status !== 200);
-    return 'Native credential cleared and shared login page restored';
-  };
-  if (diagnostic === 'coverage-b1') await report.step('DIAG.logout-before-b1', logout);
-  else record('logout', await logout());
-  if (suite === 'b2') {
-    await runB1(
-      {
-        run: resolve(root, '..'),
-        out,
-        reconnect: async () => {
-          try { return await reconnect(); }
-          finally { c = null; } // Prior client closed; runB1 owns any returned client.
-        },
-        step: (...args) => report.step(...args),
-        observe: diagnostic === 'coverage-b1' ? groupedB1Observation(report, root, table) : (...args) => report.observe(...args),
-      },
-      table.B1_affected,
-    );
-  }
-  }
+    },
+    b1Context: {
+      run: resolve(root, '..'), out, reconnect,
+      step: (...args) => report.step(...args),
+      observe: diagnostic === 'coverage-b1' ? groupedB1Observation(report, root, table) : (...args) => report.observe(...args),
+    },
+    selectedB1: table.B1_affected,
+    releaseParent: () => { c = null; },
+  });
   report.complete();
 } catch (error) {
   report.fail(error);

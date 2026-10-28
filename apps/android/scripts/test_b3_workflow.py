@@ -8,11 +8,21 @@ from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+from workflow_test_support import controlled_boot
 
 os.environ.setdefault('SILVERHAND_ANDROID_HOME', str(Path.home() / 'Library/Developer/SilverhandAndroid'))
 spec = importlib.util.spec_from_file_location('workflow', Path(__file__).with_name('workflow.py'))
 w = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(w)
+
+def setUpModule():
+    global android_environment
+    android_environment = patch.dict(w.ENV, ANDROID_HOME='/controlled-sdk', ANDROID_SERIAL='emulator-5584')
+    android_environment.start()
+
+
+def tearDownModule():
+    android_environment.stop()
 
 
 class B3Entry(unittest.TestCase):
@@ -36,10 +46,6 @@ class B3Entry(unittest.TestCase):
         w.acceptance(self.run, 'b3', 'device-001', unit=self.baseline['unit'], binding=self.binding, selection_name=self.baseline['selection'].get('selector'))
 
     def controlled(self, stack, *, failed=False, writer=True, cleanup_failed=False):
-        def boot(out, **kwargs):
-            w.write(out / 'emulator.json', {'controlled': True, 'pid': 999990})
-            return w.SimpleNamespace(pid=999990), None
-
         def entry(command, out):
             self.assertEqual(list(map(str, command)), [w.ENV['NODE_BIN'], str(w.APP / 'scripts/acceptance.mjs'), 'b3', str(self.out), self.baseline['unit']] + ([self.baseline['selection']['selector']] if 'selector' in self.baseline['selection'] else []))
             result = {'launched': True, 'command': list(map(str, command)), 'writer_exited': writer, 'raw_returncode': 7 if failed else 0, 'collector_error': None}
@@ -66,7 +72,7 @@ class B3Entry(unittest.TestCase):
         for name, kwargs in [
             ('configure', {}), ('apk_resume_inputs', {'return_value': self.baseline['inputs']}),
             ('b2_package_check', {'return_value': self.packages}), ('ca_check', {'return_value': self.baseline['ca']}),
-            ('wait_services', {}), ('wait_for_webview', {}), ('boot', {'side_effect': boot}),
+            ('wait_services', {}), ('wait_for_webview', {}), ('boot', {'side_effect': controlled_boot}),
             ('adb', {'return_value': '36'}), ('stop_emulator', {}),
             ('cleanup_services', {'return_value': {'status': 'failed' if cleanup_failed else 'passed', 'services': []}}),
             ('record_entry', {'side_effect': entry}),

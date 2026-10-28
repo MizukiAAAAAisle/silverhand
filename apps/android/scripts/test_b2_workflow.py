@@ -11,11 +11,23 @@ import unittest
 from unittest.mock import patch
 from contextlib import contextmanager
 import copy
+from workflow_test_support import controlled_boot
 
 os.environ.setdefault('SILVERHAND_ANDROID_HOME', str(Path.home() / 'Library/Developer/SilverhandAndroid'))
 spec = importlib.util.spec_from_file_location('workflow', Path(__file__).with_name('workflow.py'))
 w = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(w)
+
+
+def setUpModule():
+    global android_environment
+    android_environment = patch.dict(w.ENV, ANDROID_HOME='/controlled-sdk', ANDROID_SERIAL='emulator-5584')
+    android_environment.start()
+
+
+def tearDownModule():
+    android_environment.stop()
+
 
 class FileProviderResource(unittest.TestCase):
     # Exact final resource block observed from this APK's aapt2 output.
@@ -91,10 +103,7 @@ class Entry(unittest.TestCase):
             def popen(*args, **kwargs):
                 original.append((run / 'acceptance/attempts/001/raw.json').read_bytes())
                 return fake
-            def boot(out, **kwargs):
-                w.write(out / 'emulator.json', {'fixture': True})
-                return object(), None
-            with patch.object(w, 'configure'), patch.object(w, 'apk_resume_inputs', return_value={}), patch.object(w, 'b2_package_check', return_value=packages), patch.object(w, 'ca_check', return_value={}), patch.object(w, 'wait_services'), patch.object(w, 'wait_for_webview'), patch.object(w, 'boot', side_effect=boot), patch.object(w, 'adb', return_value='36'), patch.object(w, 'stop_emulator'), patch.object(w, 'cleanup_services', return_value={'status': 'passed', 'services': []}), patch.object(w.subprocess, 'run'), patch.object(w.subprocess, 'Popen', side_effect=popen), patch.object(w, 'group_members', side_effect=PermissionError('controlled query unavailable')), patch.object(w.os, 'killpg'), patch.object(w.socket.socket, 'connect_ex', return_value=1), patch.dict(w.ENV, NODE_BIN='/node'):
+            with patch.object(w, 'configure'), patch.object(w, 'apk_resume_inputs', return_value={}), patch.object(w, 'b2_package_check', return_value=packages), patch.object(w, 'ca_check', return_value={}), patch.object(w, 'wait_services'), patch.object(w, 'wait_for_webview'), patch.object(w, 'boot', side_effect=controlled_boot), patch.object(w, 'adb', return_value='36'), patch.object(w, 'stop_emulator'), patch.object(w, 'cleanup_services', return_value={'status': 'passed', 'services': []}), patch.object(w.subprocess, 'run'), patch.object(w.subprocess, 'Popen', side_effect=popen), patch.object(w, 'group_members', side_effect=PermissionError('controlled query unavailable')), patch.object(w.os, 'killpg'), patch.object(w.socket.socket, 'connect_ex', return_value=1), patch.dict(w.ENV, NODE_BIN='/node'):
                 with self.assertRaisesRegex(AssertionError, 'writer exit unconfirmed'):
                     w.acceptance_b2(run, '001')
             out = run / 'acceptance/attempts/001'
@@ -107,6 +116,23 @@ class Entry(unittest.TestCase):
             self.assertEqual(pending['cleanup']['status'], 'passed')
             self.assertIn('seal_deferred', pending)
             self.assertFalse((out / 'SHA256SUMS').exists())
+
+    def test_invalid_boot_identity_stops_before_writer_or_install(self):
+        for identity in [None, True, 1, 999991]:
+            with self.subTest(identity=identity), tempfile.TemporaryDirectory() as directory:
+                run = Path(directory)
+                packages = {'product': {'path': 'product'}, 'test': {'path': 'test'}}
+                w.write(run / 'b2-binding.json', {'inputs': {}, 'packages': packages})
+                def invalid_boot(out, **kwargs):
+                    process, log = controlled_boot(out, **kwargs)
+                    w.write(out / 'emulator.json', {} if identity is None else {'pid': identity})
+                    return process, log
+                with patch.object(w, 'configure'), patch.object(w, 'apk_resume_inputs', return_value={}), patch.object(w, 'b2_package_check', return_value=packages), patch.object(w, 'ca_check', return_value={}), patch.object(w, 'wait_services'), patch.object(w, 'wait_for_webview'), patch.object(w, 'boot', side_effect=invalid_boot), patch.object(w, 'adb', return_value='36') as adb, patch.object(w, 'stop_emulator'), patch.object(w, 'cleanup_services', return_value={'status': 'passed', 'services': []}), patch.object(w, 'record_entry', side_effect=AssertionError('unexpected writer reached')) as writer, patch.object(w.subprocess, 'run'), patch.object(w.socket.socket, 'connect_ex', return_value=1):
+                    with self.assertRaisesRegex(AssertionError, 'Owned emulator PID differs'):
+                        w.acceptance_b2(run, 'bad-pid')
+                writer.assert_not_called()
+                self.assertFalse(any(call.args[0] == 'install' for call in adb.call_args_list))
+                self.assertFalse(any(call.args[:3] == ('shell', 'am', 'start') for call in adb.call_args_list))
 
     def test_input_guard_stops_before_services_and_leaves_cases_unexecuted(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -131,9 +157,6 @@ class Entry(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             run = Path(directory)
             w.write(run / 'b2-binding.json', {'inputs': {}, 'packages': {}})
-            def boot(out, **kwargs):
-                w.write(out / 'emulator.json', {'fixture': True})
-                return object(), None
             def entry(command, out):
                 raw = json.loads((out / 'raw.json').read_text())
                 raw['steps'][0]['status'] = 'failed'
@@ -142,13 +165,14 @@ class Entry(unittest.TestCase):
                 raw['entry'] = {'raw_returncode': 0, 'collector_error': None, 'writer_exited': True}
                 w.write(out / 'raw.json', raw)
                 return raw['entry']
-            with patch.object(w, 'configure'), patch.object(w, 'apk_resume_inputs', return_value={}), patch.object(w, 'b2_package_check', return_value={'product': {'path': 'product'}, 'test': {'path': 'test'}}), patch.object(w, 'ca_check', return_value={}), patch.object(w, 'wait_services'), patch.object(w, 'wait_for_webview'), patch.object(w, 'boot', side_effect=boot), patch.object(w, 'adb', return_value='36'), patch.object(w, 'stop_emulator'), patch.object(w, 'cleanup_services', return_value={'status': 'passed', 'services': []}), patch.object(w, 'record_entry', side_effect=entry), patch.object(w.subprocess, 'run'), patch.object(w.socket.socket, 'connect_ex', return_value=1), patch.dict(w.ENV, NODE_BIN='/node'):
+            with patch.object(w, 'configure'), patch.object(w, 'apk_resume_inputs', return_value={}), patch.object(w, 'b2_package_check', return_value={'product': {'path': 'product'}, 'test': {'path': 'test'}}), patch.object(w, 'ca_check', return_value={}), patch.object(w, 'wait_services'), patch.object(w, 'wait_for_webview'), patch.object(w, 'boot', side_effect=controlled_boot), patch.object(w, 'adb', return_value='36'), patch.object(w, 'stop_emulator'), patch.object(w, 'cleanup_services', return_value={'status': 'passed', 'services': []}), patch.object(w, 'record_entry', side_effect=entry) as writer, patch.object(w.subprocess, 'run'), patch.object(w.socket.socket, 'connect_ex', return_value=1), patch.dict(w.ENV, NODE_BIN='/node'):
                 # Match the declared package paths; no actual packages or SDK are read.
                 w.write(run / 'b2-binding.json', {'inputs': {}, 'packages': {'product': {'path': 'product'}, 'test': {'path': 'test'}}})
                 with self.assertRaisesRegex(AssertionError, 'Actions did not all pass'):
                     w.acceptance_b2(run, '001')
             raw = json.loads((run / 'acceptance/attempts/001/raw.json').read_text())
             self.assertEqual(raw['entry']['raw_returncode'], 0)
+            writer.assert_called_once()
             self.assertEqual(raw['first_error']['message'], 'controlled action failure')
             self.assertEqual(raw['cleanup']['status'], 'passed')
             self.assertTrue(all(row['status'] == 'not_executed' for row in raw['steps'][1:]))
@@ -458,7 +482,6 @@ class StartupDiagnostic(unittest.TestCase):
                 run=Path(directory);events=[]
                 packages={'product':{'path':str(run/'diag.apk')},'test':{'path':str(run/'test.apk')}}
                 w.write(run/'b2-startup-diagnostic-binding.json',{'inputs':{},'packages':packages})
-                def boot(out,**kwargs):w.write(out/'emulator.json',{});return object(),None
                 def entry(command,out):
                     self.assertEqual(command[-1],'appearance-startup');events.append('node')
                     raw=json.loads((out/'raw.json').read_text());raw['status']='passed'
@@ -469,11 +492,12 @@ class StartupDiagnostic(unittest.TestCase):
                 def restore(_):
                     events.append('restore')
                     if restore_fails:raise RuntimeError('installed restore failed')
-                with patch.object(w,'configure'),patch.object(w,'apk_resume_inputs',return_value={}),patch.object(w,'validate_startup_diagnostic',return_value={'kind':'appearance-startup','nonce':'nonce'}),patch.object(w,'b2_package_check',return_value=packages),patch.object(w,'ca_check',return_value={}),patch.object(w,'wait_services'),patch.object(w,'wait_for_webview'),patch.object(w,'boot',side_effect=boot),patch.object(w,'adb',return_value='36'),patch.object(w,'restore_normal_product',side_effect=restore),patch.object(w,'stop_emulator',side_effect=lambda *_:events.append('stop')),patch.object(w,'cleanup_services',return_value={'status':'passed','services':[]}),patch.object(w,'record_entry',side_effect=entry),patch.object(w.subprocess,'run'),patch.object(w.socket.socket,'connect_ex',return_value=1),patch.dict(w.ENV,NODE_BIN='/node'):
+                with patch.object(w,'configure'),patch.object(w,'apk_resume_inputs',return_value={}),patch.object(w,'validate_startup_diagnostic',return_value={'kind':'appearance-startup','nonce':'nonce'}),patch.object(w,'b2_package_check',return_value=packages),patch.object(w,'ca_check',return_value={}),patch.object(w,'wait_services'),patch.object(w,'wait_for_webview'),patch.object(w,'boot',side_effect=controlled_boot),patch.object(w,'adb',return_value='36'),patch.object(w,'restore_normal_product',side_effect=restore),patch.object(w,'stop_emulator',side_effect=lambda *_:events.append('stop')),patch.object(w,'cleanup_services',return_value={'status':'passed','services':[]}),patch.object(w,'record_entry',side_effect=entry) as writer,patch.object(w.subprocess,'run'),patch.object(w.socket.socket,'connect_ex',return_value=1),patch.dict(w.ENV,NODE_BIN='/node'):
                     if code or restore_fails:
                         with self.assertRaises((AssertionError,RuntimeError)):w.acceptance_b2(run,'once','appearance-startup')
                     else:w.acceptance_b2(run,'once','appearance-startup')
                 raw=json.loads((run/'acceptance/attempts/once/raw.json').read_text());counts=json.loads((run/'acceptance/attempts/once/counts.json').read_text())
+                writer.assert_called_once()
                 self.assertEqual(events,['node','restore','stop']);self.assertEqual(counts['groups']['B2']['passed'],0)
                 self.assertEqual(counts['groups']['DIAG']['passed'],2)
                 self.assertEqual(raw['cleanup']['status'],'failed' if restore_fails else 'passed')
@@ -500,8 +524,6 @@ class AppearanceShort(unittest.TestCase):
                 w.write(run/'b2-binding.json', {'inputs': {}, 'packages': packages})
                 # A stale isolated binding must never be selected for this branch.
                 (run/'b2-startup-diagnostic-binding.json').write_text('not JSON')
-                def boot(out, **kwargs):
-                    w.write(out/'emulator.json', {}); return object(), None
                 def entry(command, out):
                     self.assertEqual(command[-1], diagnostic)
                     raw = json.loads((out/'raw.json').read_text())
@@ -512,11 +534,12 @@ class AppearanceShort(unittest.TestCase):
                     raw['entry'] = {'raw_returncode': code, 'writer_exited': True, 'collector_error': None}
                     if failed: raw['first_error'] = {'message': 'original persistence timeout'}
                     w.write(out/'raw.json', raw); return raw['entry']
-                with patch.object(w, 'configure'), patch.object(w, 'apk_resume_inputs', return_value={}), patch.object(w, 'validate_startup_diagnostic') as startup, patch.object(w, 'b2_package_check', return_value=packages) as package_check, patch.object(w, 'ca_check', return_value={}), patch.object(w, 'wait_services'), patch.object(w, 'wait_for_webview'), patch.object(w, 'boot', side_effect=boot), patch.object(w, 'adb', return_value='36'), patch.object(w, 'restore_normal_product') as restore, patch.object(w, 'stop_emulator') as stop, patch.object(w, 'cleanup_services', return_value={'status': 'passed', 'services': []}), patch.object(w, 'record_entry', side_effect=entry), patch.object(w.subprocess, 'run'), patch.object(w.socket.socket, 'connect_ex', return_value=1), patch.dict(w.ENV, NODE_BIN='/node'):
+                with patch.object(w, 'configure'), patch.object(w, 'apk_resume_inputs', return_value={}), patch.object(w, 'validate_startup_diagnostic') as startup, patch.object(w, 'b2_package_check', return_value=packages) as package_check, patch.object(w, 'ca_check', return_value={}), patch.object(w, 'wait_services'), patch.object(w, 'wait_for_webview'), patch.object(w, 'boot', side_effect=controlled_boot), patch.object(w, 'adb', return_value='36'), patch.object(w, 'restore_normal_product') as restore, patch.object(w, 'stop_emulator') as stop, patch.object(w, 'cleanup_services', return_value={'status': 'passed', 'services': []}), patch.object(w, 'record_entry', side_effect=entry) as writer, patch.object(w.subprocess, 'run'), patch.object(w.socket.socket, 'connect_ex', return_value=1), patch.dict(w.ENV, NODE_BIN='/node'):
                     if failed:
                         with self.assertRaisesRegex(AssertionError, 'Acceptance entry failed|Actions did not all pass'):
                             w.acceptance_b2(run, 'short', diagnostic)
                     else: w.acceptance_b2(run, 'short', diagnostic)
+                writer.assert_called_once()
                 startup.assert_not_called(); restore.assert_not_called()
                 package_check.assert_called_once_with(run); stop.assert_called_once()
                 raw = json.loads((run/'acceptance/attempts/short/raw.json').read_text())
