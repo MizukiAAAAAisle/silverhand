@@ -1,4 +1,4 @@
-// One before/after call-contract seam. Actual runT2 and locator consumers;
+// Current call-contract regression. Actual runT2 and locator consumers;
 // UI/backend/bridge/journal/clock/DOM geometry/CDP transport are a fixed model.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -7,20 +7,13 @@ import { mkdtempSync,writeFileSync,readFileSync,rmSync,mkdirSync } from 'node:fs
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { pathToFileURL } from 'node:url';
 import { clickTaskCard } from './acceptance-b3.mjs';
 import { AcceptanceRecord } from './acceptance-record.mjs';
+import { runT2, T2_CASES } from './acceptance-t2.mjs';
 const uiRequire=createRequire(new URL('../../../packages/app-ui/package.json',import.meta.url));
 const { Window }=await import(uiRequire.resolve('happy-dom'));
-const mode=process.env.T2_CARD_STATUS_MODE;
-assert(['before','after'].includes(mode),'Explicit source variant required');
-const original=mode==='before'?readFileSync(process.env.T2_CARD_STATUS_BEFORE,'utf8'):readFileSync(new URL('./acceptance-t2.mjs',import.meta.url),'utf8');
-// Only relocate the two relative imports of a retained source copy;no runtime-body mutation.
-const imports=[];const relocated=original.replace(/from '(\.\/[^']+)'/g,(_all,relative)=>{imports.push(relative);return `from '${new URL(relative,import.meta.url).href}'`;});
-assert.deepEqual(imports,['./t2-observer.mjs','./t1-tls-evidence.mjs']);
-const {runT2,T2_CASES}=await import('data:text/javascript;base64,'+Buffer.from(relocated).toString('base64'));
 const hash=x=>createHash('sha256').update(x).digest('hex');
-test('actual runT2 passes card target into unchanged real locator: '+mode,async()=>{
+test('current runT2 passes todo card target into unchanged real locator',async()=>{
  const out=mkdtempSync(join(tmpdir(),'t2-card-status-'));const window=new Window({url:'https://localhost/#/tasks'}),document=window.document;
  Object.defineProperty(window,'innerWidth',{value:412});Object.defineProperty(window,'innerHeight',{value:839});document.documentElement.dataset.layout='compact';
  document.body.innerHTML='<main data-page><div data-tasks-board><section data-tasks-column data-status="todo"></section><section data-tasks-column data-status="in_progress"></section></div></main>';
@@ -65,15 +58,10 @@ test('actual runT2 passes card target into unchanged real locator: '+mode,async(
   assert.equal(targets.length,1);assert.equal(record.data.steps[0].status,'passed');
   const alignment=observations.find(x=>x.name==='t2-open-task-alignment').value;
   assert.equal(targets[0].id,'T');assert.equal(targets[0].number,7);assert.equal(document.querySelectorAll('[data-task-id="T"]').length,1);
-  if(mode==='before'){
-   assert(!Object.hasOwn(targets[0],'status'));assert.notEqual(caught,sentinel);assert.match(String(caught),/task_card_not_unique/);
-   assert.deepEqual(alignment.counts,{pages:1,boards:1,columns:0,cards:0});assert.equal(dispatches.length,0);assert.equal(clicked,0);
-  }else{
-   assert.equal(targets[0].status,'todo');assert.equal(caught,sentinel);assert.equal(alignment.ready,true);assert.deepEqual(alignment.counts,{pages:1,boards:1,columns:1,cards:1});
-   assert(alignment.selector.includes('[data-status="todo"]'));assert.equal(dispatches.length,2);assert.equal(clicked,1);
-   assert.equal(document.querySelector(alignment.selector),document.querySelector('[data-status="todo"] [data-task-id="T"] button'));
-  }
+  assert.equal(targets[0].status,'todo');assert.equal(caught,sentinel);assert.equal(alignment.ready,true);assert.deepEqual(alignment.counts,{pages:1,boards:1,columns:1,cards:1});
+  assert(alignment.selector.includes('[data-status="todo"]'));assert.equal(dispatches.length,2);assert.equal(clicked,1);
+  assert.equal(document.querySelector(alignment.selector),document.querySelector('[data-status="todo"] [data-task-id="T"] button'));
   assert.equal(window.__b3TaskCardTarget,undefined);assert.equal(window.__b2LeftClickTarget,undefined);
-  if(process.env.T2_CARD_STATUS_EVIDENCE){mkdirSync(process.env.T2_CARD_STATUS_EVIDENCE,{recursive:true});writeFileSync(join(process.env.T2_CARD_STATUS_EVIDENCE,'result.json'),JSON.stringify({mode,source_sha256:hash(original),import_relocations:imports,dom:document.body.innerHTML,dom_sha256:hash(document.body.innerHTML),target:targets[0],alignment,dispatches,clicked,observations,raw:record.data,caught:String(caught),stopped_after_seam:true,boundary:'actual runT2/clickTaskCard/taskAlignCard/searchClick/leftControlTarget;API/native/UI/clock/geometry/CDP transport/journal are models,no device'},null,2)+'\n');}
+  if(process.env.T2_CARD_STATUS_EVIDENCE){mkdirSync(process.env.T2_CARD_STATUS_EVIDENCE,{recursive:true});writeFileSync(join(process.env.T2_CARD_STATUS_EVIDENCE,'result.json'),JSON.stringify({implementation:'current runT2',source_sha256:hash(readFileSync(new URL('./acceptance-t2.mjs',import.meta.url))),dom:document.body.innerHTML,dom_sha256:hash(document.body.innerHTML),target:targets[0],alignment,dispatches,clicked,observations,raw:record.data,caught:String(caught),stopped_after_seam:true,boundary:'actual runT2/clickTaskCard/taskAlignCard/searchClick/leftControlTarget;API/native/UI/clock/geometry/CDP transport/journal are models,no device'},null,2)+'\n');}
  }finally{await window.happyDOM.close();rmSync(out,{recursive:true,force:true});}
 });
