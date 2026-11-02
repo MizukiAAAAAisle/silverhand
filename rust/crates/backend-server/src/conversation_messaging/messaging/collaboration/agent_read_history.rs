@@ -26,11 +26,14 @@ use silverhand_backend_core::{
     conversation_messaging::messaging::{
         AddressRefusal, DeliveryIntent, DirectPairAllocation, TargetAddress,
     },
-    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimePrincipal,
 };
 
+use crate::conversation_messaging::messaging::agent_capability_wire::capability_denied;
 use crate::conversation_messaging::messaging::author_wire::author_dto;
+use crate::foundation::http_error::{
+    coded_error as coded, json_error as error, logged_500 as internal, logged_500 as internal_dyn,
+};
 use crate::foundation::wire_admission::ValidatedJson;
 use crate::foundation::wire_coerce::CoercedNumber;
 use crate::foundation::wire_patch::RequiredPatchField;
@@ -108,9 +111,7 @@ where
     if body.target.is_empty() {
         return invalid_input();
     }
-    // Numeric admission: `before_seq`/`after_seq`/`limit` coerce
-    // per `z.coerce.number()` (numeric string/null/bool/singleton-array accepted) then
-    // gate JS-safe int + domain. A present-but-uncoercible value is `invalid input`.
+    // A present non-integer `before_seq`/`after_seq`/`limit` is `invalid input`.
     if body.before_seq.is_invalid() || body.after_seq.is_invalid() || body.limit.is_invalid() {
         return invalid_input();
     }
@@ -124,7 +125,7 @@ where
     if anchor_count > 1 {
         return invalid_input();
     }
-    // Non-negative seqs (`z.coerce.number().int().nonnegative()`).
+    // Non-negative seqs.
     if before_seq.is_some_and(|v| v < 0) || after_seq.is_some_and(|v| v < 0) {
         return invalid_input();
     }
@@ -133,7 +134,7 @@ where
     }
     let include_content = body.include_content.into_option().unwrap_or(false);
     let include_system = body.include_system.into_option().unwrap_or(true);
-    // `z.coerce.number().int().positive().max(100).default(50)`.
+    // 1..=100, default 50.
     let limit = match body.limit.value() {
         None => 50,
         Some(value) if (1..=100).contains(&value) => value,
@@ -486,19 +487,6 @@ fn invalid_input() -> Response {
         .into_response()
 }
 
-fn capability_denied(capability: &'static str) -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({
-            "code": "capability_denied",
-            "capability": capability,
-            "message": format!("missing '{capability}' capability in this workspace"),
-            "details": { "capability": capability },
-        })),
-    )
-        .into_response()
-}
-
 fn address_refusal(refusal: AddressRefusal) -> Response {
     let (status, message, code) = match refusal {
         AddressRefusal::Malformed => (
@@ -528,41 +516,6 @@ fn address_refusal(refusal: AddressRefusal) -> Response {
         ),
     };
     coded(status, message, code)
-}
-
-fn coded(status: StatusCode, message: &str, code: &str) -> Response {
-    (
-        status,
-        Json(serde_json::json!({ "error": message, "code": code })),
-    )
-        .into_response()
-}
-
-fn error(status: StatusCode, message: &'static str) -> Response {
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
-}
-
-fn internal(cause: PersistenceFailure, log: &'static str) -> Response {
-    tracing::error!(
-        error_chain = crate::foundation::safe_log_field::safe_display(
-            &(crate::foundation::error::describe(&cause))
-        ),
-        "{log}"
-    );
-    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
-}
-
-fn internal_dyn<E>(cause: E, log: &'static str) -> Response
-where
-    E: std::error::Error + Send + Sync + 'static,
-{
-    tracing::error!(
-        error_chain = crate::foundation::safe_log_field::safe_display(
-            &(crate::foundation::error::describe(&cause))
-        ),
-        "{log}"
-    );
-    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
 }
 
 #[cfg(test)]

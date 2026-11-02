@@ -35,13 +35,8 @@ use silverhand_backend_core::{
     foundation::persistence::PersistenceFailure,
     workspace_data_plane::{AgentWorkspaceScopeFacts, AgentWorkspaceScopeRead},
 };
-use sqlx::{
-    SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
 use thiserror::Error;
 
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// ONE statement over ONE snapshot: a `request` CTE pins the three requested
@@ -78,7 +73,7 @@ type ScopeRow = (String, String, String, i64, Option<String>, i64, i64);
 /// pool; every read is one statement over the current schema.
 #[derive(Clone)]
 pub struct SqliteWorkspaceScopeStore {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 /// A pool that could not be opened as a consumer of an already-migrated database.
@@ -108,25 +103,15 @@ impl SqliteWorkspaceScopeStore {
         path: impl AsRef<Path>,
         busy_timeout: Duration,
     ) -> Result<Self, SqliteWorkspaceScopeStoreError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(busy_timeout);
-
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), busy_timeout).await?;
 
         Ok(Self { pool })
     }
 
     /// Share an already-open pool, for a composition root that keeps one pool per
     /// database rather than opening a second for this reader.
-    pub fn from_pool(pool: SqlitePool) -> Self {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
         Self { pool }
     }
 }

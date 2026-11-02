@@ -28,14 +28,10 @@ use silverhand_backend_core::{
     host_runtime::environment::{EntropySource, OsEntropy},
     identity_access::user_identity::UserRecord,
 };
-use sqlx::{
-    Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::Row;
 use thiserror::Error;
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The product's `randomHex(8)`: eight entropy bytes → sixteen lowercase hex digits.
 const USER_ID_BYTES: usize = 8;
@@ -77,7 +73,7 @@ SELECT id, ?, ? FROM conversations";
 /// allocation; holds no clock (the write stamps `now_ms`, passed in by the flow).
 #[derive(Clone)]
 pub struct SqliteEmbeddedBootstrap<E = OsEntropy> {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
     entropy: E,
 }
 
@@ -234,22 +230,16 @@ where
         path: impl AsRef<Path>,
         entropy: E,
     ) -> Result<Self, SqliteEmbeddedBootstrapError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool, entropy })
     }
 
     /// Construct over an already-open pool with an injected entropy source.
-    pub fn from_pool_with_entropy(pool: SqlitePool, entropy: E) -> Self {
+    pub fn from_pool_with_entropy(
+        pool: impl Into<crate::foundation::database::SqliteDatabase>,
+        entropy: E,
+    ) -> Self {
+        let pool = pool.into();
         Self { pool, entropy }
     }
 }
@@ -316,6 +306,9 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::sqlite::{
+        SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
+    };
     use sqlx::{Connection, Executor, SqliteConnection};
     use std::sync::Mutex;
 

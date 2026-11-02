@@ -27,16 +27,12 @@ use silverhand_backend_core::conversation_messaging::messaging::schedule::{
     ScheduleCreateRequest, ScheduleCreateStore, ScheduleSpec,
 };
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use sqlx::{
-    Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::Row;
 
 use super::super::SELECT_AGENT_PARTICIPATES;
 use super::product::project_schedule_view;
 use super::{ScheduleStoreError, SystemClock, driver};
 
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The count, cap check, and insert share ONE `IMMEDIATE` transaction: reserving
 /// the single writer up front is what makes the cap race-free. A `DEFERRED`
@@ -67,11 +63,6 @@ const INSERT_SCHEDULE: &str = "INSERT INTO schedules \
 /// the write lock. `LEFT`-JOIN semantics by hand: a missing row is target-not-found.
 const SELECT_TARGET_CONVERSATION: &str =
     "SELECT title, roster_policy, workspace_id, closed_at FROM conversations WHERE id = ?";
-const RESOLVE_MANAGE_SCHEDULES: &str = "SELECT CASE WHEN w.owner_agent_id = ? OR EXISTS ( \
-     SELECT 1 FROM workspace_agent_capabilities c WHERE c.workspace_id = w.id \
-     AND c.agent_id = ? AND c.capability = 'manage_schedules') THEN 1 ELSE 0 END \
-     FROM workspaces w WHERE w.id = ?";
-
 /// Serialize a canonical [`ScheduleSpec`] into the persisted `spec_json` shape,
 /// byte-identical to the TypeScript `JSON.stringify(spec)` and to what
 /// [`super::decode_spec`] reads back: a `{kind, ...}` object with snake_case
@@ -114,7 +105,7 @@ fn new_schedule_id() -> Result<String, PersistenceFailure> {
 /// authority, never fused with the fire-path store or the list/cancel readers.
 #[derive(Clone)]
 pub struct SqliteScheduleCreate<K = SystemClock> {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
     clock: K,
 }
 
@@ -128,7 +119,8 @@ impl SqliteScheduleCreate<SystemClock> {
     }
 
     /// Construct over an already-open pool with the real system clock.
-    pub fn from_pool(pool: SqlitePool) -> Self {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
         Self {
             pool,
             clock: SystemClock,
@@ -141,21 +133,15 @@ impl<K> SqliteScheduleCreate<K> {
         path: impl AsRef<Path>,
         clock: K,
     ) -> Result<Self, ScheduleStoreError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool, clock })
     }
 
-    pub fn from_pool_with_clock(pool: SqlitePool, clock: K) -> Self {
+    pub fn from_pool_with_clock(
+        pool: impl Into<crate::foundation::database::SqliteDatabase>,
+        clock: K,
+    ) -> Self {
+        let pool = pool.into();
         Self { pool, clock }
     }
 }
@@ -221,14 +207,15 @@ impl<K: Clock + Send + Sync> ScheduleCreateStore for SqliteScheduleCreate<K> {
 
         let workspace_id: Option<String> = target.try_get("workspace_id").map_err(driver)?;
         if let Some(workspace_id) = workspace_id {
-            let granted: Option<i64> = sqlx::query_scalar(RESOLVE_MANAGE_SCHEDULES)
-                .bind(owner.as_str())
-                .bind(owner.as_str())
-                .bind(&workspace_id)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(driver)?;
-            if granted.unwrap_or(0) == 0 {
+            let granted = crate::foundation::capability::agent_has_workspace_capability(
+                &mut *tx,
+                &workspace_id,
+                owner.as_str(),
+                "manage_schedules",
+            )
+            .await
+            .map_err(driver)?;
+            if !granted {
                 tx.rollback().await.map_err(driver)?;
                 return Ok(ScheduleCreateOutcome::CapabilityDenied);
             }

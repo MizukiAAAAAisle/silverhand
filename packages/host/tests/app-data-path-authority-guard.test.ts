@@ -80,9 +80,9 @@ const OCCURRENCE_INVENTORY: OccurrenceExemption[] = [
   {
     file: 'packages/host/src/drivers/pi.ts',
     token: '.silverhand',
-    line: "const sessions = join(ctx.workspacePath, '.silverhand', 'pi-sessions', ctx.agentId);",
+    line: "const legacy = join(ctx.workspacePath, '.silverhand', 'pi-sessions', ctx.agentId);",
     reason:
-      'workspace-local Pi session storage under the already resolved runtime cwd; never derives an application root',
+      'read-only lookup of workspace-local Pi sessions written by earlier daemons; never derives an application root',
     count: 1,
   },
   {

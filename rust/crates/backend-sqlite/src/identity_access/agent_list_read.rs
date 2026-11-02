@@ -41,10 +41,6 @@ use silverhand_backend_core::{
     identity_access::agent_detail_read::AgentDetailFacts,
     identity_access::agent_list_read::AgentListReadModel,
 };
-use sqlx::{
-    SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
 
 use crate::{
     identity_access::agent_detail_read::{
@@ -53,7 +49,6 @@ use crate::{
     identity_access::agent_view_acl::{read_candidate_audiences, viewer_candidate_predicate},
 };
 
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
 
@@ -72,22 +67,17 @@ const SELECT_VISIBLE_AGENT_ROWS: &str = concat!(
 
 #[derive(Clone)]
 pub struct SqliteAgentListColdRead {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 impl SqliteAgentListColdRead {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
+        Self { pool }
+    }
+
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, AgentDetailColdReadError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool })
     }
 

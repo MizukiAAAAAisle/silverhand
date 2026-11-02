@@ -15,15 +15,11 @@ use silverhand_backend_core::conversation_messaging::messaging::schedule::{
     ScheduleListQuery, ScheduleListReadModel, ScheduleView,
 };
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use sqlx::{
-    QueryBuilder, Sqlite, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions},
-};
+use sqlx::{QueryBuilder, Sqlite};
 
 use super::product::project_schedule_view;
 use super::{ScheduleStoreError, driver};
 
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The projection fragment, joining the target conversation for the label. Kept
@@ -39,29 +35,21 @@ const SELECT_WITH_TARGET: &str = "SELECT s.*, \
 /// authority, never fused with the fire-path store.
 #[derive(Clone)]
 pub struct SqliteScheduleListRead {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 impl SqliteScheduleListRead {
     /// Opens an existing product database. A missing file is a failure, not an
     /// empty database: the schema has an owner, and this reader is not it.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, ScheduleStoreError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool })
     }
 
     /// Wraps an already-open pool, so a composition root can share ONE pool per
     /// database across the schedule faces.
-    pub fn from_pool(pool: SqlitePool) -> Self {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
         Self { pool }
     }
 }

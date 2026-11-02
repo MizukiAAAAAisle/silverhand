@@ -29,13 +29,9 @@ use silverhand_backend_core::{
         RECOVERY_WINDOW_MAX_ATTEMPTS, RECOVERY_WINDOW_MAX_SENDS, RECOVERY_WINDOW_MS, RUST_PRODUCER,
     },
 };
-use sqlx::{
-    Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::Row;
 use thiserror::Error;
 
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// The provenance algorithm tag, spelled the way it is persisted.
 const ALGORITHM: &str = "argon2id";
@@ -52,7 +48,7 @@ SELECT u.id AS user_id, c.password_hash AS password_hash \
 /// read. Holds no clock: the login flow spends no write here.
 #[derive(Clone)]
 pub struct SqliteCredentialStore {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 /// Startup/driver failures surfaced only to the composition root that opens the
@@ -72,28 +68,16 @@ struct CorruptStoredUserId;
 
 impl SqliteCredentialStore {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, SqliteCredentialStoreError> {
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(login_options(path.as_ref()))
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool })
     }
 
     /// Construct over an already-open pool so a composition root that shares one
     /// pool across adapters need not reopen the file.
-    pub fn from_pool(pool: SqlitePool) -> Self {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
         Self { pool }
     }
-}
-
-fn login_options(path: &Path) -> SqliteConnectOptions {
-    SqliteConnectOptions::new()
-        .filename(path)
-        .create_if_missing(false)
-        .foreign_keys(true)
-        .journal_mode(SqliteJournalMode::Wal)
-        .synchronous(SqliteSynchronous::Full)
-        .busy_timeout(BUSY_TIMEOUT)
 }
 
 impl LoginCredentialLookup for SqliteCredentialStore {
@@ -499,6 +483,7 @@ async fn current_window(
 mod tests {
     use super::*;
     use silverhand_backend_core::identity_access::credential::{Argon2idCost, RustCalibration};
+    use sqlx::sqlite::SqliteConnectOptions;
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =

@@ -26,12 +26,8 @@ use silverhand_backend_core::{
         AgentAvatarServeRef, AgentAvatarServeRefRead, decode_agent_avatar_row,
     },
 };
-use sqlx::{
-    Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::Row;
 
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The serve-ref read: the row's own id (read back so the serve fact is source-bound
@@ -43,26 +39,17 @@ const SELECT_AGENT_AVATAR_REF: &str =
 
 #[derive(Clone)]
 pub struct SqliteAgentAvatarRead {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 impl SqliteAgentAvatarRead {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, sqlx::Error> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool })
     }
 
-    pub fn from_pool(pool: SqlitePool) -> Self {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
         Self { pool }
     }
 }
@@ -103,6 +90,7 @@ mod tests {
     use silverhand_backend_core::identity_access::{
         agent_avatar::AgentAvatarRow, avatar::AvatarContentType,
     };
+    use sqlx::sqlite::SqliteConnectOptions;
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =

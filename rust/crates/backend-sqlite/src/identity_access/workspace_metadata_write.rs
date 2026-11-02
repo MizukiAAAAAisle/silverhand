@@ -39,14 +39,10 @@ use silverhand_backend_core::{
         WorkspaceMetadataWrite, WorkspaceMetadataWriteUnitOfWork,
     },
 };
-use sqlx::{
-    Row, Sqlite, SqlitePool, Transaction,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::{Row, Sqlite, Transaction};
 use thiserror::Error;
 
 const ROOT_WRITE_BEGIN: &str = "BEGIN IMMEDIATE";
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 // The authoritative row re-read under the write lock, joined to the actor's role
@@ -107,7 +103,7 @@ type LockedWorkspaceRowNonHuman = (Option<String>, String, Option<String>);
 /// in by the application, which owns the time source.
 #[derive(Clone)]
 pub struct SqliteWorkspaceMetadataWrite {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 /// Startup and driver failures surfaced only to the composition root that opens
@@ -162,25 +158,14 @@ struct LockedWorkspace {
 
 impl SqliteWorkspaceMetadataWrite {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, SqliteWorkspaceMetadataWriteError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            // An acknowledged rename/archive must survive power loss, so WAL runs
-            // with FULL — NORMAL would let a recently acknowledged write roll back.
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool })
     }
 
     /// Construct over an already-open pool, so a composition root that shares one
     /// pool across adapters need not reopen the file.
-    pub fn from_pool(pool: SqlitePool) -> Self {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
         Self { pool }
     }
 
@@ -433,6 +418,7 @@ impl WorkspaceMetadataWriteUnitOfWork for SqliteWorkspaceMetadataWrite {
 mod tests {
     use super::*;
     use silverhand_backend_core::identity_access::workspace_name::CanonicalWorkspaceName;
+    use sqlx::sqlite::SqliteConnectOptions;
     use sqlx::{Connection, Executor, SqliteConnection};
 
     const CURRENT_SCHEMA: &str =

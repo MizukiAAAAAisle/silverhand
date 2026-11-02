@@ -19,14 +19,10 @@ use silverhand_backend_core::{
     identity_access::workspace_name::CanonicalWorkspaceName,
     identity_access::workspace_name_availability::{HeldName, RegularWorkspaceNamespace},
 };
-use sqlx::{
-    Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::Row;
 use std::time::Duration;
 use thiserror::Error;
 
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The holder-of-a-key lookup. `name_key = ?` alone already excludes agent-home
@@ -42,7 +38,7 @@ SELECT name_key FROM workspaces \
 
 #[derive(Clone)]
 pub struct SqliteRegularWorkspaceNamespace {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 /// Read failures surfaced only as the source of a [`PersistenceFailure`]. The one
@@ -56,23 +52,14 @@ pub enum WorkspaceNameNamespaceError {
 
 impl SqliteRegularWorkspaceNamespace {
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, WorkspaceNameNamespaceError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool })
     }
 
     /// Construct over an already-open pool, so a composition root that shares one
     /// pool across adapters need not reopen the file.
-    pub fn from_pool(pool: SqlitePool) -> Self {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
         Self { pool }
     }
 }

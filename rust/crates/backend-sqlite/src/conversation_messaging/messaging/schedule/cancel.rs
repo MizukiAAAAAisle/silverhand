@@ -28,15 +28,11 @@ use silverhand_backend_core::conversation_messaging::messaging::schedule::{
 };
 use silverhand_backend_core::foundation::identity::{AgentId, WorkspaceId};
 use silverhand_backend_core::foundation::persistence::PersistenceFailure;
-use sqlx::{
-    Row, SqlitePool,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::Row;
 
 use super::product::project_schedule_view;
 use super::{ScheduleStoreError, SystemClock, corrupt, driver};
 
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 /// Reserve the single writer up front so cancel and the fire path serialize; a
 /// cancel that races a claim then sees a whole pre- or post-fire state, never a
@@ -54,16 +50,6 @@ const SELECT_SCHEDULE: &str =
 const SELECT_TARGET_CONVERSATION: &str =
     "SELECT workspace_id, roster_policy, title FROM conversations WHERE id = ?";
 
-/// The `manage_schedules` grant for `owner` against workspace `w`, the SAME
-/// `owner_agent_id OR workspace_agent_capabilities` shape the other capability
-/// reads use, with the token hardcoded. Returns no row when the workspace does
-/// not exist — the caller reads that as "not granted", matching
-/// `canAgentUseCapability`'s `if (!workspace) return false`.
-const RESOLVE_MANAGE_SCHEDULES: &str = "SELECT CASE WHEN w.owner_agent_id = ? OR EXISTS ( \
-     SELECT 1 FROM workspace_agent_capabilities c WHERE c.workspace_id = w.id \
-     AND c.agent_id = ? AND c.capability = 'manage_schedules') THEN 1 ELSE 0 END \
-     FROM workspaces w WHERE w.id = ?";
-
 /// The conditional cancel: flip `pending|firing → cancelled`, stamping
 /// `cancelled_at`/`updated_at`, and project the post-image via `RETURNING`. A
 /// terminal row matches nothing (the CAS-miss the caller reports as
@@ -76,7 +62,7 @@ const CANCEL_CAS: &str = "UPDATE schedules \
 /// The cancel write authority. Its clock stamps `cancelled_at`/`updated_at`.
 #[derive(Clone)]
 pub struct SqliteScheduleCancel<K = SystemClock> {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
     clock: K,
 }
 
@@ -94,23 +80,17 @@ impl<K> SqliteScheduleCancel<K> {
         path: impl AsRef<Path>,
         clock: K,
     ) -> Result<Self, ScheduleStoreError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool, clock })
     }
 
     /// Wraps an already-open pool with an injected clock, for a shared-pool
     /// composition root or a deterministic test clock.
-    pub fn from_pool(pool: SqlitePool, clock: K) -> Self {
+    pub fn from_pool(
+        pool: impl Into<crate::foundation::database::SqliteDatabase>,
+        clock: K,
+    ) -> Self {
+        let pool = pool.into();
         Self { pool, clock }
     }
 }
@@ -174,15 +154,17 @@ impl<K: Clock + Send + Sync> ScheduleCancelUnitOfWork for SqliteScheduleCancel<K
                     Some(workspace_id) => {
                         let workspace_id = WorkspaceId::parse(workspace_id)
                             .map_err(|_| corrupt("conversations.workspace_id"))?;
-                        let granted: Option<i64> = sqlx::query_scalar(RESOLVE_MANAGE_SCHEDULES)
-                            .bind(schedule_owner.as_str())
-                            .bind(schedule_owner.as_str())
-                            .bind(workspace_id.as_str())
-                            .fetch_optional(&mut *tx)
+                        let granted =
+                            crate::foundation::capability::agent_has_workspace_capability(
+                                &mut *tx,
+                                workspace_id.as_str(),
+                                schedule_owner.as_str(),
+                                "manage_schedules",
+                            )
                             .await
                             .map_err(driver)?;
                         // No workspace row → not granted (matches `if (!workspace)`).
-                        let manage_schedules = granted.unwrap_or(0) != 0;
+                        let manage_schedules = granted;
                         denied_workspace = Some(workspace_id);
                         CancelTarget::Workspace { manage_schedules }
                     }

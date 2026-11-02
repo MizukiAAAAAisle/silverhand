@@ -21,14 +21,10 @@ use silverhand_backend_core::{
     },
     identity_access::workspace_face::{WorkspaceFace, WorkspaceFaceReadPort},
 };
-use sqlx::{
-    Row, Sqlite, SqlitePool, Transaction,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::{Row, Sqlite, Transaction};
 use thiserror::Error;
 
 const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The visible-workspace list for one human viewer.
@@ -86,7 +82,7 @@ SELECT \
 
 #[derive(Clone)]
 pub struct SqliteWorkspaceColdRead {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 /// Read failures surfaced only as the source of a [`PersistenceFailure`]. Every
@@ -103,18 +99,13 @@ pub enum WorkspaceColdReadError {
 }
 
 impl SqliteWorkspaceColdRead {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
+        Self { pool }
+    }
+
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, WorkspaceColdReadError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(BUSY_TIMEOUT);
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), BUSY_TIMEOUT).await?;
         Ok(Self { pool })
     }
 

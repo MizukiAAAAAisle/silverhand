@@ -23,7 +23,7 @@ use crate::conversation_messaging::messaging::MessagingStore;
 /// The agent channel-list read authority — a shared-pool clone of the ONE store.
 #[derive(Clone)]
 pub struct SqliteAgentChannelList {
-    pool: sqlx::SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 impl<E> MessagingStore<E> {
@@ -35,7 +35,8 @@ impl<E> MessagingStore<E> {
 }
 
 impl SqliteAgentChannelList {
-    pub fn from_pool(pool: sqlx::SqlitePool) -> Self {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
         Self { pool }
     }
 }
@@ -205,18 +206,15 @@ async fn may_read_messages(
     agent: &AgentId,
     workspace: &WorkspaceId,
 ) -> Result<bool, PersistenceFailure> {
-    let granted: Option<i64> = sqlx::query_scalar(
-        "SELECT CASE WHEN w.owner_agent_id = ? OR EXISTS (SELECT 1 FROM \
-         workspace_agent_capabilities c WHERE c.workspace_id = w.id AND c.agent_id = ? \
-         AND c.capability = 'read_messages') THEN 1 ELSE 0 END FROM workspaces w WHERE w.id = ?",
+    let granted = crate::foundation::capability::agent_has_workspace_capability(
+        &mut **tx,
+        workspace.as_str(),
+        agent.as_str(),
+        "read_messages",
     )
-    .bind(agent.as_str())
-    .bind(agent.as_str())
-    .bind(workspace.as_str())
-    .fetch_optional(&mut **tx)
     .await
     .map_err(AgentChannelListError::from)?;
-    Ok(granted.is_some_and(|allowed| allowed != 0))
+    Ok(granted)
 }
 
 fn decode_channel(row: &sqlx::sqlite::SqliteRow) -> Result<AgentListedChannel, PersistenceFailure> {

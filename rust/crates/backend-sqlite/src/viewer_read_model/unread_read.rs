@@ -30,14 +30,10 @@ use silverhand_backend_core::{
     foundation::identity::{ConversationId, UserId, WorkspaceId},
     foundation::persistence::PersistenceFailure,
 };
-use sqlx::{
-    Row, Sqlite, SqlitePool, Transaction,
-    sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous},
-};
+use sqlx::{Row, Sqlite, Transaction};
 use thiserror::Error;
 
 const DEFERRED_READ_BEGIN: &str = "BEGIN DEFERRED";
-const POOL_CONNECTIONS: u32 = 4;
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// The stored channel default the oracle passes as `@channelDefaultMode`: a channel
@@ -302,7 +298,7 @@ const LIVE_PARTICIPANT_USER_IDS: &str = concat!(
 /// Reads the committed database to decide who is owed an unread update for a conversation.
 #[derive(Clone)]
 pub struct SqliteUnreadReadModel {
-    pool: SqlitePool,
+    pool: crate::foundation::database::SqliteDatabase,
 }
 
 /// Startup and driver failures, surfaced only to the composition root that opens the
@@ -425,6 +421,11 @@ const PLACEMENT_WORKSPACE: &str = "workspace";
 const PLACEMENT_DIRECT_PAIR: &str = "direct_pair";
 
 impl SqliteUnreadReadModel {
+    pub fn from_pool(pool: impl Into<crate::foundation::database::SqliteDatabase>) -> Self {
+        let pool = pool.into();
+        Self { pool }
+    }
+
     /// Opens an existing product database. A missing file is a failure rather than an
     /// empty database.
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, UnreadReadModelError> {
@@ -435,18 +436,7 @@ impl SqliteUnreadReadModel {
         path: impl AsRef<Path>,
         busy_timeout: Duration,
     ) -> Result<Self, UnreadReadModelError> {
-        let options = SqliteConnectOptions::new()
-            .filename(path.as_ref())
-            .create_if_missing(false)
-            .foreign_keys(true)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Full)
-            .busy_timeout(busy_timeout);
-
-        let pool = SqlitePoolOptions::new()
-            .max_connections(POOL_CONNECTIONS)
-            .connect_with(options)
-            .await?;
+        let pool = crate::foundation::database::store_pool(path.as_ref(), busy_timeout).await?;
 
         Ok(Self { pool })
     }

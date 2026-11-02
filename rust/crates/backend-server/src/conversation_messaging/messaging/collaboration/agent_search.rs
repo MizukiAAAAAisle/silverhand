@@ -25,11 +25,14 @@ use silverhand_backend_core::{
     },
     foundation::identity::{ConversationId, WorkspaceId},
     foundation::name_canonicalization::is_ecmascript_trim_whitespace,
-    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimePrincipal,
 };
 
+use crate::conversation_messaging::messaging::agent_capability_wire::capability_denied;
 use crate::conversation_messaging::messaging::author_wire::author_dto;
+use crate::foundation::http_error::{
+    coded_error as coded, json_error as error, logged_500 as internal,
+};
 use crate::foundation::wire_admission::ValidatedJson;
 use crate::foundation::wire_coerce::CoercedNumber;
 use crate::foundation::wire_patch::RequiredPatchField;
@@ -116,8 +119,7 @@ where
     if !(1..=200).contains(&q_units) {
         return invalid_input();
     }
-    // include_system defaults true; limit `z.coerce.number().int().positive().max(100)
-    // .default(50)`.
+    // include_system defaults true; limit 1..=100, default 50.
     let include_system = body.include_system.into_option().unwrap_or(true);
     if body.limit.is_invalid() {
         return invalid_input();
@@ -308,41 +310,6 @@ fn search_scope_required() -> Response {
         .into_response()
 }
 
-fn capability_denied(capability: &'static str) -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({
-            "code": "capability_denied",
-            "capability": capability,
-            "message": format!("missing '{capability}' capability in this workspace"),
-            "details": { "capability": capability },
-        })),
-    )
-        .into_response()
-}
-
-fn error(status: StatusCode, message: &'static str) -> Response {
-    (status, Json(serde_json::json!({ "error": message }))).into_response()
-}
-
-fn coded(status: StatusCode, message: &str, code: &str) -> Response {
-    (
-        status,
-        Json(serde_json::json!({ "error": message, "code": code })),
-    )
-        .into_response()
-}
-
-fn internal(cause: PersistenceFailure, log: &'static str) -> Response {
-    tracing::error!(
-        error_chain = crate::foundation::safe_log_field::safe_display(
-            &(crate::foundation::error::describe(&cause))
-        ),
-        "{log}"
-    );
-    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,6 +322,7 @@ mod tests {
     use silverhand_backend_core::foundation::identity::{
         AgentId, ConversationId, DaemonInstanceId,
     };
+    use silverhand_backend_core::foundation::persistence::PersistenceFailure;
     use silverhand_backend_core::host_runtime::runtime_credential::{
         RuntimeCustody, RuntimeGeneration, RuntimeScope,
     };

@@ -26,10 +26,11 @@ use silverhand_backend_core::{
         AgentThreadFollowChange, AgentThreadFollowRefusal, AgentThreadFollowWrite,
         RootMessageLocate,
     },
-    foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::RuntimePrincipal,
 };
 
+use crate::conversation_messaging::messaging::agent_capability_wire::capability_denied;
+use crate::foundation::http_error::logged_500 as internal;
 use crate::foundation::wire_admission::ValidatedJson;
 use crate::host_runtime::runtime_credential::bind_runtime_actor;
 
@@ -210,27 +211,4 @@ fn reply_target_not_found() -> Response {
         })),
     )
         .into_response()
-}
-
-fn capability_denied(capability: &'static str) -> Response {
-    (
-        StatusCode::FORBIDDEN,
-        Json(serde_json::json!({
-            "code": "capability_denied",
-            "capability": capability,
-            "message": format!("missing '{capability}' capability in this workspace"),
-            "details": { "capability": capability },
-        })),
-    )
-        .into_response()
-}
-
-fn internal(cause: PersistenceFailure, log: &'static str) -> Response {
-    tracing::error!(
-        error_chain = crate::foundation::safe_log_field::safe_display(
-            &(crate::foundation::error::describe(&cause))
-        ),
-        "{log}"
-    );
-    (StatusCode::INTERNAL_SERVER_ERROR, "Internal Server Error").into_response()
 }

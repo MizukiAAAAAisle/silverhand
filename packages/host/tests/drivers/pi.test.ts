@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -60,11 +60,22 @@ describe('Pi RPC driver', () => {
     const { d, ctx, args, id } = fixture();
     expect(args).toContain('--append-system-prompt');
     expect(args).not.toContain('--approve');
+    expect(args).not.toContain('--session-dir');
     expect(d.buildArgs({ ...ctx, cliSessionId: id! })).toEqual(args);
     expect(d.applyEnv({ PI_CODING_AGENT_DIR: '/configured' }).PI_CODING_AGENT_DIR).toBe(
       '/configured',
     );
     expect(d.minimumVersion).toBe('1.0.0');
+  });
+  it('resumes a session an earlier daemon stored under the workspace in place', () => {
+    const { d, ctx, id } = fixture();
+    const legacy = join(ctx.workspacePath, '.silverhand', 'pi-sessions', ctx.agentId);
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, `2026-01-01T00-00-00-000Z_${id}.jsonl`), '');
+    const args = d.buildArgs({ ...ctx, cliSessionId: id! });
+    expect(args[args.indexOf('--session-dir') + 1]).toBe(legacy);
+    const other = d.buildArgs({ ...ctx, cliSessionId: '00000000-0000-4000-8000-000000000000' });
+    expect(other).not.toContain('--session-dir');
   });
   it('requires its own delivery extension before reporting ready', () => {
     const { d, reply, id, lines, extension, commands } = fixture();
