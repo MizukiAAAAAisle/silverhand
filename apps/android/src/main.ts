@@ -1,6 +1,14 @@
-import { configurePlatform, initializeThemePersistence, mountApp, resumeApp, type ThemeId } from '@silverhand/app-ui';
+import {
+  configurePlatform,
+  initializeThemePersistence,
+  mountApp,
+  resumeApp,
+  type ThemeId,
+} from '@silverhand/app-ui';
 import { nativeBridge } from '../../ios/src/bridge';
 import { createAndroidPlatform } from './platform';
+import { createAndroidNotices } from './notices';
+import './notices.css';
 import '../../ios/src/mobile.css';
 import './short-viewport.css';
 import { bindShortViewport } from './short-viewport';
@@ -12,7 +20,9 @@ const themeBridge = nativeBridge as typeof nativeBridge & {
   saveTheme(input: { theme: ThemeId }): Promise<void>;
 };
 
+let notices: ReturnType<typeof createAndroidNotices> | undefined;
 function resetApplication() {
+  notices?.dispose();
   const appearance = localStorage.getItem('silverhand:appearance');
   localStorage.clear();
   if (appearance !== null) localStorage.setItem('silverhand:appearance', appearance);
@@ -26,7 +36,9 @@ async function start() {
   await nativeBridge.addListener('foreground', () => {
     void resumeApp();
   });
-  configurePlatform(createAndroidPlatform(resetApplication));
+  notices = createAndroidNotices();
+  window.addEventListener('pagehide', () => notices?.dispose(), { once: true });
+  configurePlatform(createAndroidPlatform(resetApplication, notices));
   await nativeBridge.getProfile();
   await initializeThemePersistence({
     getTheme: async () => (await themeBridge.getTheme()).theme,
@@ -37,6 +49,7 @@ async function start() {
   window.addEventListener('pagehide', releaseShortViewport, { once: true });
 }
 void start().catch((error) => {
+  notices?.dispose();
   const root = document.getElementById('root');
   if (root) root.textContent = `Unable to start Silverhand: ${String(error)}`;
 });

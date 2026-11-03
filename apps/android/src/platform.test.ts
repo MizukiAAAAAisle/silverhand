@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from 'vitest';
 vi.mock('../../ios/src/bridge', () => ({ nativeBridge: {} }));
 const upstream = {
   client: { marker: 'upstream-auth' },
-  files: { saveAttachment: vi.fn(), openExternal: vi.fn(), sharePngExport: vi.fn(), previewPngExport: vi.fn() },
+  files: {
+    saveAttachment: vi.fn(),
+    openExternal: vi.fn(),
+    sharePngExport: vi.fn(),
+    previewPngExport: vi.fn(),
+  },
   getAppVersion: vi.fn(),
   navigation: {},
   titlebar: {},
@@ -16,7 +21,13 @@ vi.mock('../../ios/src/platform', () => ({ createIOSPlatform: () => upstream }))
 import { createAndroidPlatform } from './platform';
 describe('Android stage 1 capability boundary', () => {
   it('reuses upstream client semantics without advertising iOS chrome or an Apple store', () => {
-    const platform = createAndroidPlatform(() => {});
+    const notices = {
+      banner: { show: vi.fn(), subscribe: vi.fn() },
+      toast: { show: vi.fn(), dismiss: vi.fn(), subscribe: vi.fn() },
+    };
+    const platform = createAndroidPlatform(() => {}, notices);
+    expect(platform.banner).toBe(notices.banner);
+    expect(platform.toast).toBe(notices.toast);
     expect(platform.client).toBe(upstream.client);
     expect(platform.files.saveAttachment).toBe(upstream.files.saveAttachment);
     for (const capability of [
@@ -25,7 +36,6 @@ describe('Android stage 1 capability boundary', () => {
       'pageBar',
       'composer',
       'avatarMaker',
-      'banner',
       'storeUrl',
       'localHost',
     ])

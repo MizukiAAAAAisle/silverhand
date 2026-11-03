@@ -1,0 +1,175 @@
+/* SystemBars supplies either remaining insets or zero after native padding.
+   Choose its CSS value OR env(), never add the two or pad WebView again. */
+.android-notices {
+  position: fixed;
+  inset: calc(var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) + 8px)
+    calc(var(--safe-area-inset-right, env(safe-area-inset-right, 0px)) + 8px) auto
+    calc(var(--safe-area-inset-left, env(safe-area-inset-left, 0px)) + 8px);
+  z-index: calc(var(--z-lightbox-chrome, 91) + 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  pointer-events: none;
+  max-height: calc(
+    100dvh - var(--safe-area-inset-top, env(safe-area-inset-top, 0px)) -
+      var(--safe-area-inset-bottom, env(safe-area-inset-bottom, 0px)) - 16px
+  );
+  overflow-y: auto;
+}
+.android-notice {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  max-width: 480px;
+  padding: 6px 8px;
+  border: 1px solid var(--border, #888);
+  border-radius: 26px;
+  color: var(--text-primary, #222);
+  background: var(--bg-floating, #fff);
+  box-shadow: 0 6px 20px #0003;
+  pointer-events: auto;
+  touch-action: pan-x;
+  overflow-wrap: anywhere;
+  animation: android-notice-arrive 180ms ease-out;
+}
+.android-notice[hidden],
+.android-notice [hidden] {
+  display: none;
+}
+.android-notice button {
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  border: 0;
+  background: none;
+}
+.android-notice button:focus-visible {
+  outline: 2px solid var(--accent, #356ce0);
+  outline-offset: -2px;
+  border-radius: 14px;
+}
+.android-notice-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 4px;
+  text-align: start;
+}
+.android-notice-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  font-size: 0.9375rem;
+  line-height: 1.4;
+}
+.android-notice-subtitle {
+  color: var(--text-secondary, #555);
+  font-size: 0.8125rem;
+}
+.android-notice-body {
+  font-size: 0.875rem;
+  white-space: pre-wrap;
+}
+.android-notice-icon {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.25rem;
+  width: 36px;
+}
+.android-notice-icon img {
+  width: 36px;
+  height: 36px;
+  object-fit: cover;
+}
+.android-notice-avatar {
+  border-radius: 50%;
+}
+.android-notice-mask {
+  display: block;
+  width: 24px;
+  height: 24px;
+  background: currentColor;
+  mask-size: contain;
+  mask-repeat: no-repeat;
+  mask-position: center;
+}
+.android-notice-action,
+.android-notice-close {
+  flex: none;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px;
+}
+.android-notice-action {
+  max-width: 35%;
+  overflow-wrap: anywhere;
+  font-weight: 600 !important;
+}
+.android-notice-close {
+  font-size: 1.5rem !important;
+}
+.android-notice-announcement {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+@keyframes android-notice-arrive {
+  from {
+    opacity: 0;
+    translate: 0 -12px;
+  }
+  to {
+    opacity: 1;
+    translate: 0 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .android-notice {
+    animation: none;
+  }
+}
+
+@supports (backdrop-filter: blur(16px)) {
+  .android-notice {
+    background: color-mix(in srgb, var(--bg-floating, #fff) 94%, transparent);
+    backdrop-filter: blur(16px);
+  }
+}
+@media (forced-colors: active) {
+  .android-notice {
+    color: CanvasText;
+    background: Canvas;
+    border-color: CanvasText;
+  }
+}
+
+.android-notice-icon[data-tone='success'] {
+  color: var(--success, #287343);
+}
+.android-notice-icon[data-tone='error'] {
+  color: var(--error, #b32929);
+}
+.android-notice-icon[data-tone='warning'] {
+  color: var(--warning, #8a6200);
+}
+.android-notice-ground {
+  min-height: 36px;
+  border-radius: 50%;
+  background: var(--bg-hover, #8882);
+}
+.android-notice-text strong,
+.android-notice-body {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+}
