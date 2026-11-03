@@ -3,6 +3,8 @@ import { registerPlugin, type PluginListenerHandle } from "@capacitor/core";
 import type {
   BannerEvent,
   BannerNotice,
+  ToastEvent,
+  ToastNotice,
   ComposerEvent,
   ComposerState,
   ContextMenu,
@@ -58,6 +60,8 @@ export interface NativeBridge {
   selectionBarRemove(input: { key: string }): Promise<void>;
   /** A notice over the bars; the icon is base64 PNG. */
   bannerShow(input: BannerNotice): Promise<void>;
+  toastShow(input: ToastNotice): Promise<void>;
+  toastDismiss(input: { id?: string }): Promise<void>;
   composerSetText(input: {
     key: string;
     text: string;
@@ -93,9 +97,11 @@ export interface NativeBridge {
   closeSocket(input: { id: string }): Promise<void>;
   saveAttachment(input: { filename: string; base64: string }): Promise<{ completed: boolean }>;
   sharePng(input: { base64: string }): Promise<{ completed: boolean }>;
-  /** A rendered image in a native sheet with a share action. */
+  /** An image in a native sheet with a share action: inline, or an attachment
+   * native downloads while the sheet shows. */
   previewPng(input: {
-    base64: string;
+    base64?: string;
+    attachmentId?: string;
     title: string;
     shareLabel: string;
     closeLabel: string;
@@ -140,6 +146,7 @@ export interface NativeBridge {
     event: "banner",
     handler: (event: BannerEvent) => void,
   ): Promise<PluginListenerHandle>;
+  addListener(event: "toast", handler: (event: ToastEvent) => void): Promise<PluginListenerHandle>;
   addListener(
     event: "fold",
     handler: (

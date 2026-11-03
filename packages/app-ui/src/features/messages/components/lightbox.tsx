@@ -4,7 +4,7 @@ import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import * as DialogPrimitive from "@/components/ui/modal";
 import { CloseIcon, DownloadIcon, ShareIcon, ZoomInIcon, ZoomOutIcon } from "@/icons";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { Button } from "@/components/ui/button";
 import { usePinchZoomLease } from "@/lib/pinch-zoom-lease";
 import { SelectionActionButton } from "./selection-toolbar";
@@ -17,6 +17,9 @@ interface LightboxProps {
   alt: string;
   /** Read original bytes through the resource owner, independently of its display URL. */
   loadExportBytes?: () => Promise<Uint8Array>;
+  /** The sent attachment shown, when there is one: a native preview fetches
+   *  it itself instead of waiting on the page for its bytes. */
+  attachmentId?: string;
   /**
    * Optional save-as callback. When provided, the footer shows a
    * "Download" action alongside "Copy". Omitted for the composer's
@@ -115,8 +118,10 @@ export function Lightbox({
   alt,
   onDownload,
   loadExportBytes,
+  attachmentId,
 }: LightboxProps): JSX.Element {
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [downloading, setDownloading] = useState(false);
 
   // `scale` = 1 is fit-to-window. `fit` is the on-screen size the image
@@ -300,6 +305,53 @@ export function Lightbox({
   };
 
   const shareImage = getPlatform().files.sharePngExport;
+  // A native host shows the image in its own sheet (zoom, share), opened at
+  // once. The displayed image is a local blob, so its bytes are handed over;
+  // only when that read fails does native download the attachment itself,
+  // inside the already-open sheet.
+  const nativePreview = getPlatform().files.previewPngExport;
+  useEffect(() => {
+    if (!open || !nativePreview) {
+      return;
+    }
+    const generation = exportGeneration.current;
+    const labels = {
+      title: alt,
+      shareLabel: t("messages.share"),
+      closeLabel: t("common.close"),
+    };
+    void (async () => {
+      try {
+        const local = await fetch(src)
+          .then(async (res) => new Uint8Array(await res.arrayBuffer()))
+          .catch((err: unknown) => {
+            if (!attachmentId) {
+              throw err;
+            }
+            return null;
+          });
+        const image = local ? { pngBytes: local } : { attachmentId: attachmentId! };
+        if (generation !== exportGeneration.current) {
+          return;
+        }
+        await nativePreview({ image, ...labels });
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : String(err));
+      }
+      if (generation === exportGeneration.current) {
+        onOpenChange(false);
+      }
+    })();
+  }, [open, src]);
+
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
   const onExport = async (): Promise<void> => {
     if (busy) return;
     const generation = exportGeneration.current;
@@ -314,13 +366,21 @@ export function Lightbox({
       const result = await (shareImage ?? getPlatform().files.copyPngExport)({ pngBytes: bytes });
       if (generation !== exportGeneration.current) return;
       if (result.ok) {
-        if (!shareImage) toast.success(t("messages.imageCopiedToClipboard"));
+        setCopied(!shareImage);
       } else if ("error" in result) {
-        toast.error(result.error);
+        toast.error(
+          shareImage ? t("messages.shareFailed", { reason: result.error }) : t("common.copyFailed"),
+        );
       }
     } catch (err) {
       if (generation === exportGeneration.current)
-        toast.error("Couldn't export: " + (err instanceof Error ? err.message : String(err)));
+        toast.error(
+          shareImage
+            ? t("messages.shareFailed", {
+                reason: err instanceof Error ? err.message : String(err),
+              })
+            : t("common.copyFailed"),
+        );
     } finally {
       if (generation === exportGeneration.current) setBusy(false);
     }
@@ -337,6 +397,10 @@ export function Lightbox({
   };
 
   const zoomed = scale > MIN_SCALE;
+
+  if (nativePreview) {
+    return <></>;
+  }
 
   return (
     <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
@@ -492,7 +556,13 @@ export function Lightbox({
             <div className="flex items-center gap-2">
               <SelectionActionButton
                 rank={onDownload && !shareImage ? "secondary" : "primary"}
-                label={shareImage ? t("messages.share") : t("messages.copy")}
+                label={
+                  shareImage
+                    ? t("messages.share")
+                    : copied
+                      ? t("messages.copied")
+                      : t("messages.copy")
+                }
                 icon={shareImage ? <ShareIcon className="size-3.5" /> : undefined}
                 disabled={busy}
                 onClick={onExport}

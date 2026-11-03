@@ -7,7 +7,7 @@ import * as Dialog from "@/components/ui/modal";
 import { useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { CloseIcon, ShareIcon } from "@/icons";
 import { toPng } from "html-to-image";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import type { AgentDto, MessageDto, TaskSummaryDto, UserDto } from "@silverhand/shared";
 import { loadAttachmentBlobUrl } from "@/features/attachments/attachment-blob-cache";
 import {
@@ -376,7 +376,7 @@ export function ImagePreviewModal({
     }
     const generation = exportGeneration.current;
     void nativePreview({
-      pngBytes,
+      image: { pngBytes },
       title: t("messages.imagePreview"),
       shareLabel: t("messages.share"),
       closeLabel: t("common.close"),
@@ -409,7 +409,7 @@ export function ImagePreviewModal({
         onExportComplete?.();
         onOpenChange(false);
       } else if ("error" in result) {
-        toast.error("Couldn't share: " + result.error);
+        toast.error(t("messages.shareFailed", { reason: result.error }));
       }
     } finally {
       if (generation === exportGeneration.current) setBusy(false);
@@ -422,11 +422,10 @@ export function ImagePreviewModal({
     try {
       const result = await getPlatform().files.copyPngExport({ pngBytes });
       if (result.ok) {
-        toast.success(t("messages.imageCopiedToClipboard"));
         onExportComplete?.();
         onOpenChange(false);
       } else {
-        toast.error("Couldn't copy: " + result.error);
+        toast.error(t("common.copyFailed"));
       }
     } finally {
       setBusy(false);
@@ -450,7 +449,7 @@ export function ImagePreviewModal({
       } else if ("canceled" in result && result.canceled) {
         // user dismissed dialog — silent, keep selection so they can retry
       } else if ("error" in result) {
-        toast.error("Couldn't save: " + result.error);
+        toast.error(t("messages.saveFailed", { reason: result.error }));
       }
     } finally {
       setBusy(false);

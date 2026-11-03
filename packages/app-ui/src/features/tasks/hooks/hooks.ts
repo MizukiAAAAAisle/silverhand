@@ -7,7 +7,8 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
+import { t } from "@/lib/i18n";
 import {
   type CreatedTaskIdentity,
   type HumanCreateTaskInput,
@@ -188,7 +189,7 @@ export function useUpdateTaskStatus() {
       // The card has just moved back on its own. Four of the five surfaces that
       // drive this mutation render no failure state, so without this the revert
       // reads as the app undoing the user's click for no reason.
-      toast.error("Couldn’t update status.");
+      toast.error(t("tasks.couldntUpdateStatus"));
     },
     onSuccess: (_res, _vars, write) => {
       restartRacingTaskReads(qc, write.taskId);

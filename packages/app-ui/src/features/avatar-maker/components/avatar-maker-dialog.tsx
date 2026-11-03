@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import "./avatar-maker.css";
 import { CancelledIcon, RandomizeIcon, UndoIcon } from "@/icons";
 import { Button } from "@/components/ui/button";
@@ -121,7 +121,7 @@ function NativeAvatarMaker({
           await onSave({ config: result.config, png });
         }
       } catch {
-        toast.error("Couldn't save the avatar. Try again.");
+        toast.error(t("avatarMaker.couldntSaveTheAvatar"));
       } finally {
         onOpenChange(false);
       }

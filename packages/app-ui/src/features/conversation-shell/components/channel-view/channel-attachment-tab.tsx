@@ -2,7 +2,7 @@ import { getPlatform } from "@/platform";
 import { DocumentSkeleton } from "@/components/layout/document-skeleton";
 import { RangeInput } from "@/components/ui/range-input";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
+import { toast } from "@/lib/toast";
 import { DownloadIcon, OpenExternalIcon, ZoomInIcon, ZoomOutIcon } from "@/icons";
 import { cn } from "@/lib/cn";
 import { fetchAttachmentBytes } from "@/lib/api";
@@ -123,7 +123,8 @@ export function ChannelAttachmentTab({
           isRefresh && shown !== null && Number.isFinite(revision) && revision > shown.revision;
         shownRef.current = { attachmentId, revision };
         setState({ status: "ready", text, contentType: fetchedType });
-        if (isRevisionBump) toast("Attachment auto-updated", { icon: toastIcon("attachment") });
+        if (isRevisionBump)
+          toast(t("conversationShell.attachmentUpdated"), { icon: toastIcon("attachment") });
       })
       .catch((err) => {
         if (cancelled) return;

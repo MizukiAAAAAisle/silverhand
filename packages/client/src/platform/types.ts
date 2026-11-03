@@ -87,10 +87,11 @@ export interface FileCapability {
   sharePngExport?(input: {
     pngBytes: Uint8Array;
   }): Promise<{ ok: true } | { ok: false; canceled: true } | { ok: false; error: string }>;
-  /** Shows a rendered image in a native sheet with a share action; resolves
-   * when the sheet closes, with whether a share completed. */
+  /** Shows an image in a native sheet with a share action; resolves when the
+   * sheet closes, with whether a share completed. The sheet opens at once:
+   * given an attachment id, native downloads the bytes itself while it shows. */
   previewPngExport?(input: {
-    pngBytes: Uint8Array;
+    image: { pngBytes: Uint8Array } | { attachmentId: string };
     title: string;
     shareLabel: string;
     closeLabel: string;
@@ -184,6 +185,7 @@ export interface ClientPlatform {
   composer?: ComposerCapability;
   selectionBar?: SelectionBarCapability;
   banner?: BannerCapability;
+  toast?: ToastCapability;
   avatarMaker?: AvatarMakerCapability;
   contextMenu?: ContextMenuCapability;
   /** Present only where the app can update itself. */
@@ -453,6 +455,26 @@ export type BannerEvent = { kind: "open"; id: string };
 export interface BannerCapability {
   show(notice: BannerNotice): Promise<void>;
   subscribe(handler: (event: BannerEvent) => void): Promise<() => void>;
+}
+/** A short outcome line native draws above its bars; a newer one replaces the
+ *  one showing, and one with the same id updates it in place. */
+export interface ToastNotice {
+  id: string;
+  tone: "success" | "error" | "warning" | "neutral";
+  /** Replaces the tone's glyph; drawn in a neutral tint. */
+  glyph?: "offline";
+  title: string;
+  description?: string;
+  /** Stays until dismissed or its action is used. */
+  sticky?: boolean;
+  action?: { label: string };
+}
+export type ToastEvent = { kind: "action"; id: string };
+export interface ToastCapability {
+  show(notice: ToastNotice): Promise<void>;
+  /** Without an id, dismisses whatever is showing. */
+  dismiss(id?: string): Promise<void>;
+  subscribe(handler: (event: ToastEvent) => void): Promise<() => void>;
 }
 export interface NavigationCapability {
   badges(input: {

@@ -13,7 +13,7 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     "upload",
     "openSocket", "sendSocket", "closeSocket", "openExternal", "appVersion",
     "navigationSync", "navigationReset",
-    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "selectionBarSync", "selectionBarRemove", "bannerShow", "sharePng", "previewPng", "saveAttachment", "avatarMakerEdit", "contextMenuAvailable", "contextMenuShow",
+    "navigationBadges", "navigationAvatar", "setLocale", "titlebar", "titlebarEndSearch", "pageBar", "pageBarBackProgress", "composerSync", "composerRemove", "composerSetText", "selectionBarSync", "selectionBarRemove", "bannerShow", "toastShow", "toastDismiss", "sharePng", "previewPng", "saveAttachment", "avatarMakerEdit", "contextMenuAvailable", "contextMenuShow",
   ].map { CAPPluginMethod(name: $0, returnType: CAPPluginReturnPromise) }
 
   @MainActor private var session: ClientSession?
@@ -151,11 +151,13 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
     }
   }
 
+  /// The image comes inline (`base64`) or as an attachment native downloads
+  /// itself (`attachmentId`), so the sheet never waits on the page for bytes.
   @objc func previewPng(_ call: CAPPluginCall) {
     Task { @MainActor in
-      guard let encoded = call.getString("base64"),
-        let bytes = Data(base64Encoded: encoded),
-        let image = UIImage(data: bytes),
+      let inline = call.getString("base64").flatMap { Data(base64Encoded: $0) }
+      let attachment = call.getString("attachmentId")
+      guard inline != nil || attachment != nil,
         let host = self.bridge?.viewController,
         host.view.window != nil,
         host.presentedViewController == nil
@@ -164,9 +166,19 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         return
       }
       ImagePreviewController.present(
-        image, title: call.getString("title") ?? "", shareLabel: call.getString("shareLabel") ?? "",
-        closeLabel: call.getString("closeLabel") ?? "", from: host
-      ) { shared in call.resolve(["shared": shared]) }
+        title: call.getString("title") ?? "", shareLabel: call.getString("shareLabel") ?? "",
+        closeLabel: call.getString("closeLabel") ?? "", from: host,
+        load: {
+          if let inline { return inline }
+          let id = attachment?.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? ""
+          return try await self.client().download(path: "/api/attachments/\(id)")
+        }
+      ) { result in
+        switch result {
+        case .success(let shared): call.resolve(["shared": shared])
+        case .failure(let error): call.reject(error.localizedDescription)
+        }
+      }
     }
   }
 
@@ -449,6 +461,32 @@ public final class SilverhandClientPlugin: CAPPlugin, CAPBridgedPlugin {
         host.banner.onEvent = { [weak self] event in self?.notifyListeners("banner", data: event) }
         host.showBanner(notice)
       }
+      call.resolve()
+    }
+  }
+  @objc public func toastShow(_ call: CAPPluginCall) {
+    guard let id = call.getString("id"), let title = call.getString("title") else {
+      call.reject("A toast needs an id and a title")
+      return
+    }
+    let notice = ToastNotice(
+      id: id, title: title,
+      tone: ToastNotice.Tone(rawValue: call.getString("tone") ?? "") ?? .neutral,
+      glyph: call.getString("glyph"),
+      description: call.getString("description"), sticky: call.getBool("sticky") ?? false,
+      action: call.getObject("action")?["label"] as? String)
+    Task { @MainActor [self] in
+      if let host = navigationHost {
+        host.toast.onEvent = { [weak self] event in self?.notifyListeners("toast", data: event) }
+        host.showToast(notice)
+      }
+      call.resolve()
+    }
+  }
+  @objc public func toastDismiss(_ call: CAPPluginCall) {
+    let id = call.getString("id")
+    Task { @MainActor in
+      navigationHost?.toast.dismiss(id: id)
       call.resolve()
     }
   }
