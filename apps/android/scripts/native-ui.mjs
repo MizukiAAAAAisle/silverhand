@@ -3,6 +3,11 @@ import assert from 'node:assert/strict';
 
 const fileAmbiguity = Symbol('native file target ambiguity');
 
+function strictBounds(node) {
+  const values = node?.bounds?.match(/^\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]$/)?.slice(1).map(Number);
+  return values?.every(Number.isSafeInteger) && values[2] > values[0] && values[3] > values[1] ? values : null;
+}
+
 export function nativeFileTarget(nodes, filename) {
   const preview = (n) => n['content-desc']?.startsWith('Preview the file ') || n['resource-id']?.endsWith('/preview_icon');
   const prefix = filename + ', ';
@@ -13,15 +18,11 @@ export function nativeFileTarget(nodes, filename) {
   catch (error) { error[fileAmbiguity] = true; throw error; }
   const node = matches[0];
   assert.equal(node.enabled, 'true', 'Native file target disabled');
-  const rect = (n) => {
-    const values = n?.bounds?.match(/^\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]$/)?.slice(1).map(Number);
-    return values?.every(Number.isSafeInteger) && values[2] > values[0] && values[3] > values[1] ? values : null;
-  };
-  const screen = rect(nodes[0]), bounds = rect(node);
+  const screen = strictBounds(nodes[0]), bounds = strictBounds(node);
   assert(screen && screen[0] >= 0 && screen[1] >= 0 && bounds && bounds[0] >= screen[0] && bounds[1] >= screen[1] && bounds[2] <= screen[2] && bounds[3] <= screen[3], 'Native file target has invalid or offscreen bounds');
   const point = { x: Math.floor((bounds[0] + bounds[2]) / 2), y: Math.floor((bounds[1] + bounds[3]) / 2) };
   for (const other of nodes.filter(preview)) {
-    const area = rect(other);
+    const area = strictBounds(other);
     assert(area, 'Native file preview has invalid bounds');
     assert(!(point.x >= area[0] && point.x < area[2] && point.y >= area[1] && point.y < area[3]), 'Native file target center overlaps Preview');
   }
@@ -96,11 +97,7 @@ export function nativeUI(serial) {
       const mode = control['resource-id'] === prefix + 'sub_menu_list' ? 'grid' : 'list';
       assert.equal(control['content-desc'], mode === 'grid' ? 'List view' : 'Grid view', 'Downloads view control identity changed');
       assert(control.enabled === 'true' && control.clickable === 'true', 'Downloads view control unavailable');
-      const rect = (n) => {
-        const values = n?.bounds?.match(/^\[(-?\d+),(-?\d+)\]\[(-?\d+),(-?\d+)\]$/)?.slice(1).map(Number);
-        return values?.every(Number.isSafeInteger) && values[2] > values[0] && values[3] > values[1] ? values : null;
-      };
-      const screen = rect(tree[0]), bounds = rect(control);
+      const screen = strictBounds(tree[0]), bounds = strictBounds(control);
       assert(screen && screen[0] >= 0 && screen[1] >= 0 && bounds && bounds[0] >= screen[0] && bounds[1] >= screen[1] && bounds[2] <= screen[2] && bounds[3] <= screen[3], 'Downloads view control has invalid or offscreen bounds');
       return { mode, breadcrumb: crumbs[0], container: containers[0], control,
         point: { x: Math.floor((bounds[0] + bounds[2]) / 2), y: Math.floor((bounds[1] + bounds[3]) / 2) } };

@@ -1,47 +1,15 @@
 {
   "phase": 1,
   "plugin": "SilverhandClient",
-  "nativeMethods": [
-    "getProfile",
-    "saveProfile",
-    "clearProfile",
-    "authState",
-    "authenticate",
-    "logout",
-    "request",
-    "upload",
-    "openSocket",
-    "sendSocket",
-    "closeSocket",
-    "appVersion",
-    "openExternal",
-    "saveAttachment",
-    "sharePng",
-    "getTheme",
-    "saveTheme"
-  ],
-  "webPresentationInsteadOfIOSNative": [
-    "navigationSync",
-    "navigationReset",
-    "navigationBadges",
-    "navigationAvatar",
-    "titlebar",
-    "titlebarEndSearch",
-    "pageBar",
-    "pageBarBackProgress",
-    "composerSync",
-    "composerRemove",
-    "composerSetText",
-    "bannerShow",
-    "avatarMakerEdit"
-  ],
-  "deferredSystemMethods": [],
-  "nativeEvents": [
-    "socket",
-    "sessionInvalidated",
-    "foreground"
-  ],
-  "note": "No empty success stubs. Shared React still owns navigation/composer/avatar. File upload/download/save are real. Android sharePng is implemented with a narrow private-cache FileProvider; B2 merged-manifest, actual image/chooser/URI and device verification are still pending.",
+  "purpose": "Human review navigation, not a runtime capability registry or an acceptance result. Read the implementations below for current methods, events and presentation capabilities.",
+  "implementation": {
+    "nativeMethodsAndEvents": "app/src/main/java/com/silverhand/android/SilverhandClientPlugin.kt: @PluginMethod entrypoints and notifyListeners events",
+    "publishedCapabilities": "src/platform.ts: Android's explicit capability allowlist",
+    "presentation": "src/notices.ts: Android-local banner and toast; shared React owns navigation/composer/avatar",
+    "contracts": "../../packages/client/src/platform/types.ts: shared platform capability contracts",
+    "capabilityBoundaryControl": "src/platform.test.ts: rejects unsupported iOS capabilities"
+  },
+  "note": "No empty success stubs. File upload/download/save are real. Android sharePng uses a narrow private-cache FileProvider. Implementation presence does not establish merged-manifest, chooser/URI or device acceptance; consult the evidence for the specific build.",
   "themePersistence": {
     "callers": [
       "apps/android/src/main.ts",
