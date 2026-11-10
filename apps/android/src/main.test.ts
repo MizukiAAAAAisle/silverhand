@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   notices: { banner: {}, toast: {}, dispose: vi.fn() },
+  notifications: { capability: {}, refreshSession: vi.fn(), dispose: vi.fn() },
   mount: vi.fn(),
   configure: vi.fn(),
   initialize: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../../ios/src/bridge', () => ({
   },
 }));
 vi.mock('./notices', () => ({ createAndroidNotices: () => h.notices }));
+vi.mock('./notifications', () => ({ createAndroidNotifications: () => h.notifications }));
 vi.mock('./platform', () => ({ createAndroidPlatform: () => ({}) }));
 vi.mock('./short-viewport', () => ({ bindShortViewport: h.viewport }));
 beforeEach(() => {
@@ -66,6 +68,7 @@ it('leaves the existing profile failure visible and does not run theme initializ
   expect(h.initialize).not.toHaveBeenCalled();
   expect(h.mount).not.toHaveBeenCalled();
   expect(h.notices.dispose).toHaveBeenCalledOnce();
+  expect(h.notifications.dispose).toHaveBeenCalledOnce();
 });
 it('preserves appearance and reloads the native initialization path when the session is reset', async () => {
   const storage = new Map([
@@ -86,6 +89,7 @@ it('preserves appearance and reloads the native initialization path when the ses
   expect([...storage]).toEqual([['silverhand:appearance', '{"theme":"iris","fontSize":17}']]);
   expect(replace).toHaveBeenCalledWith('https://localhost/');
   expect(h.notices.dispose).toHaveBeenCalledOnce();
+  expect(h.notifications.dispose).toHaveBeenCalledOnce();
 });
 
 it('disposes the presentation host on pagehide', async () => {
@@ -95,4 +99,5 @@ it('disposes the presentation host on pagehide', async () => {
   const dispose = registrations.find(([event]) => event === 'pagehide')![1] as () => void;
   dispose();
   expect(h.notices.dispose).toHaveBeenCalledOnce();
+  expect(h.notifications.dispose).toHaveBeenCalledOnce();
 });

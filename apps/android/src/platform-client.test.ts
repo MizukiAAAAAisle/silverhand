@@ -6,10 +6,11 @@ const notices = {
   banner: { show: vi.fn(), subscribe: vi.fn() },
   toast: { show: vi.fn(), dismiss: vi.fn(), subscribe: vi.fn() },
 };
+const notifications = { capability: {} as never, refreshSession: vi.fn(async () => {}) };
 
 describe('Android uses the actual upstream mobile client', () => {
   it('reads server discovery through native and validates its response', async () => {
-    const platform = createAndroidPlatform(() => {}, notices);
+    const platform = createAndroidPlatform(() => {}, notices, notifications);
     native.serverInfo.mockResolvedValueOnce({ status: 200, bodyText: '{"signup_enabled":true}' });
     expect(await platform.client.getServerInfo()).toMatchObject({ signup_enabled: true });
     expect(native.serverInfo).toHaveBeenCalledOnce();
@@ -20,7 +21,7 @@ describe('Android uses the actual upstream mobile client', () => {
   it.each(['request', 'reset'] as const)(
     'forwards password recovery %s without adding authentication',
     async (action) => {
-      const platform = createAndroidPlatform(() => {}, notices);
+      const platform = createAndroidPlatform(() => {}, notices, notifications);
       const input = { action, body: JSON.stringify({ email: 'fixture@example.invalid' }) };
       const response = { status: 202, bodyText: '{"ok":true}' };
       native.passwordRecovery.mockResolvedValueOnce(response);
@@ -30,7 +31,7 @@ describe('Android uses the actual upstream mobile client', () => {
   );
 
   it('retains native recovery failure', async () => {
-    const platform = createAndroidPlatform(() => {}, notices);
+    const platform = createAndroidPlatform(() => {}, notices, notifications);
     native.passwordRecovery.mockRejectedValueOnce(new Error('native recovery failed'));
     await expect(
       platform.client.passwordRecovery({ action: 'request', body: '{}' }),

@@ -160,22 +160,67 @@ export function useNotificationToasts(
   // Stable callback ref so the WS subscribe effect doesn't tear down
   // every time the parent's nav handler re-renders.
   const onJumpRef = useRef(onJump);
+  const clickOwner = useRef(0);
+  const clicksMounted = useRef(false);
+  const pendingClicks = useRef(new Map<string, {
+    timeout: ReturnType<typeof setTimeout>;
+    resolving: boolean;
+    target?: MessageJumpTarget;
+  }>());
+  const forgetClick = useCallback((id: string) => {
+    const pending = pendingClicks.current.get(id);
+    if (pending) clearTimeout(pending.timeout);
+    pendingClicks.current.delete(id);
+  }, []);
+  const flushClicks = useCallback((): void => {
+    if (!clicksMounted.current || !onJumpRef.current) return;
+    for (const [id, pending] of pendingClicks.current) {
+      if (pending.target) {
+        forgetClick(id);
+        onJumpRef.current(pending.target);
+        continue;
+      }
+      const n = clickableById.current.get(id);
+      if (!n || pending.resolving) continue;
+      pending.resolving = true;
+      const owner = clickOwner.current;
+      void resolveNotificationJumpTarget(n, qc).then((target) => {
+        if (!clicksMounted.current || owner !== clickOwner.current || pendingClicks.current.get(id) !== pending) return;
+        if (!target) { forgetClick(id); return; }
+        pending.target = target;
+        flushClicks();
+      }).catch((error) => {
+        if (owner === clickOwner.current && pendingClicks.current.get(id) === pending) forgetClick(id);
+        console.error("Unable to resolve notification click", error);
+      });
+    }
+  }, [qc, forgetClick]);
+
+  useEffect(() => {
+    clicksMounted.current = true;
+    clickOwner.current++;
+    return () => {
+      clicksMounted.current = false;
+      clickOwner.current++;
+      for (const id of pendingClicks.current.keys()) forgetClick(id);
+    };
+  }, [forgetClick]);
   useEffect(() => {
     onJumpRef.current = onJump;
-  }, [onJump]);
+    flushClicks();
+  }, [onJump, flushClicks]);
 
   const handleClickById = useCallback(
     (notificationId: string): void => {
-      const n = clickableById.current.get(notificationId);
-      if (!n) return;
-      const handler = onJumpRef.current;
-      if (!handler) return;
-      void resolveNotificationJumpTarget(n, qc).then((target) => {
-        if (!target) return;
-        handler(target);
+      if (!clicksMounted.current || pendingClicks.current.has(notificationId)) return;
+      if (pendingClicks.current.size >= 16) forgetClick(pendingClicks.current.keys().next().value!);
+      pendingClicks.current.set(notificationId, {
+        timeout: setTimeout(() => forgetClick(notificationId), 10_000),
+        resolving: false,
       });
+      flushClicks();
     },
-    [qc],
+    [flushClicks, forgetClick],
   );
 
   // The toast list refetches on a new notification and on a notification read
@@ -321,6 +366,7 @@ export function useNotificationToasts(
         notificationId: isClickableKind(n.kind) ? n.id : undefined,
       });
     }
+    flushClicks();
 
     // A toast is a transient SURFACING event, never an eliminate intent — so it
     // must not write `notifications.read_at`. Under Activity v1 that column is the
@@ -330,7 +376,7 @@ export function useNotificationToasts(
     // read-state, so the notification correctly stays unread until an ACTIVE
     // eliminate path clears it: visible read advancing the cursor, clicking the
     // toast/notification to jump to source, or the Activity Mark-as-read ✓.
-  }, [data, viewing.conversationId, viewing.threadRootId, qc, handleClickById, markRead]);
+  }, [data, viewing.conversationId, viewing.threadRootId, qc, handleClickById, markRead, flushClicks]);
 }
 
 /** Whether the notification's message is on screen: its conversation is the

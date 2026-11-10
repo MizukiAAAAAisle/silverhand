@@ -21,13 +21,17 @@ import androidx.activity.result.ActivityResult
 import com.getcapacitor.*
 import com.getcapacitor.annotation.ActivityCallback
 import com.getcapacitor.annotation.CapacitorPlugin
+import com.getcapacitor.annotation.Permission
+import com.getcapacitor.annotation.PermissionCallback
 import kotlinx.coroutines.*
 import silverhand.core.ClientBridge
 import java.util.UUID
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-@CapacitorPlugin(name = "SilverhandClient")
+@CapacitorPlugin(name = "SilverhandClient", permissions = [Permission(
+    alias = "notifications", strings = [android.Manifest.permission.POST_NOTIFICATIONS]
+)])
 class SilverhandClientPlugin : Plugin() {
     private companion object {
         // One owner across plugin/Activity recreation in this process.
@@ -37,6 +41,9 @@ class SilverhandClientPlugin : Plugin() {
     private var core: ClientBridge? = null
     private var stopped = false
     private var destroyed = false
+    private var resumed = false
+    private val notificationPermissionCalls = mutableListOf<PluginCall>()
+    private val notifications get() = SystemNotifications.get(context)
     private var exportPending = false
     private class PendingShare(val token: String, val call: PluginCall, val file: File) {
         val result = ShareResult(token)
@@ -50,7 +57,80 @@ class SilverhandClientPlugin : Plugin() {
             if (it.isFile && it != pendingShare?.file && it.lastModified() < cutoff) it.delete()
         }
     }
-    override fun load() { pruneShareCache() }
+    override fun load() {
+        pruneShareCache()
+        activity.runOnUiThread { if (!destroyed) receiveNotificationIntent(activity.intent) }
+    }
+    private fun notificationResult(call: PluginCall, status: String) {
+        call.resolve(JSObject().put("status", status))
+    }
+    private fun clearNotifications() {
+        notifications.reset()
+        val pending = notificationPermissionCalls.toList()
+        notificationPermissionCalls.clear()
+        for (call in pending) notificationResult(call, "session-expired")
+    }
+    private fun notificationAction(call: PluginCall, action: () -> Unit) {
+        activity.runOnUiThread {
+            try {
+                check(!destroyed) { "Notification Activity owner closed" }
+                action()
+            } catch (error: Exception) {
+                Log.e("SilverhandNotifications", "${call.methodName} failed", error)
+                call.reject(error.message ?: "Notification operation failed", "NOTIFICATION_FAILED")
+            }
+        }
+    }
+    private fun postNotification(call: PluginCall) {
+        if (!notifications.current(call.getString("session"))) {
+            notificationResult(call, "session-expired"); return
+        }
+        if (call.getBoolean("force", false) != true && resumed && activity.hasWindowFocus()) {
+            notificationResult(call, "suppressed-focused"); return
+        }
+        notificationResult(call, notifications.post(call.data))
+    }
+    @PluginMethod fun notificationSession(call: PluginCall) = notificationAction(call) {
+        call.resolve(JSObject().put("session", notifications.session()))
+    }
+    @PluginMethod fun notificationShow(call: PluginCall) = notificationAction(call) {
+        if (!notifications.current(call.getString("session"))) {
+            notificationResult(call, "session-expired")
+        } else if (call.getBoolean("force", false) != true && resumed && activity.hasWindowFocus()) {
+            notificationResult(call, "suppressed-focused")
+        } else if (notifications.permitted()) {
+            postNotification(call)
+        } else if (notificationPermissionCalls.isNotEmpty()) {
+            if (notificationPermissionCalls.size < 32) notificationPermissionCalls.add(call)
+            else notificationResult(call, "permission-request-busy")
+        } else if (!resumed || notifications.prompted()) {
+            notificationResult(call, "not-authorized-or-undecided")
+        } else {
+            notifications.markPrompted() // Anti-nag history only; never a permanent-denial inference.
+            notificationPermissionCalls.add(call)
+            try { requestPermissionForAlias("notifications", call, "notificationPermissionReturned") }
+            catch (error: Exception) { notificationPermissionCalls.remove(call); throw error }
+        }
+    }
+    @PermissionCallback private fun notificationPermissionReturned(call: PluginCall) {
+        val pending = notificationPermissionCalls.toList()
+        notificationPermissionCalls.clear()
+        for (request in pending) notificationAction(request) { postNotification(request) }
+    }
+    @PluginMethod fun notificationDismiss(call: PluginCall) = notificationAction(call) {
+        val session = call.getString("session") ?: error("Missing notification session")
+        val values = call.getArray("ids") ?: error("Missing notification ids")
+        val ids = (0 until values.length()).map { values.getString(it) }
+        notificationResult(call, notifications.dismiss(session, ids))
+    }
+    @PluginMethod fun notificationTakeClicks(call: PluginCall) = notificationAction(call) {
+        val session = call.getString("session") ?: error("Missing notification session")
+        call.resolve(JSObject().put("clicks", notifications.takeClicks(session)))
+    }
+    private fun receiveNotificationIntent(intent: Intent) {
+        if (notifications.acceptClick(intent)) notifyListeners("systemNotificationClicked", JSObject())
+    }
+    override fun handleOnNewIntent(intent: Intent) { receiveNotificationIntent(intent) }
     private fun finishShare(pending: PendingShare) {
         if (pendingShare !== pending) return
         pendingShare = null
@@ -70,12 +150,16 @@ class SilverhandClientPlugin : Plugin() {
     private fun client(): ClientBridge = core ?: ClientBridge(KeystoreRecord(context)).also {
         core = it
         it.active(!stopped)
-        it.listen { event, payload -> if (!destroyed) notifyListeners(event, JSObject(payload)) }
+        it.listen { event, payload -> if (!destroyed) {
+            if (event == "sessionInvalidated") clearNotifications()
+            notifyListeners(event, JSObject(payload))
+        } }
     }
     private fun invoke(call: PluginCall, method: String) {
         scope.launch {
             try {
                 val bridge = client()
+                if (method == "logout") clearNotifications()
                 val id = UUID.randomUUID().toString()
                 val response = suspendCancellableCoroutine<String> { continuation ->
                     bridge.start(id, method, call.data.toString()) { result ->
@@ -86,7 +170,12 @@ class SilverhandClientPlugin : Plugin() {
                     }
                 }
                 val result = JSObject(response)
-                if (result.getBoolean("ok", false) == true) call.resolve(JSObject(result.getJSONObject("value").toString()))
+                if (result.getBoolean("ok", false) == true) {
+                    val value = JSObject(result.getJSONObject("value").toString())
+                    if (method in setOf("saveProfile", "clearProfile") ||
+                        (method == "authenticate" && value.getBoolean("ok", false) == true)) clearNotifications()
+                    call.resolve(value)
+                }
                 else call.reject(result.getString("error", "Native request failed"))
             } catch (e: CancellationException) {
                 call.reject("Native request canceled", "CANCELED")
@@ -241,8 +330,13 @@ class SilverhandClientPlugin : Plugin() {
         stopped = false
     }
     override fun handleOnStop() { stopped = true; core?.active(false) }
+    override fun handleOnResume() { resumed = true }
+    override fun handleOnPause() { resumed = false }
     override fun handleOnDestroy() {
         destroyed = true
+        val pending = notificationPermissionCalls.toList()
+        notificationPermissionCalls.clear()
+        for (call in pending) notificationResult(call, "activity-owner-closed")
         pendingShare?.let { if (it.result.destroyed(it.token)) finishShare(it) }
         core?.shutdown()
         scope.cancel()

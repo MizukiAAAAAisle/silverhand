@@ -8,6 +8,7 @@ import {
 import { nativeBridge } from '../../ios/src/bridge';
 import { createAndroidPlatform } from './platform';
 import { createAndroidNotices } from './notices';
+import { createAndroidNotifications, type AndroidNotificationBridge } from './notifications';
 import './notices.css';
 import '../../ios/src/mobile.css';
 import './short-viewport.css';
@@ -21,8 +22,13 @@ const themeBridge = nativeBridge as typeof nativeBridge & {
 };
 
 let notices: ReturnType<typeof createAndroidNotices> | undefined;
-function resetApplication() {
+let notifications: ReturnType<typeof createAndroidNotifications> | undefined;
+function disposePresentation() {
   notices?.dispose();
+  notifications?.dispose();
+}
+function resetApplication() {
+  disposePresentation();
   const appearance = localStorage.getItem('silverhand:appearance');
   localStorage.clear();
   if (appearance !== null) localStorage.setItem('silverhand:appearance', appearance);
@@ -37,8 +43,10 @@ async function start() {
     void resumeApp();
   });
   notices = createAndroidNotices();
-  window.addEventListener('pagehide', () => notices?.dispose(), { once: true });
-  configurePlatform(createAndroidPlatform(resetApplication, notices));
+  // Android-only methods on the existing plugin, not an addition to the iOS bridge contract.
+  notifications = createAndroidNotifications(nativeBridge as unknown as AndroidNotificationBridge);
+  window.addEventListener('pagehide', disposePresentation, { once: true });
+  configurePlatform(createAndroidPlatform(resetApplication, notices, notifications));
   await nativeBridge.getProfile();
   await initializeThemePersistence({
     getTheme: async () => (await themeBridge.getTheme()).theme,
@@ -49,7 +57,7 @@ async function start() {
   window.addEventListener('pagehide', releaseShortViewport, { once: true });
 }
 void start().catch((error) => {
-  notices?.dispose();
+  disposePresentation();
   const root = document.getElementById('root');
   if (root) root.textContent = `Unable to start Silverhand: ${String(error)}`;
 });
