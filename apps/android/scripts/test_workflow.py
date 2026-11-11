@@ -528,11 +528,14 @@ class ApkResume(unittest.TestCase):
             lib = b'prepared-runtime'; web = b'prepared-web'
             import hashlib
             w.write(run / 'core-build/manifest.json', {'packagedLibraryHashes': {'libFixture.so': hashlib.sha256(lib).hexdigest()}})
-            public = run / 'app-build/web-assets/public/index.html'; public.parent.mkdir(parents=True); public.write_bytes(web)
+            public = run / 'app-build/web-assets/acceptance/public/index.html'; public.parent.mkdir(parents=True); public.write_bytes(web)
+            metadata = {'kind': 'silverhand-android-web-v1', 'variant': 'acceptance', 'modules': ['apps/android/src/notification-test.ts']}
+            marker = public.with_name('android-web-build.json'); marker.write_text(json.dumps(metadata))
             for corrupted in [False, True]:
                 with zipfile.ZipFile(apk, 'w') as bundle:
                     bundle.writestr('lib/arm64-v8a/libFixture.so', b'foreign-runtime' if corrupted else lib)
                     bundle.writestr('assets/public/index.html', web)
+                    bundle.writestr('assets/public/android-web-build.json', marker.read_bytes())
                 with patch.object(w, 'ca_check', return_value={'apk': str(apk)}):
                     if corrupted:
                         with self.assertRaisesRegex(RuntimeError, 'Actual APK input mismatch'):

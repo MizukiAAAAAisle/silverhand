@@ -9,6 +9,15 @@ export const settings: Translation<typeof en> = {
     zh: "简体中文",
   },
   about: {
+    notificationDiagnostics: {
+      title: "通知状态（只读）",
+      permission: "权限", session: "通知会话", lastSend: "最近发送（真实）", channel: "渠道",
+      granted: "已授予", notGranted: "未授予", notRequired: "无需运行时授权", unknown: "未知",
+      present: "有", absent: "无", enabled: "开启", disabled: "关闭", appSwitch: "应用总开关",
+      notStarted: "未发起（本观察窗口）", waiting: "等待会话", sending: "已发起，待完成",
+      missingSession: "未发起（无会话）", invalidated: "已失效", posted: "posted（系统调用已返回）",
+      note: "仅当前应用会话的观察，不代表实际弹出或响铃。", queried: "查询于",
+    },
     privacy: "隐私政策",
     support: "支持",
     version: "版本",

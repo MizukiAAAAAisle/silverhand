@@ -4,6 +4,7 @@ import { getPlatform } from "@/platform";
 import { ExternalLink, PRIVACY_POLICY_URL, SUPPORT_URL } from "@/features/legal/legal-links";
 import { SettingsHeading } from "./settings-heading";
 import { t } from "@/lib/i18n";
+import { NotificationDiagnosticsPane } from "./notification-diagnostics-pane";
 
 const legalLinks = () =>
   [
@@ -15,6 +16,7 @@ const ROW = "flex min-h-11 items-center justify-between gap-3 px-3 text-sm";
 
 export function AboutPane(): JSX.Element {
   const [version, setVersion] = useState<string | null>(null);
+  const diagnostics = getPlatform().notificationDiagnostics;
 
   useEffect(() => {
     let cancelled = false;
@@ -53,6 +55,7 @@ export function AboutPane(): JSX.Element {
           </ExternalLink>
         ))}
       </div>
+      {diagnostics ? <NotificationDiagnosticsPane capability={diagnostics} /> : null}
     </section>
   );
 }

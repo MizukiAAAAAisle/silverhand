@@ -44,6 +44,7 @@ async function harness(initial: NotificationDto[] = [], firstRows?: Promise<Noti
   let reference: Promise<unknown> | undefined;
   let serial = 0;
   const bridge: AndroidNotificationBridge = {
+    notificationDiagnostics: vi.fn<AndroidNotificationBridge['notificationDiagnostics']>(async () => ({ runtimePermission: 'unknown', appEnabled: null, channel: 'unknown', channelBlocked: null })),
     notificationSession: vi.fn(async () => ({ session: 'session-a' })),
     notificationShow: vi.fn(async () => ({ status: 'posted' })),
     notificationDismiss: vi.fn(async () => ({ status: 'dismissed' })),

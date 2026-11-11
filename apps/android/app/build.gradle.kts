@@ -38,12 +38,35 @@ android {
         // Android SourceSet APIs accept paths/files, not Provider<Directory>; resolve the
         // build directory at configuration time so run-dir redirection still applies.
         getByName("main").assets.srcDirs(
-            layout.buildDirectory.dir("web-assets").get().asFile,
             layout.buildDirectory.dir("core-assets").get().asFile,
         )
-        getByName("acceptance").assets.srcDir(layout.buildDirectory.dir("acceptance-assets").get().asFile)
+        for (variant in listOf("debug", "release")) {
+            getByName(variant).java.srcDir("src/normal/java")
+            getByName(variant).assets.srcDir(layout.buildDirectory.dir("web-assets/normal").get().asFile)
+        }
+        getByName("acceptance").assets.srcDirs(
+            layout.buildDirectory.dir("web-assets/acceptance").get().asFile,
+            layout.buildDirectory.dir("acceptance-assets").get().asFile,
+        )
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
+}
+// Validate only at asset merge, after web preparation. Core-only builds configure
+// this project before web outputs exist and must not consume or require them.
+tasks.configureEach {
+    val variant = when (name) {
+        "mergeDebugAssets", "mergeReleaseAssets" -> "normal"
+        "mergeAcceptanceAssets" -> "acceptance"
+        else -> null
+    }
+    if (variant != null) doFirst {
+        val root = layout.buildDirectory.dir("web-assets/$variant/public").get().asFile
+        check(root.resolve("index.html").isFile) { "Missing $variant web entry" }
+        val metadata = groovy.json.JsonSlurper().parse(root.resolve("android-web-build.json")) as Map<*, *>
+        check(metadata["variant"] == variant && metadata["kind"] == "silverhand-android-web-v1") { "Mismatched $variant web assets" }
+        val modules = metadata["modules"] as List<*>
+        check(modules.contains("apps/android/src/notification-test.ts") == (variant == "acceptance")) { "Mismatched notification test module" }
+    }
 }
 dependencies {
     implementation(project(":SilverhandCore"))

@@ -37,7 +37,7 @@ beforeEach(() => {
   h.order.length = 0;
   h.root.textContent = '';
   vi.stubGlobal('document', { getElementById: () => h.root });
-  vi.stubGlobal('window', { addEventListener: vi.fn() });
+  vi.stubGlobal('window', { addEventListener: vi.fn(), dispatchEvent: vi.fn() });
   h.profile.mockImplementation(async () => {
     h.order.push('profile');
   });
@@ -100,4 +100,13 @@ it('disposes the presentation host on pagehide', async () => {
   dispose();
   expect(h.notices.dispose).toHaveBeenCalledOnce();
   expect(h.notifications.dispose).toHaveBeenCalledOnce();
+});
+
+it('forwards the existing foreground signal without including session or message data', async () => {
+  await import('./main');
+  await vi.waitFor(() => expect(h.mount).toHaveBeenCalledOnce());
+  h.listen.mock.calls.find(([event]) => event === 'foreground')![1]();
+  const event = vi.mocked(window.dispatchEvent).mock.calls[0]![0];
+  expect(event.type).toBe('silverhand:notification-diagnostics-foreground');
+  expect('detail' in event).toBe(false);
 });

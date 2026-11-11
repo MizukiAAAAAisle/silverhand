@@ -1,4 +1,4 @@
-import type { ClientPlatform } from '@silverhand/client';
+import type { ClientPlatform, NotificationDiagnosticsCapability, NotificationLocalSnapshot, NotificationSendObservation, NotificationSendStatus, NotificationSystemSnapshot } from '@silverhand/client';
 import type { PluginListenerHandle } from '@capacitor/core';
 
 type Capability = NonNullable<ClientPlatform['notifications']>;
@@ -6,7 +6,8 @@ type Notice = Parameters<Capability['showSystemNotification']>[0];
 type Result = { status: string };
 export interface AndroidNotificationBridge {
   notificationSession(): Promise<{ session: string }>;
-  notificationShow(input: Notice & { session: string }): Promise<Result>;
+  notificationShow(input: Notice & { session: string; diagnosticTest?: true }): Promise<Result>;
+  notificationDiagnostics(): Promise<NotificationSystemSnapshot>;
   notificationDismiss(input: { session: string; ids: string[] }): Promise<Result>;
   notificationTakeClicks(input: { session: string }): Promise<{
     clicks: Array<{ id: string; token: string }>;
@@ -21,6 +22,19 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
   let generation = 0;
   let session: Promise<string> = Promise.resolve('');
   let listener: PluginListenerHandle | undefined;
+  let local: NotificationLocalSnapshot = { session: 'unknown', lastSend: null };
+  let testResult: NotificationSendObservation | null = null;
+  let realSequence = 0;
+  let testSequence = 0;
+  const localListeners = new Set<() => void>();
+  const testListeners = new Set<() => void>();
+  const publish = (listeners: Set<() => void>) => {
+    // A diagnostic view must never interrupt a business operation.
+    for (const listener of listeners) { try { listener(); } catch {} }
+  };
+  const updateLocal = (next: NotificationLocalSnapshot) => { local = next; publish(localListeners); };
+  const updateTest = (next: NotificationSendObservation | null) => { testResult = next; publish(testListeners); };
+
   const handlers = new Set<(id: string) => void>();
   const pending = new Map<string, string>();
   let draining = false;
@@ -57,15 +71,80 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
   }
   async function refreshSession() {
     if (disposed) return;
-    generation++;
+    const owner = ++generation;
+    realSequence++;
+    testSequence++;
     pending.clear();
-    session = bridge.notificationSession().then((value) => value.session).catch((error) => {
+    updateLocal({ session: 'unknown', lastSend: null });
+    updateTest(null);
+    session = bridge.notificationSession().then((value) => {
+      if (!disposed && owner === generation)
+        updateLocal({ ...local, session: value.session ? 'present' : 'absent' });
+      return value.session;
+    }).catch((error) => {
       diagnose('session', error);
       return '';
     });
     await session;
     await drain();
   }
+
+  const statuses = new Set<NotificationSendStatus>([
+    'posted', 'suppressed-focused', 'channel-disabled', 'notifications-disabled',
+    'not-authorized-or-undecided', 'session-expired', 'permission-request-busy',
+    'diagnostic-unavailable', 'diagnostic-invalid',
+  ]);
+  async function show(notice: Notice, test = false): Promise<NotificationSendObservation> {
+    const owner = generation;
+    const sequence = test ? ++testSequence : ++realSequence;
+    const at = Date.now();
+    const record = (status: NotificationSendStatus) => {
+      const observation = { status, at };
+      if (!disposed && owner === generation && sequence === (test ? testSequence : realSequence)) {
+        if (test) updateTest(observation);
+        else updateLocal({ ...local, lastSend: observation });
+      }
+      return observation;
+    };
+    if (disposed) return { status: 'invalidated', at };
+    record('waiting-session');
+    try {
+      const token = await session;
+      if (disposed || owner !== generation) return { status: 'invalidated', at };
+      if (!token) return record('missing-session');
+      record('sending');
+      const result = await bridge.notificationShow({ ...notice, session: token, ...(test ? { diagnosticTest: true as const } : {}) });
+      if (disposed || owner !== generation) return { status: 'invalidated', at };
+      const status = statuses.has(result?.status as NotificationSendStatus) ? result.status as NotificationSendStatus : 'UNKNOWN_STATUS';
+      if (!test && status !== 'posted' && status !== 'suppressed-focused')
+        console.info(`Android notifications show: ${status}`);
+      return record(status);
+    } catch (error) {
+      if (!test) diagnose('show', error);
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      return record(code === 'NOTIFICATION_FAILED' ? 'NOTIFICATION_FAILED' : 'BRIDGE_ERROR');
+    }
+  }
+  const unknownSystem: NotificationSystemSnapshot = {
+    runtimePermission: 'unknown', appEnabled: null, channel: 'unknown', channelBlocked: null,
+  };
+  const diagnostics: NotificationDiagnosticsCapability = {
+    async readSystem() {
+      if (disposed) return { ...unknownSystem };
+      try {
+        const value = await bridge.notificationDiagnostics();
+        if (disposed || !value) return { ...unknownSystem };
+        return {
+          runtimePermission: ['granted', 'not-granted', 'not-required'].includes(value.runtimePermission) ? value.runtimePermission : 'unknown',
+          appEnabled: typeof value.appEnabled === 'boolean' ? value.appEnabled : null,
+          channel: ['present', 'absent'].includes(value.channel) ? value.channel : 'unknown',
+          channelBlocked: value.channel === 'present' && typeof value.channelBlocked === 'boolean' ? value.channelBlocked : null,
+        };
+      } catch { return { ...unknownSystem }; }
+    },
+    getLocalSnapshot: () => local,
+    subscribeLocal(handler) { localListeners.add(handler); return () => { localListeners.delete(handler); }; },
+  };
   async function invoke(method: string, action: (token: string) => Promise<Result>) {
     const owner = generation;
     try {
@@ -85,7 +164,7 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
   }).catch((error) => diagnose('subscribe', error));
 
   const capability: Capability = {
-    showSystemNotification: (notice) => invoke('show', (token) => bridge.notificationShow({ ...notice, session: token })),
+    showSystemNotification: async (notice) => { await show(notice); },
     dismissSystemNotifications: (ids) => invoke('dismiss', (token) => bridge.notificationDismiss({ session: token, ids })),
     onNotificationClicked(handler) {
       if (disposed) return () => {};
@@ -99,12 +178,22 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
   };
   return {
     capability,
+    diagnostics,
+    // Internal Android executor. Only the acceptance module supplies the fixed
+    // test payload; the native variant policy validates it again.
+    sendDiagnosticNotice: (notice: Notice) => show(notice, true),
+    getTestSnapshot: () => testResult,
+    subscribeTest(handler: () => void) { testListeners.add(handler); return () => { testListeners.delete(handler); }; },
     refreshSession,
     dispose() {
       disposed = true;
       generation++;
       pending.clear();
       handlers.clear();
+      updateLocal({ session: 'unknown', lastSend: null });
+      updateTest(null);
+      localListeners.clear();
+      testListeners.clear();
       void listener?.remove().catch((error) => diagnose('unsubscribe', error));
       listener = undefined;
     },

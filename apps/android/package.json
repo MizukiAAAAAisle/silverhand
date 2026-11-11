@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "vite build",
+    "build": "node scripts/build-web.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "build:core": "python3 scripts/build-core.py"

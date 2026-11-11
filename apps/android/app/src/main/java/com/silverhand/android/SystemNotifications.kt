@@ -19,12 +19,19 @@ import com.getcapacitor.JSObject
 /** One process owner across Activity replacements; never retains an Activity or JS listener. */
 internal class SystemNotifications private constructor(private val context: Context) {
     companion object {
-        private const val CHANNEL_ID = "silverhand.activity.v1"
+        const val CHANNEL_ID = "silverhand.activity.v1"
         private const val ITEM_ID = 1
         private var instance: SystemNotifications? = null
         @Synchronized fun get(context: Context): SystemNotifications = instance
             ?: SystemNotifications(context.applicationContext).also { instance = it }
         @Synchronized fun existing(): SystemNotifications? = instance
+        fun diagnosticFailure(input: JSObject): String? {
+            if (input.getBoolean("diagnosticTest", false) != true) return null
+            if (!BuildConfig.ACCEPTANCE) return "diagnostic-unavailable"
+            return if (DiagnosticNotificationPolicy.accepts(input.getString("title"), input.getString("body"),
+                    input.getString("subtitle"), input.getString("groupId"), input.getString("notificationId"),
+                    input.getBoolean("force", false) == true)) null else "diagnostic-invalid"
+        }
     }
     private val manager = context.getSystemService(NotificationManager::class.java)
     private val state = NotificationState()
@@ -82,6 +89,7 @@ internal class SystemNotifications private constructor(private val context: Cont
         }
     }
     fun post(input: JSObject): String {
+        diagnosticFailure(input)?.let { return it }
         val session = input.getString("session")
         if (!current(session)) return "session-expired"
         if (!permitted()) return "not-authorized-or-undecided"
@@ -91,7 +99,8 @@ internal class SystemNotifications private constructor(private val context: Cont
         val title = input.getString("title") ?: error("Notification title missing")
         val id = input.getString("notificationId")
         require(id == null || id.isNotBlank()) { "Notification identity is empty" }
-        val ticket = state.prepare(session, id)
+        val ticket = if (input.getBoolean("diagnosticTest", false) == true)
+            DiagnosticNotificationPolicy.prepare(state, session) else state.prepare(session, id)
         val text = listOfNotNull(input.getString("subtitle"), input.getString("body"))
             .filter { it.isNotBlank() }.joinToString("\n")
         try {

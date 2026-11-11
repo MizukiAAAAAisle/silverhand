@@ -697,22 +697,40 @@ def ca_check(run, apk=None):
     return {'apk': str(apk), 'apk_sha256': digest(apk), 'ca_sha256': digest(ca), 'ca_matches_actual_apk': True}
 
 
-def apk_artifact_check(run, apk=None):
-    record = ca_check(run) if apk is None else ca_check(run, apk)
+def web_asset_root(run, variant):
+    if variant not in {'normal', 'acceptance'}:
+        raise RuntimeError('Unknown web variant: ' + variant)
+    root = run / 'app-build/web-assets' / variant
+    metadata = json.loads((root / 'public/android-web-build.json').read_text())
+    if metadata.get('kind') != 'silverhand-android-web-v1' or metadata.get('variant') != variant or \
+       ('apps/android/src/notification-test.ts' in metadata.get('modules', [])) != (variant == 'acceptance'):
+        raise RuntimeError('Mismatched APK web variant: ' + variant)
+    return root
+
+
+def apk_artifact_check(run, apk=None, web_variant='acceptance'):
+    if web_variant == 'acceptance':
+        record = ca_check(run) if apk is None else ca_check(run, apk)
+    else:
+        if apk is None:
+            raise RuntimeError('Normal APK path required')
+        record = {'apk': str(apk), 'apk_sha256': digest(apk)}
+    web = web_asset_root(run, web_variant)
     manifest = json.loads((run / 'core-build/manifest.json').read_text())
     expected = {'lib/arm64-v8a/' + name: sha for name, sha in manifest['packagedLibraryHashes'].items()}
-    for folder in ['web-assets', 'core-assets']:
-        root = run / 'app-build' / folder
+    for root in [web, run / 'app-build/core-assets']:
         for path in root.rglob('*'):
             if path.is_file():
                 expected['assets/' + str(path.relative_to(root))] = digest(path)
     with zipfile.ZipFile(record['apk']) as bundle:
+        if web_variant == 'normal' and 'assets/acceptance-ca.pem' in bundle.namelist():
+            raise RuntimeError('Acceptance CA in normal APK')
         for name, sha in expected.items():
             if hashlib.sha256(bundle.read(name)).hexdigest() != sha:
                 raise RuntimeError('Actual APK input mismatch: ' + name)
         if any('XCTest' in name for name in bundle.namelist() if name.startswith('lib/')):
             raise RuntimeError('XCTest library unexpectedly packaged')
-    return record | {'core_manifest_sha256': digest(run / 'core-build/manifest.json'),
+    return record | {'web_variant': web_variant, 'core_manifest_sha256': digest(run / 'core-build/manifest.json'),
                      'packaged_input_hashes': expected, 'actual_APK_inputs_match': True}
 
 
@@ -802,7 +820,7 @@ def build(run, resume_attempt=None, resume_stage='host'):
     for name, args in [('typecheck', ['--dir', str(APP), 'typecheck']), ('platform-test', ['--dir', str(APP), 'test']),
                        ('ios-contracts', ['--dir', str(REPO / 'apps/ios'), 'exec', 'vitest', 'run', 'src/platform.test.ts', 'src/event-socket.test.ts'])]:
         step(evidence, name, [pnpm, *args])
-    step(evidence, 'web', [pnpm, '--dir', APP, 'exec', 'vite', 'build', '--outDir', run / 'web', '--emptyOutDir'])
+    step(evidence, 'web', [ENV['NODE_BIN'], APP / 'scripts/build-web.mjs'])
     step(evidence, 'web-assets', [ENV['NODE_BIN'], APP / 'scripts/prepare-web.mjs'])
     step(evidence, 'backend-build', [ENV['CARGO_BIN'], '+1.99.0', 'build', '--locked', '--manifest-path', REPO / 'rust/Cargo.toml', '-p', 'silverhand-backend-app', '--bin', 'silverhand-backend'])
     backend = Path(ENV['SILVERHAND_ACCEPTANCE_BACKEND'])

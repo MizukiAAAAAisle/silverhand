@@ -179,6 +179,7 @@ export interface ClientPlatform {
   localHost?: LocalHostCapability;
   shell?: ShellCapability;
   notifications?: NotificationCapability;
+  notificationDiagnostics?: import("./notification-diagnostics.js").NotificationDiagnosticsCapability;
   navigation?: NavigationCapability;
   titlebar?: TitlebarCapability;
   pageBar?: PageBarCapability;

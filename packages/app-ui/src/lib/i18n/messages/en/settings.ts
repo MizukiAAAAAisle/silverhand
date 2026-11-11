@@ -6,6 +6,15 @@ export const settings = {
     zh: "简体中文",
   },
   about: {
+    notificationDiagnostics: {
+      title: "Notification status (read only)",
+      permission: "Permission", session: "Notification session", lastSend: "Latest send (real)", channel: "Channel",
+      granted: "Granted", notGranted: "Not granted", notRequired: "Runtime permission not required", unknown: "Unknown",
+      present: "Present", absent: "Absent", enabled: "Enabled", disabled: "Disabled", appSwitch: "App switch",
+      notStarted: "Not started in this observation window", waiting: "Waiting for session", sending: "Started, awaiting completion",
+      missingSession: "Not started: no session", invalidated: "Invalidated", posted: "posted (system call returned)",
+      note: "Current app session only. This does not confirm a visible alert or sound.", queried: "Queried",
+    },
     privacy: "Privacy Policy",
     support: "Support",
     version: "Version",
