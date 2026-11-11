@@ -1,9 +1,12 @@
 // @vitest-environment happy-dom
-import { expect, it, vi } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { createAndroidNotifications, type AndroidNotificationBridge } from './notifications';
 import { installNotificationTest } from './notification-test';
 
+afterEach(() => vi.unstubAllGlobals());
+
 it('uses the same show executor once with fixed data, disables while pending, and cleans its mount', async () => {
+  vi.stubGlobal('__SILVERHAND_ANDROID_ACCEPTANCE__', true);
   const bridge: AndroidNotificationBridge = {
     notificationSession: vi.fn(async () => ({ session: 'PRIVATE_SESSION' })),
     notificationDiagnostics: vi.fn<AndroidNotificationBridge['notificationDiagnostics']>(async () => ({ runtimePermission: 'unknown', appEnabled: null, channel: 'unknown', channelBlocked: null })),
@@ -13,10 +16,10 @@ it('uses the same show executor once with fixed data, disables while pending, an
     addListener: vi.fn(async () => ({ remove: vi.fn(async () => {}) })),
   };
   const owner = createAndroidNotifications(bridge);
-  const subscribe = owner.subscribeTest;
+  const control = installNotificationTest(owner);
+  const subscribe = control.subscribe;
   const unsubscribed = vi.fn();
-  owner.subscribeTest = (handler) => { const off = subscribe(handler); return () => { off(); unsubscribed(); }; };
-  installNotificationTest(owner);
+  control.subscribe = (handler) => { const off = subscribe(handler); return () => { off(); unsubscribed(); }; };
   const host = document.createElement('div'); document.body.append(host);
   const unmount = owner.diagnostics.mountTestControl!(host);
   try {
@@ -42,7 +45,7 @@ it('uses the same show executor once with fixed data, disables while pending, an
     expect(host.textContent).not.toContain('PRIVATE_NATIVE_ERROR');
     expect(owner.diagnostics.getLocalSnapshot().lastSend).toBe(real);
     await owner.refreshSession();
-    expect(owner.getTestSnapshot()).toBeNull();
+    expect(control.getSnapshot()).toBeNull();
     expect(host.textContent).not.toContain('NOTIFICATION_FAILED');
   } finally { unmount(); owner.dispose(); }
   expect(unsubscribed).toHaveBeenCalledOnce();

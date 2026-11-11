@@ -26,6 +26,12 @@ export default defineConfig({
           ? Object.entries(item.modules).filter(([, value]) => value.renderedLength > 0).map(([id]) => id.replace(repository, '')) : []))].sort();
         const hasTest = modules.includes('apps/android/src/notification-test.ts');
         if (hasTest !== (variant === 'acceptance')) throw new Error('Notification test module variant mismatch');
+        // Module exclusion alone is insufficient: the ordinary adapter must not
+        // retain an active test sender, marker branch or test state host either.
+        const javascript = Object.values(bundle).filter((item) => item.type === 'chunk').map((item) => item.code).join('\n');
+        const testEntries = ['diagnosticHost', 'sendDiagnosticTest', 'diagnosticTest', 'acceptanceNotificationTest'];
+        if (testEntries.some((entry) => javascript.includes(entry) !== (variant === 'acceptance')))
+          throw new Error('Notification test implementation variant mismatch');
         if (!modules.includes('packages/app-ui/src/pages/settings/components/notification-diagnostics-pane.tsx'))
           throw new Error('Notification diagnostics view missing from web bundle');
         this.emitFile({ type: 'asset', fileName: 'android-web-build.json',
