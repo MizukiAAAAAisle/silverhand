@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createElement } from 'react';
+import { act, createElement, StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -36,7 +36,7 @@ function row(overrides: Partial<NotificationDto> = {}): NotificationDto {
   };
 }
 type Jump = Parameters<typeof useNotificationToasts>[1];
-async function harness(initial: NotificationDto[] = [], firstRows?: Promise<NotificationDto[]>, diagnostics: 'normal' | 'absent' | 'throws' | 'setup-throws' | 'no-send' = 'normal') {
+async function harness(initial: NotificationDto[] = [], firstRows?: Promise<NotificationDto[]>, diagnostics: 'normal' | 'absent' | 'throws' | 'setup-throws' | 'no-send' = 'normal', strictCached = false) {
   let rows = initial;
   let first = firstRows;
   let nativeClick!: () => void;
@@ -78,12 +78,22 @@ async function harness(initial: NotificationDto[] = [], firstRows?: Promise<Noti
   }
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const hookHistory: ReturnType<NonNullable<typeof notifications.diagnostics.hook>['getSnapshot']>[] = [];
+  const observation = notifications.diagnostics.hook!;
+  const stopHistory = observation.subscribe(() => { hookHistory.push(observation.getSnapshot()); });
+  const originalSubscribe = observation.subscribe;
+  const hookUnsubscribed = vi.fn();
+  vi.spyOn(observation, 'subscribe').mockImplementation((handler) => {
+    const off = originalSubscribe(handler);
+    return () => { off(); hookUnsubscribed(); };
+  });
+  if (strictCached) qc.setQueryData(['notifications','list',{unread:true,toasts:true}], { notifications:initial });
   const host = document.createElement('div'); document.body.append(host);
   const root = createRoot(host);
   const viewing: { conversationId: string | null; threadRootId: string | null } = { conversationId: 'other', threadRootId: null };
   function Consumer({ jump }: { jump?: Jump }) { useNotificationToasts(viewing, jump); return null; }
   async function render(jump?: Jump) {
-    await act(async () => { root.render(createElement(QueryClientProvider, { client: qc }, createElement(Consumer, { jump }))); });
+    await act(async () => { root.render(createElement(QueryClientProvider, { client: qc }, strictCached ? createElement(StrictMode, null, createElement(Consumer, { jump })) : createElement(Consumer, { jump }))); });
   }
   async function settle(ms = 20) {
     await act(async () => {
@@ -93,7 +103,7 @@ async function harness(initial: NotificationDto[] = [], firstRows?: Promise<Noti
   }
   await render(); await settle();
   return {
-    bridge, notifications, request, notices, qc, focus, viewing, render, settle,
+    bridge, notifications, request, notices, qc, focus, viewing, render, settle, hookHistory, hookUnsubscribed,
     async click(id: string, token = 'click-'+(++serial)) {
       await act(async () => { pending.push({ id, token }); nativeClick(); });
       await settle();
@@ -110,7 +120,7 @@ async function harness(initial: NotificationDto[] = [], firstRows?: Promise<Noti
       await settle(130); await settle();
     },
     blockReference(value: Promise<unknown>) { reference = value; },
-    async close() { await act(async () => root.unmount()); notifications.dispose(); notices.dispose(); qc.clear(); host.remove(); },
+    async close() { await act(async () => root.unmount()); stopHistory(); notifications.dispose(); notices.dispose(); qc.clear(); host.remove(); },
   };
 }
 
@@ -343,4 +353,22 @@ it('records initiated when shared send was called even while the native result i
     expect(h.notifications.diagnostics.getLocalSnapshot().lastSend?.status).toBe('posted');
     expect(h.notifications.diagnostics.hook!.getSnapshot().decision).toBe('initiated');
   } finally { result.resolve({status:'posted'}); await h.close(); }
+});
+
+
+it('preserves a cached initial-list observation and timestamp across StrictMode effect replay', async () => {
+  let tick=1000;
+  vi.spyOn(Date,'now').mockImplementation(() => ++tick);
+  const h=await harness([row()],undefined,'normal',true);
+  try {
+    const snapshots=h.hookHistory.filter((snapshot) => snapshot.list !== null);
+    expect(snapshots.map((snapshot) => snapshot.decision)).toEqual(['not-evaluated','initial-list']);
+    expect(new Set(snapshots.map((snapshot) => snapshot.list!.at)).size).toBe(1);
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toBe(snapshots[1]);
+    expect(h.hookUnsubscribed).toHaveBeenCalledTimes(1); // replay cleanup
+    h.viewing.conversationId='channel'; await h.render(); await h.settle();
+    expect(h.hookHistory.filter((snapshot) => snapshot.list)).toHaveLength(2);
+    expect(h.bridge.notificationShow).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+  expect(h.hookUnsubscribed).toHaveBeenCalledTimes(2); // real unmount cleanup
 });

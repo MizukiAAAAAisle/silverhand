@@ -149,28 +149,36 @@ export function useNotificationToasts(
 
   const hookObserver = useRef<ReturnType<NotificationHookDiagnostics["createObserver"]> | undefined>(undefined);
   const observedData = useRef<typeof data>(undefined);
+  const observerSource = useRef<NotificationHookDiagnostics | undefined>(undefined);
+  const observerActive = useRef(false);
   useEffect(() => {
     let hook: NotificationHookDiagnostics | undefined;
     try { hook = getPlatform().notificationDiagnostics?.hook; } catch { return; }
     if (!hook) return;
+    let live = true;
+    observerActive.current = true;
     const bind = () => {
+      if (!live) return;
       try {
-        if (hookObserver.current?.isCurrent()) return;
+        if (observerSource.current === hook && hookObserver.current?.isCurrent()) return;
         hookObserver.current = hook.createObserver();
+        observerSource.current = hook;
         observedData.current = undefined;
-      } catch { hookObserver.current = undefined; }
+      } catch { hookObserver.current = undefined; observerSource.current = undefined; }
     };
     bind();
     let unsubscribe: (() => void) | undefined;
     try { unsubscribe = hook.subscribe(bind); } catch { /* Diagnostics must not affect surfacing. */ }
     return () => {
-      hookObserver.current = undefined;
-      observedData.current = undefined;
+      live = false;
+      observerActive.current = false;
+      // StrictMode can replay setup with this same generation and cached data.
+      // Keep its dedup key; a genuine source/generation change clears it in bind.
       try { unsubscribe?.(); } catch { /* No business cleanup is owned here. */ }
     };
   }, [qc]);
   const observeHook = useCallback((event: NotificationHookEvent) => {
-    try { hookObserver.current?.record(event); } catch { /* Passive observation only. */ }
+    try { if (observerActive.current) hookObserver.current?.record(event); } catch { /* Passive observation only. */ }
   }, []);
 
   const seenIds = useRef<Set<string>>(new Set());
