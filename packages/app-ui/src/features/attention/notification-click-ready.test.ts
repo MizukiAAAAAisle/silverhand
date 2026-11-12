@@ -36,7 +36,7 @@ function row(overrides: Partial<NotificationDto> = {}): NotificationDto {
   };
 }
 type Jump = Parameters<typeof useNotificationToasts>[1];
-async function harness(initial: NotificationDto[] = [], firstRows?: Promise<NotificationDto[]>) {
+async function harness(initial: NotificationDto[] = [], firstRows?: Promise<NotificationDto[]>, diagnostics: 'normal' | 'absent' | 'throws' | 'setup-throws' | 'no-send' = 'normal') {
   let rows = initial;
   let first = firstRows;
   let nativeClick!: () => void;
@@ -64,7 +64,18 @@ async function harness(initial: NotificationDto[] = [], firstRows?: Promise<Noti
   const notifications = createAndroidNotifications(bridge);
   const notices = createAndroidNotices();
   Object.assign(platformFixture, { client: { backendRequest: request }, notifications: notifications.capability,
-    banner: notices.banner, toast: notices.toast });
+    banner: notices.banner, toast: notices.toast,
+    notificationDiagnostics: diagnostics === 'absent' ? undefined : notifications.diagnostics });
+  if (diagnostics === 'no-send') platformFixture.notifications = undefined;
+  if (diagnostics === 'throws' || diagnostics === 'setup-throws') {
+    platformFixture.notificationDiagnostics = { ...notifications.diagnostics, hook: {
+      ...notifications.diagnostics.hook!,
+      createObserver() {
+        if (diagnostics === 'setup-throws') throw new Error('observer setup failed');
+        return { isCurrent: () => true, record() { throw new Error('observer failed'); } };
+      },
+    } };
+  }
   const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(false);
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const host = document.createElement('div'); document.body.append(host);
@@ -225,4 +236,111 @@ it.each(['success', 'failure'] as const)('does not let expired resolver %s consu
     await h.render(jump); await h.settle();
     expect(jump).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({channelId:'channel',messageId:'message'}));
   } finally { await h.close(); }
+});
+
+
+it('distinguishes no observation from a loaded empty list, without an extra bridge query', async () => {
+  const list = deferred<NotificationDto[]>(); const h = await harness([], list.promise);
+  try {
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toEqual({ list:null, decision:'not-evaluated' });
+    await act(async () => list.resolve([])); await h.settle();
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toMatchObject({ list:{mentionSelfCount:0}, decision:'no-mention' });
+    expect(h.bridge.notificationDiagnostics).not.toHaveBeenCalled();
+    expect(h.bridge.notificationShow).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('observes initial mentions as existing and preserves the observation across viewing-only reruns', async () => {
+  const h = await harness([row({id:'PRIVATE_ID',payload:{mention_excerpt:'PRIVATE_TEXT'}})]);
+  try {
+    const initial = h.notifications.diagnostics.hook!.getSnapshot();
+    expect(initial).toMatchObject({list:{mentionSelfCount:1},decision:'initial-list'});
+    expect(JSON.stringify(initial)).not.toMatch(/PRIVATE|channel|message|session/);
+    h.viewing.conversationId = 'channel'; await h.render(); await h.settle();
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toBe(initial);
+    expect(h.bridge.notificationShow).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('records focused suppression and actual shared send separately without changing delivery arguments', async () => {
+  const h = await harness();
+  try {
+    h.focus.mockReturnValue(true); h.viewing.conversationId='channel'; h.viewing.threadRootId='thread-root';
+    await h.viewer([row({id:'silent'})]);
+    const suppressed = h.notifications.diagnostics.hook!.getSnapshot();
+    expect(suppressed).toMatchObject({list:{mentionSelfCount:1},decision:'suppressed-conversation'});
+    expect(h.bridge.notificationShow).not.toHaveBeenCalled();
+    h.viewing.conversationId='other'; await h.render(); await h.settle();
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toBe(suppressed);
+    await h.viewer([row({id:'silent'}),row({id:'send',created_at:2})]);
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toMatchObject({list:{mentionSelfCount:2},decision:'initiated'});
+    expect(h.bridge.notificationShow).toHaveBeenCalledExactlyOnceWith({title:expect.any(String),body:expect.any(String),subtitle:expect.anything(),groupId:expect.anything(),notificationId:'send',force:true,session:'session-a'});
+  } finally { await h.close(); }
+});
+
+it.each([false,true])('selects by creation time and stable ID rather than loop order (reversed=%s)', async (reversed) => {
+  const h = await harness();
+  try {
+    h.focus.mockReturnValue(true); h.viewing.conversationId='channel'; h.viewing.threadRootId='thread-root';
+    const items=[row({id:'a',created_at:9,conversation_id:'other'}),row({id:'z',created_at:9}),row({id:'last-but-older',created_at:1,conversation_id:'other'})];
+    await h.viewer(reversed ? items.reverse() : items);
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toMatchObject({list:{mentionSelfCount:3},decision:'suppressed-conversation'});
+    expect(h.bridge.notificationShow).toHaveBeenCalledTimes(2);
+    // A later read includes a new older item, while the latest @me was seen.
+    await h.viewer([...items,row({id:'new-but-older',created_at:2})]);
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toMatchObject({list:{mentionSelfCount:4},decision:'already-seen'});
+    expect(h.bridge.notificationShow).toHaveBeenCalledTimes(2);
+  } finally { await h.close(); }
+});
+
+it.each(['absent','throws','setup-throws'] as const)('keeps the real hook functional with diagnostic capability %s', async (mode) => {
+  const h = await harness([],undefined,mode);
+  try {
+    await h.viewer([row()]);
+    expect(h.bridge.notificationShow).toHaveBeenCalledOnce();
+    expect(vi.mocked(h.bridge.notificationShow).mock.calls[0]![0]).toMatchObject({notificationId:'n',force:true,session:'session-a'});
+    expect(document.querySelector<HTMLElement>('.android-notice-banner')!.hidden).toBe(false);
+  } finally { await h.close(); }
+});
+
+it('does not label a missing notification capability as a send, while preserving the mention banner', async () => {
+  const h = await harness([],undefined,'no-send');
+  try {
+    await h.viewer([row()]);
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toMatchObject({list:{mentionSelfCount:1},decision:'no-capability'});
+    expect(h.bridge.notificationShow).not.toHaveBeenCalled();
+    expect(document.querySelector<HTMLElement>('.android-notice-banner')!.hidden).toBe(false);
+  } finally { await h.close(); }
+});
+
+it('clears observations, rejects old callbacks and rebinds the same data reference in a new generation', async () => {
+  const h = await harness([row()]);
+  const observer = h.notifications.diagnostics.hook!.createObserver();
+  try {
+    const data = h.qc.getQueryData(['notifications','list',{unread:true,toasts:true}]);
+    await act(async () => h.notifications.refreshSession());
+    expect(observer.isCurrent()).toBe(false);
+    observer.record({kind:'list',mentionSelfCount:999});
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toEqual({list:null,decision:'not-evaluated'});
+    h.viewing.conversationId='channel'; await h.render(); await h.settle();
+    expect(h.qc.getQueryData(['notifications','list',{unread:true,toasts:true}])).toBe(data);
+    expect(h.notifications.diagnostics.hook!.getSnapshot()).toMatchObject({list:{mentionSelfCount:1},decision:'already-seen'});
+    expect(h.bridge.notificationShow).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+  observer.record({kind:'list',mentionSelfCount:999});
+  expect(h.notifications.diagnostics.hook!.getSnapshot()).toEqual({list:null,decision:'not-evaluated'});
+});
+
+it('records initiated when shared send was called even while the native result is still pending', async () => {
+  const h=await harness(); const result=deferred<{status:string}>();
+  vi.mocked(h.bridge.notificationShow).mockReturnValueOnce(result.promise);
+  try {
+    await h.viewer([row()]);
+    expect(h.notifications.diagnostics.hook!.getSnapshot().decision).toBe('initiated');
+    expect(h.notifications.diagnostics.getLocalSnapshot().lastSend?.status).toBe('sending');
+    expect(h.bridge.notificationShow).toHaveBeenCalledOnce();
+    result.resolve({status:'posted'}); await h.settle();
+    expect(h.notifications.diagnostics.getLocalSnapshot().lastSend?.status).toBe('posted');
+    expect(h.notifications.diagnostics.hook!.getSnapshot().decision).toBe('initiated');
+  } finally { result.resolve({status:'posted'}); await h.close(); }
 });

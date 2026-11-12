@@ -1,4 +1,4 @@
-import type { ClientPlatform, NotificationDiagnosticsCapability, NotificationLocalSnapshot, NotificationSendObservation, NotificationSendStatus, NotificationSystemSnapshot } from '@silverhand/client';
+import type { ClientPlatform, NotificationDiagnosticsCapability, NotificationHookSnapshot, NotificationLocalSnapshot, NotificationSendObservation, NotificationSendStatus, NotificationSystemSnapshot } from '@silverhand/client';
 import type { PluginListenerHandle } from '@capacitor/core';
 
 type Capability = NonNullable<ClientPlatform['notifications']>;
@@ -25,12 +25,15 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
   let listener: PluginListenerHandle | undefined;
   let local: NotificationLocalSnapshot = { session: 'unknown', lastSend: null };
   let realSequence = 0;
+  let hook: NotificationHookSnapshot = { list: null, decision: 'not-evaluated' };
+  const hookListeners = new Set<() => void>();
   const localListeners = new Set<() => void>();
   const publish = (listeners: Set<() => void>) => {
     // A diagnostic view must never interrupt a business operation.
     for (const listener of listeners) { try { listener(); } catch {} }
   };
   const updateLocal = (next: NotificationLocalSnapshot) => { local = next; publish(localListeners); };
+  const resetHook = () => { hook = { list: null, decision: 'not-evaluated' }; publish(hookListeners); };
 
   const handlers = new Set<(id: string) => void>();
   const pending = new Map<string, string>();
@@ -71,6 +74,7 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
     const owner = ++generation;
     realSequence++;
     pending.clear();
+    resetHook();
     updateLocal({ session: 'unknown', lastSend: null });
     session = bridge.notificationSession().then((value) => {
       if (!disposed && owner === generation)
@@ -136,6 +140,21 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
     runtimePermission: 'unknown', appEnabled: null, channel: 'unknown', channelBlocked: null,
   };
   const diagnostics: NotificationDiagnosticsCapability = {
+    hook: {
+      createObserver() {
+        const owner = generation;
+        const isCurrent = () => !disposed && owner === generation;
+        return { isCurrent, record(event) {
+          if (!isCurrent()) return;
+          if (event.kind === 'list') {
+            hook = { list: { mentionSelfCount: event.mentionSelfCount, at: Date.now() }, decision: event.mentionSelfCount ? 'not-evaluated' : 'no-mention' };
+          } else hook = { ...hook, decision: event.decision };
+          publish(hookListeners);
+        } };
+      },
+      getSnapshot: () => hook,
+      subscribe(handler) { hookListeners.add(handler); return () => { hookListeners.delete(handler); }; },
+    },
     async readSystem() {
       if (disposed) return { ...unknownSystem };
       try {
@@ -200,6 +219,8 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
       generation++;
       pending.clear();
       handlers.clear();
+      resetHook();
+      hookListeners.clear();
       updateLocal({ session: 'unknown', lastSend: null });
       localListeners.clear();
       void listener?.remove().catch((error) => diagnose('unsubscribe', error));

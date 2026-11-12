@@ -2,7 +2,7 @@
 import { act, createElement, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { NotificationDiagnosticsCapability, NotificationSystemSnapshot } from "@silverhand/client";
+import type { NotificationDiagnosticsCapability, NotificationHookSnapshot, NotificationSystemSnapshot } from "@silverhand/client";
 const h = vi.hoisted(() => ({ platform: {} as Record<string, unknown> }));
 vi.mock("@/platform", () => ({ getPlatform: () => h.platform }));
 vi.mock("@/features/legal/legal-links", () => ({
@@ -35,8 +35,9 @@ it("keeps existing About content and adds no diagnostic section or empty slot wh
   expect(host.querySelectorAll("a")).toHaveLength(2);
   expect(host.querySelector("[data-notification-diagnostics]")).toBeNull();
   expect(host.querySelector("[data-notification-test-slot]")).toBeNull();
+  expect(host.querySelector("[data-notification-hook-row]")).toBeNull();
 });
-it("renders exactly four read-only rows and no test host for normal Android", async () => {
+it("keeps four read-only rows when hook observation is not supplied", async () => {
   const cap = capability(); h.platform.notificationDiagnostics = cap;
   await act(async () => root.render(createElement(AboutPane)));
   expect(host.querySelectorAll("[data-notification-diagnostics] dt")).toHaveLength(4);
@@ -104,4 +105,52 @@ it("keeps the newest snapshot when adjacent foreground and visibility queries se
   expect(cap.readSystem).toHaveBeenCalledTimes(3);
   expect(host.querySelector("dl")?.textContent).toContain("Not granted");
   expect(host.querySelector("dl")?.textContent).not.toContain("Granted");
+});
+
+
+it("adds only two passive hook rows, updates from memory and releases its subscription", async () => {
+  const cap=capability(); let snapshot: NotificationHookSnapshot={list:null,decision:"not-evaluated"};
+  const listeners=new Set<() => void>();
+  cap.hook={
+    createObserver:vi.fn(() => { throw new Error("view must not create an observer"); }),
+    getSnapshot:() => snapshot,
+    subscribe:(listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+  };
+  h.platform.notificationDiagnostics=cap;
+  await act(async () => root.render(createElement(AboutPane)));
+  expect(host.querySelectorAll("dt")).toHaveLength(6);
+  expect(host.querySelectorAll("[data-notification-hook-row]")).toHaveLength(2);
+  expect(host.textContent).toContain("No observation recorded");
+  await act(async () => {
+    snapshot={list:{mentionSelfCount:2,at:1000},decision:"suppressed-conversation"};
+    for(const listener of listeners) listener();
+  });
+  const rows=[...host.querySelectorAll("[data-notification-hook-row]")];
+  expect(rows[0]!.textContent).toContain("This list contains 2 @me items (including existing items)");
+  expect(rows[1]!.textContent).toContain("Silent (focused conversation condition)");
+  expect(rows[1]!.textContent).toContain("latest @me in this list");
+  expect(host.querySelector("[data-notification-hook-note]")!.textContent).toContain("Unknown does not mean unfiltered");
+  await act(async () => {
+    snapshot={list:{mentionSelfCount:0,at:2000},decision:"no-mention"};
+    for(const listener of listeners) listener();
+  });
+  expect(host.textContent).toContain("This list contains 0 @me");
+  expect(host.textContent).toContain("Unknown (no @me in this list)");
+  expect(cap.hook.createObserver).not.toHaveBeenCalled();
+  expect(cap.readSystem).toHaveBeenCalledOnce();
+  await act(async () => root.render(createElement("div")));
+  expect(listeners.size).toBe(0);
+});
+
+it.each([
+  ["initial-list","initial list; marked seen"],
+  ["already-seen","already processed"],
+  ["no-capability","no system notification capability"],
+  ["initiated","Not filtered (shared send called)"],
+] as const)("labels the selected mention decision %s without treating unknown as unfiltered", async (decision,text) => {
+  const cap=capability();const snapshot:NotificationHookSnapshot={list:{mentionSelfCount:1,at:1000},decision};
+  cap.hook={createObserver:vi.fn(),getSnapshot:() => snapshot,subscribe:() => () => {}};
+  h.platform.notificationDiagnostics=cap;
+  await act(async () => root.render(createElement(AboutPane)));
+  expect(host.querySelectorAll("[data-notification-hook-row]")[1]!.textContent).toContain(text);
 });

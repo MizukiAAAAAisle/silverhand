@@ -1,3 +1,4 @@
+import type { NotificationHookDiagnostics, NotificationHookEvent } from "@silverhand/client";
 import { getPlatform } from "@/platform";
 import { useCallback, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -146,6 +147,32 @@ export function useNotificationToasts(
     staleTime: 2_000,
   });
 
+  const hookObserver = useRef<ReturnType<NotificationHookDiagnostics["createObserver"]> | undefined>(undefined);
+  const observedData = useRef<typeof data>(undefined);
+  useEffect(() => {
+    let hook: NotificationHookDiagnostics | undefined;
+    try { hook = getPlatform().notificationDiagnostics?.hook; } catch { return; }
+    if (!hook) return;
+    const bind = () => {
+      try {
+        if (hookObserver.current?.isCurrent()) return;
+        hookObserver.current = hook.createObserver();
+        observedData.current = undefined;
+      } catch { hookObserver.current = undefined; }
+    };
+    bind();
+    let unsubscribe: (() => void) | undefined;
+    try { unsubscribe = hook.subscribe(bind); } catch { /* Diagnostics must not affect surfacing. */ }
+    return () => {
+      hookObserver.current = undefined;
+      observedData.current = undefined;
+      try { unsubscribe?.(); } catch { /* No business cleanup is owned here. */ }
+    };
+  }, [qc]);
+  const observeHook = useCallback((event: NotificationHookEvent) => {
+    try { hookObserver.current?.record(event); } catch { /* Passive observation only. */ }
+  }, []);
+
   const seenIds = useRef<Set<string>>(new Set());
   const initialized = useRef(false);
   // Sticky start-failure toasts on screen. Each lives only while its notice is
@@ -291,6 +318,24 @@ export function useNotificationToasts(
   useEffect(() => {
     if (!data) return;
     const notifications = data.notifications;
+    // Absolute list size, not a push counter. Viewing-only reruns preserve this
+    // observation. A generation rebind clears observedData, even for reused data.
+    const observing = observedData.current !== data;
+    let latestMention: NotificationDto | undefined;
+    if (observing) {
+      observedData.current = data;
+      let mentionSelfCount = 0;
+      for (const n of notifications) if (n.kind === "mention_self") {
+        mentionSelfCount++;
+        if (!latestMention || n.created_at > latestMention.created_at ||
+            (n.created_at === latestMention.created_at && n.id > latestMention.id)) latestMention = n;
+      }
+      observeHook({ kind: "list", mentionSelfCount });
+    }
+    const firstList = !initialized.current;
+    const decide = (n: NotificationDto, decision: NotificationHookEvent & { kind: "decision" }) => {
+      if (observing && n === latestMention) observeHook(decision);
+    };
 
     const unreadIds = new Set(notifications.map((n) => n.id));
     for (const id of stickyIds.current) {
@@ -315,7 +360,10 @@ export function useNotificationToasts(
     for (const n of notifications) {
       // A start-failure row is refreshed in place (same id, newer created_at).
       const seenKey = n.kind === "agent_start_failed" ? `${n.id}@${n.created_at}` : n.id;
-      if (seenIds.current.has(seenKey)) continue;
+      if (seenIds.current.has(seenKey)) {
+        decide(n, { kind: "decision", decision: firstList ? "initial-list" : "already-seen" });
+        continue;
+      }
       seenIds.current.add(seenKey);
       if (isClickableKind(n.kind)) clickableById.current.set(n.id, n);
 
@@ -345,6 +393,7 @@ export function useNotificationToasts(
       }
 
       if (document.hasFocus() && isOnScreen(n, viewing)) {
+        decide(n, { kind: "decision", decision: "suppressed-conversation" });
         continue;
       }
 
@@ -360,11 +409,13 @@ export function useNotificationToasts(
           n.id,
         );
       }
-      void getPlatform().notifications?.showSystemNotification({
+      const notificationCapability = getPlatform().notifications;
+      void notificationCapability?.showSystemNotification({
         ...systemNoticeOf(n, buildToastLabel(n)),
         force: isViewerMention,
         notificationId: isClickableKind(n.kind) ? n.id : undefined,
       });
+      decide(n, { kind: "decision", decision: notificationCapability ? "initiated" : "no-capability" });
     }
     flushClicks();
 
@@ -376,7 +427,7 @@ export function useNotificationToasts(
     // read-state, so the notification correctly stays unread until an ACTIVE
     // eliminate path clears it: visible read advancing the cursor, clicking the
     // toast/notification to jump to source, or the Activity Mark-as-read ✓.
-  }, [data, viewing.conversationId, viewing.threadRootId, qc, handleClickById, markRead, flushClicks]);
+  }, [data, viewing.conversationId, viewing.threadRootId, qc, handleClickById, markRead, flushClicks, observeHook]);
 }
 
 /** Whether the notification's message is on screen: its conversation is the

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
-import type { NotificationDiagnosticsCapability, NotificationSendObservation, NotificationSystemSnapshot } from "@silverhand/client";
+import type { NotificationDiagnosticsCapability, NotificationHookDiagnostics, NotificationSendObservation, NotificationSystemSnapshot } from "@silverhand/client";
 import { NOTIFICATION_DIAGNOSTICS_FOREGROUND_EVENT } from "@silverhand/client";
 import { t } from "@/lib/i18n";
 
@@ -21,6 +21,18 @@ export function notificationObservationText(value: NotificationSendObservation |
     case "posted": return t(`${key}posted`);
     default: return codes.has(value.status) ? value.status : t(`${key}unknown`);
   }
+}
+
+function HookRows({ hook }: { hook: NotificationHookDiagnostics }) {
+  const snapshot = useSyncExternalStore(hook.subscribe, hook.getSnapshot, hook.getSnapshot);
+  const decision = t(`${key}${snapshot.decision === "suppressed-conversation" ? "hookSuppressed" : snapshot.decision === "initiated" ? "hookInitiated" : snapshot.decision === "initial-list" ? "hookInitial" : snapshot.decision === "already-seen" ? "hookSeen" : snapshot.decision === "no-mention" ? "hookNoMention" : snapshot.decision === "no-capability" ? "hookNoCapability" : "hookNotEvaluated"}`);
+  const rows = [
+    [t(`${key}hookList`), snapshot.list ? `${t(`${key}hookCountPrefix`)} ${snapshot.list.mentionSelfCount} ${t(`${key}hookCountSuffix`)} · ${new Date(snapshot.list.at).toLocaleTimeString()}` : t(`${key}hookNoRecord`)],
+    [t(`${key}hookDecision`), decision],
+  ];
+  return <>{rows.map(([label, value]) => <div key={label} data-notification-hook-row className="flex min-h-11 items-center justify-between gap-3 px-3 py-2">
+    <dt className="text-text-secondary">{label}</dt><dd className="text-right text-text-primary select-text">{value}</dd>
+  </div>)}</>;
 }
 
 function TestSlot({ mount }: { mount: NonNullable<NotificationDiagnosticsCapability["mountTestControl"]> }) {
@@ -82,7 +94,9 @@ export function NotificationDiagnosticsPane({ capability }: { capability: Notifi
       {rows.map(([label, value]) => <div key={label} className="flex min-h-11 items-center justify-between gap-3 px-3 py-2">
         <dt className="text-text-secondary">{label}</dt><dd className="text-right text-text-primary select-text">{value}</dd>
       </div>)}
+      {capability.hook ? <HookRows hook={capability.hook} /> : null}
     </dl>
+    {capability.hook ? <p className="text-xs text-text-muted" data-notification-hook-note>{t(`${key}hookNote`)}</p> : null}
     {capability.mountTestControl ? <TestSlot mount={capability.mountTestControl} /> : null}
     <p className="text-xs text-text-muted">{t(`${key}note`)}{queriedAt ? ` ${t(`${key}queried`)} ${new Date(queriedAt).toLocaleTimeString()}` : ""}</p>
   </section>;
