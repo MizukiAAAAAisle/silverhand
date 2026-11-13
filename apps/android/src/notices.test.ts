@@ -299,3 +299,31 @@ it('does not add lost-capture resumption to the existing toast interaction', asy
   vi.advanceTimersByTime(2999); expect(card('toast').hidden).toBe(false);
   vi.advanceTimersByTime(1); expect(card('toast').hidden).toBe(true);
 });
+
+it('retains existing keyboard focus ownership while the same button is held and released', async () => {
+  await notices.banner.show({ id: 'keyboard-hold', title: 'Keyboard then hold' });
+  vi.advanceTimersByTime(2000);
+  const target = button('banner', 'content'); target.focus();
+  vi.advanceTimersByTime(10000); expect(card('banner').hidden).toBe(false);
+  pointer(target, 'pointerdown'); vi.advanceTimersByTime(1000); pointer(target, 'pointerup');
+  expect(document.activeElement).toBe(target);
+  vi.advanceTimersByTime(10000); expect(card('banner').hidden).toBe(false);
+  target.blur(); await Promise.resolve();
+  vi.advanceTimersByTime(5999); expect(card('banner').hidden).toBe(false);
+  vi.advanceTimersByTime(1); expect(card('banner').hidden).toBe(true);
+});
+
+it.each(['pointercancel', 'lostpointercapture'])('pauses for Tab entering from outside after %s', async (cancel) => {
+  const outside = document.createElement('button'); document.body.append(outside);
+  await notices.banner.show({ id: 'outside-tab', title: 'Cancel then keyboard' });
+  vi.advanceTimersByTime(2000);
+  const content = button('banner', 'content'); pointer(content, 'pointerdown'); content.focus();
+  pointer(content, cancel); outside.focus(); await Promise.resolve();
+  // Tab originates OUTSIDE the card; a card-local keydown listener cannot see it.
+  outside.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Tab' }));
+  const close = button('banner', 'close'); close.focus();
+  vi.advanceTimersByTime(10000); expect(card('banner').hidden).toBe(false);
+  close.blur(); await Promise.resolve();
+  vi.advanceTimersByTime(5999); expect(card('banner').hidden).toBe(false);
+  vi.advanceTimersByTime(1); expect(card('banner').hidden).toBe(true);
+});

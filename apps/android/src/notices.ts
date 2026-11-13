@@ -59,7 +59,7 @@ export function createAndroidNotices(doc: Document = document) {
     let lifetime = 0;
     let remaining = 0;
     let runningSince: number | undefined;
-    let focusPaused = false;
+    let keyboardFocusTarget: Element | undefined;
     let pointerFocusTarget: Element | undefined;
     let hover = false;
     let pointer: { id: number; x: number; y: number; moved: boolean; startedAt: number } | undefined;
@@ -79,7 +79,7 @@ export function createAndroidNotices(doc: Document = document) {
       if (!current || (id !== undefined && id !== current.id)) return;
       cancelTimer();
       current = undefined;
-      focusPaused = false;
+      keyboardFocusTarget = undefined;
       pointerFocusTarget = undefined;
       pointer = undefined;
       card.hidden = true;
@@ -88,7 +88,9 @@ export function createAndroidNotices(doc: Document = document) {
     }
     function schedule() {
       pauseTimer();
-      const focused = kind === 'banner' ? focusPaused : card.contains(doc.activeElement);
+      const focused = kind === 'banner'
+        ? keyboardFocusTarget !== undefined && keyboardFocusTarget === doc.activeElement
+        : card.contains(doc.activeElement);
       if (!current || !lifetime || pointer || hover || focused) return;
       runningSince = performance.now();
       timer = setTimeout(() => dismiss(), kind === 'banner' ? remaining : lifetime);
@@ -124,7 +126,6 @@ export function createAndroidNotices(doc: Document = document) {
       if (!event.isPrimary || event.button !== 0) return;
       suppressClick = false;
       if (kind === 'banner') {
-        focusPaused = false;
         pointerFocusTarget = (event.target as Element).closest('button') ?? event.target as Element;
       }
       pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false, startedAt: performance.now() };
@@ -145,7 +146,6 @@ export function createAndroidNotices(doc: Document = document) {
       suppressClick = pointer.moved || (kind === 'banner' &&
         (event.type !== 'pointerup' || performance.now() - pointer.startedAt >= 500));
       pointer = undefined;
-      if (event.type !== 'pointerup') pointerFocusTarget = undefined;
       card.style.transform = '';
       if (dismissing) dismiss();
       else schedule();
@@ -154,13 +154,15 @@ export function createAndroidNotices(doc: Document = document) {
     card.addEventListener('pointercancel', end);
     if (kind === 'banner') card.addEventListener('lostpointercapture', end);
     card.addEventListener('focusin', () => {
-      // Touch/mouse focus can remain after release. Only keyboard/programmatic
-      // focus owns a separate pause, otherwise touch would leave expiry stuck.
-      if (kind === 'banner') focusPaused = !pointer && !suppressClick && doc.activeElement !== pointerFocusTarget;
-      if (kind === 'toast' || focusPaused) pauseTimer();
+      // Touch focus may arrive after release. Preserve a pre-existing keyboard
+      // owner, but do not turn pointer-origin focus into a new keyboard pause.
+      if (kind === 'banner' && doc.activeElement !== pointerFocusTarget)
+        keyboardFocusTarget = doc.activeElement ?? undefined;
+      if (kind === 'toast' || keyboardFocusTarget === doc.activeElement) pauseTimer();
     });
     card.addEventListener('focusout', () => queueMicrotask(() => {
-      if (!card.contains(doc.activeElement)) { focusPaused = false; pointerFocusTarget = undefined; }
+      if (keyboardFocusTarget !== doc.activeElement) keyboardFocusTarget = undefined;
+      if (!card.contains(doc.activeElement)) pointerFocusTarget = undefined;
       schedule();
     }));
     card.addEventListener('pointerenter', (event) => {
@@ -175,13 +177,18 @@ export function createAndroidNotices(doc: Document = document) {
         schedule();
       }
     });
-    card.addEventListener('keydown', (event) => {
-      if (kind === 'banner' && event.key === 'Tab') {
-        suppressClick = false;
-        pointerFocusTarget = undefined;
-        focusPaused = true;
+    // Tab may originate outside this card, including after a cancelled gesture.
+    // Keyboard ownership is independent of the next pointer-click suppression.
+    const onKeyboardNavigation = (event: KeyboardEvent) => {
+      if (event.key !== 'Tab') return;
+      pointerFocusTarget = undefined;
+      if (card.contains(doc.activeElement)) {
+        keyboardFocusTarget = doc.activeElement ?? undefined;
         pauseTimer();
       }
+    };
+    if (kind === 'banner') doc.addEventListener('keydown', onKeyboardNavigation, true);
+    card.addEventListener('keydown', (event) => {
       if (event.key === 'Escape') {
         event.stopPropagation();
         dismiss();
@@ -196,7 +203,6 @@ export function createAndroidNotices(doc: Document = document) {
       current = next;
       // A pointer already down belongs to the previous notice, not this id.
       suppressClick = !!pointer;
-      pointerFocusTarget = undefined;
       pointer = undefined;
       card.style.transform = '';
       card.dataset.noticeId = next.id;
@@ -253,7 +259,9 @@ export function createAndroidNotices(doc: Document = document) {
       remaining = lifetime;
       schedule();
     }
-    return { show, dismiss };
+    return { show, dismiss, dispose() {
+      if (kind === 'banner') doc.removeEventListener('keydown', onKeyboardNavigation, true);
+    } };
   }
   const bannerSlot = slot('banner');
   const toastSlot = slot('toast');
@@ -292,6 +300,8 @@ export function createAndroidNotices(doc: Document = document) {
     dispose() {
       disposed = true;
       clear();
+      bannerSlot.dispose();
+      toastSlot.dispose();
       doc.removeEventListener('visibilitychange', onVisibility);
       listeners.banner.clear();
       listeners.toast.clear();
