@@ -10,7 +10,7 @@ import { createSystemBack } from './system-back';
 export function createAndroidPlatform(
   reset: () => void,
   notices: Pick<ReturnType<typeof createAndroidNotices>, 'banner' | 'toast'>,
-  notifications: Pick<ReturnType<typeof createAndroidNotifications>, 'capability' | 'refreshSession' | 'diagnostics'>,
+  notifications: Pick<ReturnType<typeof createAndroidNotifications>, 'capability' | 'refreshSession'>,
 ): ClientPlatform {
   const mobile = createIOSPlatform(nativeBridge, reset);
   const authenticate = async (request: ReturnType<typeof mobile.client.login>) => {
@@ -25,7 +25,6 @@ export function createAndroidPlatform(
       signup: (input) => authenticate(mobile.client.signup(input)),
     },
     notifications: notifications.capability,
-    notificationDiagnostics: notifications.diagnostics,
     banner: notices.banner,
     toast: notices.toast,
     files: {

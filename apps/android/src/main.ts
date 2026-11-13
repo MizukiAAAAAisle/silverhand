@@ -13,8 +13,6 @@ import './notices.css';
 import '../../ios/src/mobile.css';
 import './short-viewport.css';
 import { bindShortViewport } from './short-viewport';
-import { NOTIFICATION_DIAGNOSTICS_FOREGROUND_EVENT } from '@silverhand/client';
-declare const __SILVERHAND_ANDROID_ACCEPTANCE__: boolean;
 
 // These methods belong only to the Android implementation of the existing
 // proxy. Do not advertise them on the reused iOS bridge/platform contract.
@@ -43,15 +41,10 @@ async function start() {
   await nativeBridge.addListener('sessionInvalidated', resetApplication);
   await nativeBridge.addListener('foreground', () => {
     void resumeApp();
-    window.dispatchEvent(new Event(NOTIFICATION_DIAGNOSTICS_FOREGROUND_EVENT));
   });
   notices = createAndroidNotices();
   // Android-only methods on the existing plugin, not an addition to the iOS bridge contract.
   notifications = createAndroidNotifications(nativeBridge as unknown as AndroidNotificationBridge);
-  if (typeof __SILVERHAND_ANDROID_ACCEPTANCE__ !== 'undefined' && __SILVERHAND_ANDROID_ACCEPTANCE__) {
-    const { installNotificationTest } = await import('./notification-test');
-    installNotificationTest(notifications);
-  }
   window.addEventListener('pagehide', disposePresentation, { once: true });
   configurePlatform(createAndroidPlatform(resetApplication, notices, notifications));
   await nativeBridge.getProfile();

@@ -76,13 +76,8 @@ class SilverhandClientPlugin : Plugin() {
                 check(!destroyed) { "Notification Activity owner closed" }
                 action()
             } catch (error: Exception) {
-                if (call.methodName == "notificationShow" && call.getBoolean("diagnosticTest", false) == true) {
-                    // Test failures expose only the bounded code, without adding logs/raw errors.
-                    call.reject("Notification operation failed", "NOTIFICATION_FAILED")
-                } else {
-                    Log.e("SilverhandNotifications", "${call.methodName} failed", error)
-                    call.reject(error.message ?: "Notification operation failed", "NOTIFICATION_FAILED")
-                }
+                Log.e("SilverhandNotifications", "${call.methodName} failed", error)
+                call.reject(error.message ?: "Notification operation failed", "NOTIFICATION_FAILED")
             }
         }
     }
@@ -98,31 +93,23 @@ class SilverhandClientPlugin : Plugin() {
     @PluginMethod fun notificationSession(call: PluginCall) = notificationAction(call) {
         call.resolve(JSObject().put("session", notifications.session()))
     }
-    @PluginMethod fun notificationDiagnostics(call: PluginCall) {
-        // A read must not touch the notifications getter: its owner initializes by cancelAll().
-        activity.runOnUiThread { call.resolve(NotificationDiagnosticsReader.read(context)) }
-    }
-    @PluginMethod fun notificationShow(call: PluginCall) {
-        // Refuse before obtaining the host, requesting permission or creating channels.
-        SystemNotifications.diagnosticFailure(call.data)?.let { notificationResult(call, it); return }
-        notificationAction(call) {
-            if (!notifications.current(call.getString("session"))) {
-                notificationResult(call, "session-expired")
-            } else if (call.getBoolean("force", false) != true && resumed && activity.hasWindowFocus()) {
-                notificationResult(call, "suppressed-focused")
-            } else if (notifications.permitted()) {
-                postNotification(call)
-            } else if (notificationPermissionCalls.isNotEmpty()) {
-                if (notificationPermissionCalls.size < 32) notificationPermissionCalls.add(call)
-                else notificationResult(call, "permission-request-busy")
-            } else if (!resumed || notifications.prompted()) {
-                notificationResult(call, "not-authorized-or-undecided")
-            } else {
-                notifications.markPrompted() // Anti-nag history only; never a permanent-denial inference.
-                notificationPermissionCalls.add(call)
-                try { requestPermissionForAlias("notifications", call, "notificationPermissionReturned") }
-                catch (error: Exception) { notificationPermissionCalls.remove(call); throw error }
-            }
+    @PluginMethod fun notificationShow(call: PluginCall) = notificationAction(call) {
+        if (!notifications.current(call.getString("session"))) {
+            notificationResult(call, "session-expired")
+        } else if (call.getBoolean("force", false) != true && resumed && activity.hasWindowFocus()) {
+            notificationResult(call, "suppressed-focused")
+        } else if (notifications.permitted()) {
+            postNotification(call)
+        } else if (notificationPermissionCalls.isNotEmpty()) {
+            if (notificationPermissionCalls.size < 32) notificationPermissionCalls.add(call)
+            else notificationResult(call, "permission-request-busy")
+        } else if (!resumed || notifications.prompted()) {
+            notificationResult(call, "not-authorized-or-undecided")
+        } else {
+            notifications.markPrompted() // Anti-nag history only; never a permanent-denial inference.
+            notificationPermissionCalls.add(call)
+            try { requestPermissionForAlias("notifications", call, "notificationPermissionReturned") }
+            catch (error: Exception) { notificationPermissionCalls.remove(call); throw error }
         }
     }
     @PermissionCallback private fun notificationPermissionReturned(call: PluginCall) {

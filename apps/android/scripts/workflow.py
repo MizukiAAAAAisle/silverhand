@@ -703,7 +703,8 @@ def web_asset_root(run, variant):
     root = run / 'app-build/web-assets' / variant
     metadata = json.loads((root / 'public/android-web-build.json').read_text())
     if metadata.get('kind') != 'silverhand-android-web-v1' or metadata.get('variant') != variant or \
-       ('apps/android/src/notification-test.ts' in metadata.get('modules', [])) != (variant == 'acceptance'):
+       any(p in metadata.get('modules', []) for p in ['apps/android/src/notification-test.ts',
+           'packages/app-ui/src/pages/settings/components/notification-diagnostics-pane.tsx']):
         raise RuntimeError('Mismatched APK web variant: ' + variant)
     return root
 

@@ -6,7 +6,7 @@ const notices = {
   banner: { show: vi.fn(), subscribe: vi.fn() },
   toast: { show: vi.fn(), dismiss: vi.fn(), subscribe: vi.fn() },
 };
-const notifications = { capability: {} as never, diagnostics: {} as never, refreshSession: vi.fn(async () => {}) };
+const notifications = { capability: {} as never, refreshSession: vi.fn(async () => {}) };
 
 describe('Android uses the actual upstream mobile client', () => {
   it('reads server discovery through native and validates its response', async () => {

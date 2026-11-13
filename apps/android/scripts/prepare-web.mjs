@@ -8,8 +8,8 @@ export function prepareWeb(source, assets) {
   for (const variant of ['normal', 'acceptance']) {
     const metadata = JSON.parse(readFileSync(resolve(source, variant, 'android-web-build.json'), 'utf8'));
     if (metadata.kind !== 'silverhand-android-web-v1' || metadata.variant !== variant ||
-      !metadata.modules.includes('packages/app-ui/src/pages/settings/components/notification-diagnostics-pane.tsx') ||
-      metadata.modules.includes('apps/android/src/notification-test.ts') !== (variant === 'acceptance'))
+      !Array.isArray(metadata.modules) ||
+      ['packages/app-ui/src/pages/settings/components/notification-diagnostics-pane.tsx', 'apps/android/src/notification-test.ts'].some((id) => metadata.modules.includes(id)))
       throw new Error(`Invalid Android ${variant} web inputs`);
     readFileSync(resolve(source, variant, 'index.html'));
   }

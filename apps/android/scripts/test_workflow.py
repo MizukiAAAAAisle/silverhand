@@ -529,7 +529,7 @@ class ApkResume(unittest.TestCase):
             import hashlib
             w.write(run / 'core-build/manifest.json', {'packagedLibraryHashes': {'libFixture.so': hashlib.sha256(lib).hexdigest()}})
             public = run / 'app-build/web-assets/acceptance/public/index.html'; public.parent.mkdir(parents=True); public.write_bytes(web)
-            metadata = {'kind': 'silverhand-android-web-v1', 'variant': 'acceptance', 'modules': ['apps/android/src/notification-test.ts']}
+            metadata = {'kind': 'silverhand-android-web-v1', 'variant': 'acceptance', 'modules': ['apps/android/src/main.ts']}
             marker = public.with_name('android-web-build.json'); marker.write_text(json.dumps(metadata))
             for corrupted in [False, True]:
                 with zipfile.ZipFile(apk, 'w') as bundle:

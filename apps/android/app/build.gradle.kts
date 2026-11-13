@@ -41,7 +41,6 @@ android {
             layout.buildDirectory.dir("core-assets").get().asFile,
         )
         for (variant in listOf("debug", "release")) {
-            getByName(variant).java.srcDir("src/normal/java")
             getByName(variant).assets.srcDir(layout.buildDirectory.dir("web-assets/normal").get().asFile)
         }
         getByName("acceptance").assets.srcDirs(
@@ -65,7 +64,8 @@ tasks.configureEach {
         val metadata = groovy.json.JsonSlurper().parse(root.resolve("android-web-build.json")) as Map<*, *>
         check(metadata["variant"] == variant && metadata["kind"] == "silverhand-android-web-v1") { "Mismatched $variant web assets" }
         val modules = metadata["modules"] as List<*>
-        check(modules.contains("apps/android/src/notification-test.ts") == (variant == "acceptance")) { "Mismatched notification test module" }
+        check(modules.none { it == "apps/android/src/notification-test.ts" ||
+            it == "packages/app-ui/src/pages/settings/components/notification-diagnostics-pane.tsx" }) { "Retired notification UI in web assets" }
     }
 }
 dependencies {

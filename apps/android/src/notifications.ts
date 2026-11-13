@@ -1,14 +1,12 @@
-import type { ClientPlatform, NotificationDiagnosticsCapability, NotificationHookSnapshot, NotificationLocalSnapshot, NotificationSendObservation, NotificationSendStatus, NotificationSystemSnapshot } from '@silverhand/client';
+import type { ClientPlatform } from '@silverhand/client';
 import type { PluginListenerHandle } from '@capacitor/core';
 
 type Capability = NonNullable<ClientPlatform['notifications']>;
 type Notice = Parameters<Capability['showSystemNotification']>[0];
 type Result = { status: string };
-declare const __SILVERHAND_ANDROID_ACCEPTANCE__: boolean;
 export interface AndroidNotificationBridge {
   notificationSession(): Promise<{ session: string }>;
-  notificationShow(input: Notice & { session: string; diagnosticTest?: true }): Promise<Result>;
-  notificationDiagnostics(): Promise<NotificationSystemSnapshot>;
+  notificationShow(input: Notice & { session: string }): Promise<Result>;
   notificationDismiss(input: { session: string; ids: string[] }): Promise<Result>;
   notificationTakeClicks(input: { session: string }): Promise<{
     clicks: Array<{ id: string; token: string }>;
@@ -23,18 +21,6 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
   let generation = 0;
   let session: Promise<string> = Promise.resolve('');
   let listener: PluginListenerHandle | undefined;
-  let local: NotificationLocalSnapshot = { session: 'unknown', lastSend: null };
-  let realSequence = 0;
-  let hook: NotificationHookSnapshot = { list: null, decision: 'not-evaluated' };
-  const hookListeners = new Set<() => void>();
-  const localListeners = new Set<() => void>();
-  const publish = (listeners: Set<() => void>) => {
-    // A diagnostic view must never interrupt a business operation.
-    for (const listener of listeners) { try { listener(); } catch {} }
-  };
-  const updateLocal = (next: NotificationLocalSnapshot) => { local = next; publish(localListeners); };
-  const resetHook = () => { hook = { list: null, decision: 'not-evaluated' }; publish(hookListeners); };
-
   const handlers = new Set<(id: string) => void>();
   const pending = new Map<string, string>();
   let draining = false;
@@ -71,106 +57,15 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
   }
   async function refreshSession() {
     if (disposed) return;
-    const owner = ++generation;
-    realSequence++;
+    generation++;
     pending.clear();
-    resetHook();
-    updateLocal({ session: 'unknown', lastSend: null });
-    session = bridge.notificationSession().then((value) => {
-      if (!disposed && owner === generation)
-        updateLocal({ ...local, session: value.session ? 'present' : 'absent' });
-      return value.session;
-    }).catch((error) => {
+    session = bridge.notificationSession().then((value) => value.session).catch((error) => {
       diagnose('session', error);
       return '';
     });
     await session;
     await drain();
   }
-
-  const statuses = new Set<NotificationSendStatus>([
-    'posted', 'suppressed-focused', 'channel-disabled', 'notifications-disabled',
-    'not-authorized-or-undecided', 'session-expired', 'permission-request-busy',
-    'diagnostic-unavailable', 'diagnostic-invalid',
-  ]);
-  // The real sender and the acceptance-only controller share this execution
-  // path. Observers receive only bounded status/time; execution never stores
-  // test state or chooses a test payload.
-  async function execute(
-    notice: Notice & { diagnosticTest?: true },
-    observe: (value: NotificationSendObservation) => void,
-    failed?: (error: unknown) => void,
-    completed?: (status: NotificationSendStatus) => void,
-  ): Promise<NotificationSendObservation> {
-    const owner = generation;
-    const at = Date.now();
-    const record = (status: NotificationSendStatus) => {
-      const observation = { status, at };
-      if (!disposed && owner === generation) observe(observation);
-      return observation;
-    };
-    if (disposed) return { status: 'invalidated', at };
-    record('waiting-session');
-    try {
-      const token = await session;
-      if (disposed || owner !== generation) return { status: 'invalidated', at };
-      if (!token) return record('missing-session');
-      record('sending');
-      const result = await bridge.notificationShow({ ...notice, session: token });
-      if (disposed || owner !== generation) return { status: 'invalidated', at };
-      const status = statuses.has(result?.status as NotificationSendStatus) ? result.status as NotificationSendStatus : 'UNKNOWN_STATUS';
-      completed?.(status);
-      return record(status);
-    } catch (error) {
-      failed?.(error);
-      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
-      return record(code === 'NOTIFICATION_FAILED' ? 'NOTIFICATION_FAILED' : 'BRIDGE_ERROR');
-    }
-  }
-  async function show(notice: Notice) {
-    const sequence = ++realSequence;
-    await execute(notice, (observation) => {
-      if (sequence === realSequence) updateLocal({ ...local, lastSend: observation });
-    }, (error) => diagnose('show', error), (status) => {
-      if (status !== 'posted' && status !== 'suppressed-focused')
-        console.info(`Android notifications show: ${status}`);
-    });
-  }
-  const unknownSystem: NotificationSystemSnapshot = {
-    runtimePermission: 'unknown', appEnabled: null, channel: 'unknown', channelBlocked: null,
-  };
-  const diagnostics: NotificationDiagnosticsCapability = {
-    hook: {
-      createObserver() {
-        const owner = generation;
-        const isCurrent = () => !disposed && owner === generation;
-        return { isCurrent, record(event) {
-          if (!isCurrent()) return;
-          if (event.kind === 'list') {
-            hook = { list: { mentionSelfCount: event.mentionSelfCount, at: Date.now() }, decision: event.mentionSelfCount ? 'not-evaluated' : 'no-mention' };
-          } else hook = { ...hook, decision: event.decision };
-          publish(hookListeners);
-        } };
-      },
-      getSnapshot: () => hook,
-      subscribe(handler) { hookListeners.add(handler); return () => { hookListeners.delete(handler); }; },
-    },
-    async readSystem() {
-      if (disposed) return { ...unknownSystem };
-      try {
-        const value = await bridge.notificationDiagnostics();
-        if (disposed || !value) return { ...unknownSystem };
-        return {
-          runtimePermission: ['granted', 'not-granted', 'not-required'].includes(value.runtimePermission) ? value.runtimePermission : 'unknown',
-          appEnabled: typeof value.appEnabled === 'boolean' ? value.appEnabled : null,
-          channel: ['present', 'absent'].includes(value.channel) ? value.channel : 'unknown',
-          channelBlocked: value.channel === 'present' && typeof value.channelBlocked === 'boolean' ? value.channelBlocked : null,
-        };
-      } catch { return { ...unknownSystem }; }
-    },
-    getLocalSnapshot: () => local,
-    subscribeLocal(handler) { localListeners.add(handler); return () => { localListeners.delete(handler); }; },
-  };
   async function invoke(method: string, action: (token: string) => Promise<Result>) {
     const owner = generation;
     try {
@@ -190,7 +85,7 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
   }).catch((error) => diagnose('subscribe', error));
 
   const capability: Capability = {
-    showSystemNotification: async (notice) => { await show(notice); },
+    showSystemNotification: (notice) => invoke('show', (token) => bridge.notificationShow({ ...notice, session: token })),
     dismissSystemNotifications: (ids) => invoke('dismiss', (token) => bridge.notificationDismiss({ session: token, ids })),
     onNotificationClicked(handler) {
       if (disposed) return () => {};
@@ -204,25 +99,12 @@ export function createAndroidNotifications(bridge: AndroidNotificationBridge) {
   };
   return {
     capability,
-    diagnostics,
-    // Static false in normal builds: no test sender/state installation survives.
-    ...(typeof __SILVERHAND_ANDROID_ACCEPTANCE__ !== 'undefined' && __SILVERHAND_ANDROID_ACCEPTANCE__ ? {
-      diagnosticHost: {
-        execute: (notice: Notice & { diagnosticTest?: true }, observe: (value: NotificationSendObservation) => void) => execute(notice, observe),
-        generation: () => generation,
-        closed: () => disposed,
-      },
-    } : {}),
     refreshSession,
     dispose() {
       disposed = true;
       generation++;
       pending.clear();
       handlers.clear();
-      resetHook();
-      hookListeners.clear();
-      updateLocal({ session: 'unknown', lastSend: null });
-      localListeners.clear();
       void listener?.remove().catch((error) => diagnose('unsubscribe', error));
       listener = undefined;
     },

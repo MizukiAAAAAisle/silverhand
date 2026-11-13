@@ -8,7 +8,6 @@ export default defineConfig({
   resolve: { alias: { '@': resolve(import.meta.dirname, '../../packages/app-ui/src') } },
   define: {
     __SILVERHAND_SIDEBAR_PERF_VARIANT__: JSON.stringify('baseline'),
-    __SILVERHAND_ANDROID_ACCEPTANCE__: JSON.stringify(variant === 'acceptance'),
   },
   plugins: [
     react(),
@@ -24,16 +23,12 @@ export default defineConfig({
         const repository = resolve(import.meta.dirname, '../..') + '/';
         const modules = [...new Set(Object.values(bundle).flatMap((item) => item.type === 'chunk'
           ? Object.entries(item.modules).filter(([, value]) => value.renderedLength > 0).map(([id]) => id.replace(repository, '')) : []))].sort();
-        const hasTest = modules.includes('apps/android/src/notification-test.ts');
-        if (hasTest !== (variant === 'acceptance')) throw new Error('Notification test module variant mismatch');
-        // Module exclusion alone is insufficient: the ordinary adapter must not
-        // retain an active test sender, marker branch or test state host either.
+        const retiredModules = ['apps/android/src/notification-test.ts',
+          'packages/app-ui/src/pages/settings/components/notification-diagnostics-pane.tsx'];
         const javascript = Object.values(bundle).filter((item) => item.type === 'chunk').map((item) => item.code).join('\n');
-        const testEntries = ['diagnosticHost', 'sendDiagnosticTest', 'diagnosticTest', 'acceptanceNotificationTest'];
-        if (testEntries.some((entry) => javascript.includes(entry) !== (variant === 'acceptance')))
-          throw new Error('Notification test implementation variant mismatch');
-        if (!modules.includes('packages/app-ui/src/pages/settings/components/notification-diagnostics-pane.tsx'))
-          throw new Error('Notification diagnostics view missing from web bundle');
+        if (retiredModules.some((id) => modules.includes(id)) ||
+            ['notificationDiagnostics', 'diagnosticHost', 'sendDiagnosticTest', 'diagnosticTest', 'acceptanceNotificationTest'].some((entry) => javascript.includes(entry)))
+          throw new Error('Retired notification diagnostics in web bundle');
         this.emitFile({ type: 'asset', fileName: 'android-web-build.json',
           source: JSON.stringify({ kind: 'silverhand-android-web-v1', variant, modules, files: Object.keys(bundle).sort() }) });
       },

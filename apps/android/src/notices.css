@@ -173,3 +173,49 @@
   -webkit-line-clamp: 2;
   overflow: hidden;
 }
+
+/* Banner-only: keep the shared host and toast geometry/appearance unchanged.
+   Host already accounts for safe insets + 8px. Add only the remaining gap. */
+.android-notice-banner {
+  box-sizing: border-box;
+  width: calc(100% - 2 * (max(12px, 4vw) - 8px));
+  max-width: 480px;
+  align-self: center;
+  margin-top: 4px;
+  padding: 12px 14px;
+  gap: 10px;
+  border-radius: 16px;
+  background: var(--bg-floating, #fff);
+  box-shadow: 0 2px 8px rgba(16, 24, 40, 0.18);
+  backdrop-filter: none;
+  position: relative;
+}
+.android-notice-banner .android-notice-content {
+  gap: 10px;
+  /* Reserve the full close hit target without shrinking every text line. */
+  padding-inline-end: 44px;
+}
+.android-notice-banner .android-notice-text {
+  gap: 4px;
+}
+.android-notice-banner .android-notice-text strong {
+  display: block;
+}
+.android-notice-banner .android-notice-body {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.android-notice-banner .android-notice-close {
+  position: absolute;
+  top: max(1px, calc(0.65625rem - 5px));
+  inset-inline-end: 1px;
+  width: 44px;
+  height: 44px;
+  min-width: 44px;
+  min-height: 44px;
+  border-radius: 15px;
+}
+@media (forced-colors: active) {
+  .android-notice-banner { background: Canvas; }
+}

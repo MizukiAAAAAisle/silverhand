@@ -57,27 +57,41 @@ export function createAndroidNotices(doc: Document = document) {
     let current: Notice | undefined;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let lifetime = 0;
+    let remaining = 0;
+    let runningSince: number | undefined;
+    let focusPaused = false;
+    let pointerFocusTarget: Element | undefined;
     let hover = false;
-    let pointer: { id: number; x: number; y: number; moved: boolean } | undefined;
+    let pointer: { id: number; x: number; y: number; moved: boolean; startedAt: number } | undefined;
     let suppressClick = false;
 
     function cancelTimer() {
       clearTimeout(timer);
       timer = undefined;
+      runningSince = undefined;
+    }
+    function pauseTimer() {
+      if (kind === 'banner' && runningSince !== undefined)
+        remaining = Math.max(0, remaining - (performance.now() - runningSince));
+      cancelTimer();
     }
     function dismiss(id?: string) {
       if (!current || (id !== undefined && id !== current.id)) return;
       cancelTimer();
       current = undefined;
+      focusPaused = false;
+      pointerFocusTarget = undefined;
       pointer = undefined;
       card.hidden = true;
       card.style.transform = '';
       live.textContent = '';
     }
     function schedule() {
-      cancelTimer();
-      if (!current || !lifetime || pointer || hover || card.contains(doc.activeElement)) return;
-      timer = setTimeout(() => dismiss(), lifetime);
+      pauseTimer();
+      const focused = kind === 'banner' ? focusPaused : card.contains(doc.activeElement);
+      if (!current || !lifetime || pointer || hover || focused) return;
+      runningSince = performance.now();
+      timer = setTimeout(() => dismiss(), kind === 'banner' ? remaining : lifetime);
     }
     close.onclick = () => dismiss();
     if (kind === 'banner')
@@ -109,8 +123,12 @@ export function createAndroidNotices(doc: Document = document) {
     card.addEventListener('pointerdown', (event) => {
       if (!event.isPrimary || event.button !== 0) return;
       suppressClick = false;
-      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false };
-      cancelTimer();
+      if (kind === 'banner') {
+        focusPaused = false;
+        pointerFocusTarget = (event.target as Element).closest('button') ?? event.target as Element;
+      }
+      pointer = { id: event.pointerId, x: event.clientX, y: event.clientY, moved: false, startedAt: performance.now() };
+      pauseTimer();
       // Capture on the original button so a tap retains its normal click target.
       (event.target as Element).setPointerCapture?.(event.pointerId);
     });
@@ -123,20 +141,32 @@ export function createAndroidNotices(doc: Document = document) {
     const end = (event: PointerEvent) => {
       if (!pointer || pointer.id !== event.pointerId) return;
       const dismissing = event.type === 'pointerup' && event.clientY - pointer.y < -24;
-      suppressClick = pointer.moved;
+      // A held touch is a pause gesture, not an open-on-release tap.
+      suppressClick = pointer.moved || (kind === 'banner' &&
+        (event.type !== 'pointerup' || performance.now() - pointer.startedAt >= 500));
       pointer = undefined;
+      if (event.type !== 'pointerup') pointerFocusTarget = undefined;
       card.style.transform = '';
       if (dismissing) dismiss();
       else schedule();
     };
     card.addEventListener('pointerup', end);
     card.addEventListener('pointercancel', end);
-    card.addEventListener('focusin', cancelTimer);
-    card.addEventListener('focusout', () => queueMicrotask(schedule));
+    if (kind === 'banner') card.addEventListener('lostpointercapture', end);
+    card.addEventListener('focusin', () => {
+      // Touch/mouse focus can remain after release. Only keyboard/programmatic
+      // focus owns a separate pause, otherwise touch would leave expiry stuck.
+      if (kind === 'banner') focusPaused = !pointer && !suppressClick && doc.activeElement !== pointerFocusTarget;
+      if (kind === 'toast' || focusPaused) pauseTimer();
+    });
+    card.addEventListener('focusout', () => queueMicrotask(() => {
+      if (!card.contains(doc.activeElement)) { focusPaused = false; pointerFocusTarget = undefined; }
+      schedule();
+    }));
     card.addEventListener('pointerenter', (event) => {
       if (event.pointerType === 'mouse') {
         hover = true;
-        cancelTimer();
+        pauseTimer();
       }
     });
     card.addEventListener('pointerleave', (event) => {
@@ -146,6 +176,12 @@ export function createAndroidNotices(doc: Document = document) {
       }
     });
     card.addEventListener('keydown', (event) => {
+      if (kind === 'banner' && event.key === 'Tab') {
+        suppressClick = false;
+        pointerFocusTarget = undefined;
+        focusPaused = true;
+        pauseTimer();
+      }
       if (event.key === 'Escape') {
         event.stopPropagation();
         dismiss();
@@ -155,10 +191,12 @@ export function createAndroidNotices(doc: Document = document) {
     function show(next: Notice) {
       if (disposed || doc.visibilityState === 'hidden') return;
       if (!host.isConnected) doc.body.append(host);
+      cancelTimer();
       const sameId = current?.id === next.id;
       current = next;
       // A pointer already down belongs to the previous notice, not this id.
       suppressClick = !!pointer;
+      pointerFocusTarget = undefined;
       pointer = undefined;
       card.style.transform = '';
       card.dataset.noticeId = next.id;
@@ -186,7 +224,7 @@ export function createAndroidNotices(doc: Document = document) {
         lifetime = next.sticky ? 0 : next.tone === 'error' ? 4500 : 3000;
       } else {
         action.hidden = true;
-        lifetime = 6000;
+        lifetime = 8000;
         if (next.icon) {
           if ('image' in next.icon) {
             const image = doc.createElement('img');
@@ -212,6 +250,7 @@ export function createAndroidNotices(doc: Document = document) {
         .filter(Boolean)
         .join(', ');
       if (!sameId || live.textContent !== announcement) live.textContent = announcement;
+      remaining = lifetime;
       schedule();
     }
     return { show, dismiss };

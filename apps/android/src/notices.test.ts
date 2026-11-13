@@ -75,7 +75,9 @@ describe('Android local banner/toast contracts on real DOM nodes', () => {
     vi.advanceTimersByTime(4500);
     expect(card('toast').hidden).toBe(true);
     expect(card('banner').hidden).toBe(false);
-    vi.advanceTimersByTime(1500);
+    vi.advanceTimersByTime(3499);
+    expect(card('banner').hidden).toBe(false);
+    vi.advanceTimersByTime(1);
     expect(card('banner').hidden).toBe(true);
     await notices.toast.show(toast('sticky', { sticky: true }));
     vi.advanceTimersByTime(60000);
@@ -191,4 +193,109 @@ it('lets a second action subscriber observe the id even if the first dismisses s
   button('toast', 'action').click();
   expect(second).toHaveBeenCalledWith({ kind: 'action', id: 'action' });
   expect(card('toast').hidden).toBe(true);
+});
+
+function pointer(node: Element, type: string, extra = {}) {
+  node.dispatchEvent(new PointerEvent(type, { bubbles: true, isPrimary: true,
+    pointerId: 7, pointerType: 'touch', button: 0, clientX: 40, clientY: 60, ...extra }));
+}
+
+it('holds past the original deadline, resumes only the remainder, and does not open on long release', async () => {
+  const open = vi.fn(); await notices.banner.subscribe(open);
+  await notices.banner.show({ id: 'held', title: 'Hold' });
+  vi.advanceTimersByTime(3000);
+  const target = button('banner', 'content');
+  pointer(target, 'pointerdown'); target.focus();
+  vi.advanceTimersByTime(10000);
+  expect(card('banner').hidden).toBe(false);
+  pointer(target, 'pointerup'); target.blur(); target.focus();
+  target.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+  expect(open).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(target); // Do not steal focus to restart expiry.
+  vi.advanceTimersByTime(4999); expect(card('banner').hidden).toBe(false);
+  vi.advanceTimersByTime(1); expect(card('banner').hidden).toBe(true);
+});
+
+it('keeps short touch open and keyboard/assistive activation intact', async () => {
+  const open = vi.fn(); await notices.banner.subscribe(open);
+  await notices.banner.show({ id: 'tap', title: 'Tap' });
+  const target = button('banner', 'content');
+  pointer(target, 'pointerdown'); target.focus(); vi.advanceTimersByTime(100);
+  pointer(target, 'pointerup');
+  target.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+  expect(open).toHaveBeenCalledExactlyOnceWith({ kind: 'open', id: 'tap' });
+  await notices.banner.show({ id: 'keyboard', title: 'Keyboard' });
+  target.click();
+  expect(open).toHaveBeenLastCalledWith({ kind: 'open', id: 'keyboard' });
+});
+
+it('combines keyboard focus and mouse hover pauses without restarting or double deducting time', async () => {
+  await notices.banner.show({ id: 'focus', title: 'Focus' });
+  vi.advanceTimersByTime(2000);
+  const close = button('banner', 'close'); close.focus();
+  pointer(card('banner'), 'pointerenter', { pointerType: 'mouse' });
+  vi.advanceTimersByTime(12000);
+  close.blur(); await Promise.resolve();
+  vi.advanceTimersByTime(10000); expect(card('banner').hidden).toBe(false);
+  pointer(card('banner'), 'pointerleave', { pointerType: 'mouse' });
+  vi.advanceTimersByTime(5999); expect(card('banner').hidden).toBe(false);
+  vi.advanceTimersByTime(1); expect(card('banner').hidden).toBe(true);
+});
+
+it.each(['pointercancel', 'lostpointercapture'])('resumes the remainder after %s', async (event) => {
+  await notices.banner.show({ id: event, title: 'Interrupted gesture' });
+  vi.advanceTimersByTime(6000);
+  pointer(button('banner', 'content'), 'pointerdown'); vi.advanceTimersByTime(10000);
+  pointer(button('banner', 'content'), event);
+  vi.advanceTimersByTime(1999); expect(card('banner').hidden).toBe(false);
+  vi.advanceTimersByTime(1); expect(card('banner').hidden).toBe(true);
+});
+
+it('gives a replacement a fresh 8s and releases every timer on close/dispose', async () => {
+  await notices.banner.show({ id: 'old', title: 'Old' });
+  vi.advanceTimersByTime(7000);
+  pointer(button('banner', 'content'), 'pointerdown'); vi.advanceTimersByTime(10000);
+  await notices.banner.show({ id: 'new', title: 'New' });
+  pointer(button('banner', 'content'), 'pointerup');
+  button('banner', 'content').focus();
+  button('banner', 'content').dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1 }));
+  vi.advanceTimersByTime(7999); expect(card('banner').hidden).toBe(false);
+  vi.advanceTimersByTime(1); expect(card('banner').hidden).toBe(true);
+  await notices.banner.show({ id: 'close', title: 'Close' });
+  button('banner', 'close').click(); expect(vi.getTimerCount()).toBe(0);
+  await notices.banner.show({ id: 'dispose', title: 'Dispose' });
+  notices.dispose(); expect(vi.getTimerCount()).toBe(0);
+});
+
+it('leaves toast pause-release as a full lifetime reset in the same host', async () => {
+  await notices.banner.show({ id: 'banner', title: 'Banner' });
+  await notices.toast.show(toast('toast'));
+  vi.advanceTimersByTime(2500);
+  pointer(card('toast'), 'pointerdown'); vi.advanceTimersByTime(10000);
+  pointer(card('toast'), 'pointerup');
+  vi.advanceTimersByTime(2999); expect(card('toast').hidden).toBe(false);
+  vi.advanceTimersByTime(1); expect(card('toast').hidden).toBe(true);
+});
+
+it('releases cancelled touch ownership and still pauses for subsequent keyboard navigation', async () => {
+  await notices.banner.show({ id: 'cancel', title: 'Cancel' });
+  vi.advanceTimersByTime(1000);
+  const content = button('banner', 'content');
+  pointer(content, 'pointerdown'); pointer(content, 'pointercancel');
+  content.focus();
+  content.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Tab' }));
+  button('banner', 'close').focus();
+  vi.advanceTimersByTime(20000); expect(card('banner').hidden).toBe(false);
+  button('banner', 'close').blur(); await Promise.resolve();
+  vi.advanceTimersByTime(6999); expect(card('banner').hidden).toBe(false);
+  vi.advanceTimersByTime(1); expect(card('banner').hidden).toBe(true);
+});
+
+it('does not add lost-capture resumption to the existing toast interaction', async () => {
+  await notices.toast.show(toast('capture'));
+  pointer(card('toast'), 'pointerdown'); pointer(card('toast'), 'lostpointercapture');
+  vi.advanceTimersByTime(10000); expect(card('toast').hidden).toBe(false);
+  pointer(card('toast'), 'pointerup');
+  vi.advanceTimersByTime(2999); expect(card('toast').hidden).toBe(false);
+  vi.advanceTimersByTime(1); expect(card('toast').hidden).toBe(true);
 });

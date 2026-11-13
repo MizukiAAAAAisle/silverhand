@@ -25,13 +25,12 @@ describe('Android stage 1 capability boundary', () => {
       banner: { show: vi.fn(), subscribe: vi.fn() },
       toast: { show: vi.fn(), dismiss: vi.fn(), subscribe: vi.fn() },
     };
-    const notifications = { capability: { marker: 'android-notifications' }, diagnostics: { marker: 'android-diagnostics' }, refreshSession: vi.fn() };
+    const notifications = { capability: { marker: 'android-notifications' }, refreshSession: vi.fn() };
     const platform = createAndroidPlatform(() => {}, notices, notifications as never);
     expect(platform.banner).toBe(notices.banner);
     expect(platform.toast).toBe(notices.toast);
     expect(platform.client).toHaveProperty('marker', 'upstream-auth');
     expect(platform.notifications).toBe(notifications.capability);
-    expect(platform.notificationDiagnostics).toBe(notifications.diagnostics);
     expect(platform.files.saveAttachment).toBe(upstream.files.saveAttachment);
     for (const capability of [
       'navigation',
@@ -48,7 +47,7 @@ describe('Android stage 1 capability boundary', () => {
   });
   it('refreshes notification ownership only after a successful login or signup', async () => {
     const refreshSession = vi.fn(async () => {});
-    const platform = createAndroidPlatform(() => {}, {} as never, { capability: {} as never, diagnostics: {} as never, refreshSession });
+    const platform = createAndroidPlatform(() => {}, {} as never, { capability: {} as never, refreshSession });
     upstream.client.login.mockResolvedValueOnce({ ok: false, status: 401 });
     await platform.client.login({ email: 'a@example.com', password: 'password' });
     expect(refreshSession).not.toHaveBeenCalled();
