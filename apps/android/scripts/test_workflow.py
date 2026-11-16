@@ -452,13 +452,18 @@ class ApkResume(unittest.TestCase):
             run = Path(folder)
             for name in ['acceptance/certs/ca.pem', 'acceptance/certs/server.pem', 'app-build/acceptance-assets/acceptance-ca.pem']:
                 path = run / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_text('public-fixture')
-            with patch.dict(w.ENV, OPENSSL_BIN='/explicit/openssl'), patch.object(w, 'output', return_value='ok') as output:
-                w.prepared_ca_check(run)
-                self.assertEqual(output.call_count, 3)
-                command = output.call_args.args[0]
-                self.assertEqual(command[0], '/explicit/openssl')
-                self.assertEqual(command[command.index('-verify_hostname') + 1], 'localhost')
-                self.assertIn('-CAfile', command)
+            dates = 'notBefore=Jan 01 00:00:00 2020 GMT\nnotAfter=Jan 01 00:00:00 2040 GMT'
+            def certificate_output(command):
+                return dates if '-startdate' in command else 'public-key-or-verified'
+            with patch.dict(w.ENV, OPENSSL_BIN='/explicit/openssl'), patch.object(w, 'output', side_effect=certificate_output) as output:
+                result = w.prepared_ca_check(run)
+                self.assertEqual(result['validity']['minimum_remaining_seconds'], 604800)
+                commands = [call.args[0] for call in output.call_args_list]
+                verify = next(command for command in commands if command[1] == 'verify')
+                self.assertEqual(verify[0], '/explicit/openssl')
+                self.assertEqual(verify[verify.index('-verify_hostname') + 1], 'localhost')
+                self.assertIn('-purpose', verify); self.assertIn('-CAfile', verify)
+                self.assertTrue(any(command[1] == 'pkey' for command in commands))
                 (run / 'app-build/acceptance-assets/acceptance-ca.pem').write_text('different CA')
                 with self.assertRaisesRegex(RuntimeError, 'CA mismatch'):
                     w.prepared_ca_check(run)

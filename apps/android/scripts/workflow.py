@@ -16,6 +16,7 @@ import time
 import urllib.request
 import zipfile
 from build_environment import build_environment
+from acceptance_certificates import validate_certificates
 from b3_origin import device_preconditions as new_origin_device_preconditions, validate_evidence as validate_new_origin_evidence, expected_packages as origin_expected_packages, EVIDENCE_UNITS as ORIGIN_EVIDENCE_UNITS, validate_t2_final_events
 
 APP = Path(__file__).resolve().parents[1]
@@ -678,13 +679,11 @@ def stop_emulator(process, log):
 
 
 def prepared_ca_check(run):
-    for name in ['ca.pem', 'server.pem']:
-        output([ENV['OPENSSL_BIN'], 'x509', '-in', run / 'acceptance/certs' / name, '-checkend', '3600', '-noout'])
+    validity = validate_certificates(run / 'acceptance/certs', ENV['OPENSSL_BIN'], output=output)
     ca = run / 'acceptance/certs/ca.pem'
-    output([ENV['OPENSSL_BIN'], 'verify', '-CAfile', ca, '-verify_hostname', 'localhost', run / 'acceptance/certs/server.pem'])
     if (run / 'app-build/acceptance-assets/acceptance-ca.pem').read_bytes() != ca.read_bytes():
         raise RuntimeError('Prepared APK/proxy CA mismatch')
-    return {'ca_sha256': digest(ca), 'server_sha256': digest(run / 'acceptance/certs/server.pem')}
+    return {'ca_sha256': digest(ca), 'server_sha256': digest(run / 'acceptance/certs/server.pem'), 'validity': validity}
 
 
 def ca_check(run, apk=None):

@@ -2,6 +2,7 @@
 """Start only the disposable local backend and TLS proxy; no production data/env."""
 import argparse,subprocess,os,json,shutil
 from pathlib import Path
+from acceptance_certificates import ISSUANCE_DAYS, validate_certificates
 p=argparse.ArgumentParser();p.add_argument('--renew-ca',action='store_true');p.add_argument('--existing-ca',action='store_true');p.add_argument('--search-control',type=Path);p.add_argument('--search-events',type=Path);p.add_argument('--task-control',type=Path);p.add_argument('--task-events',type=Path);p.add_argument('--task-tls-events',type=Path);p.add_argument('--task-write-observer',type=Path);p.add_argument('--task-write-events',type=Path);a=p.parse_args()
 app=Path(__file__).resolve().parents[1];repo=app.parents[1];openssl_bin=os.environ['OPENSSL_BIN'];assert Path(openssl_bin).is_absolute(),'OPENSSL_BIN must be an explicit absolute path';run=Path(os.environ['SILVERHAND_ANDROID_RUN_ROOT']).resolve() if os.environ.get('SILVERHAND_ANDROID_RUN_ROOT') else None;root=run/'acceptance' if run else app/'.generated/acceptance';cert=root/'certs';cert.mkdir(parents=True,exist_ok=True)
 assert (a.search_control is None) == (a.search_events is None), 'S2 control/events must be paired'
@@ -54,14 +55,12 @@ if a.existing_ca:
 if not a.existing_ca and (a.renew_ca or not (cert/'ca.pem').exists()):
  def openssl(*args):subprocess.run([openssl_bin,*args],cwd=cert,check=True,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
  (cert/'ca.cnf').write_text('[req]\ndistinguished_name=dn\nx509_extensions=ca\nprompt=no\n[dn]\nCN=Silverhand Stage1 Acceptance CA\n[ca]\nbasicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n')
- openssl('req','-x509','-newkey','rsa:2048','-nodes','-keyout','ca.key','-out','ca.pem','-days','2','-config','ca.cnf')
+ openssl('req','-x509','-newkey','rsa:2048','-nodes','-keyout','ca.key','-out','ca.pem','-days',str(ISSUANCE_DAYS),'-config','ca.cnf')
  openssl('req','-newkey','rsa:2048','-nodes','-keyout','server.key','-out','server.csr','-subj','/CN=localhost')
  (cert/'server.ext').write_text('subjectAltName=DNS:localhost\nbasicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\nextendedKeyUsage=serverAuth\nsubjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n')
- openssl('x509','-req','-in','server.csr','-CA','ca.pem','-CAkey','ca.key','-CAcreateserial','-out','server.pem','-days','2','-extfile','server.ext')
+ openssl('x509','-req','-in','server.csr','-CA','ca.pem','-CAkey','ca.key','-CAcreateserial','-out','server.pem','-days',str(ISSUANCE_DAYS),'-extfile','server.ext')
  for f in cert.glob('*.key'): f.chmod(0o600)
-for name in ['ca.pem','server.pem']:
- subprocess.run([openssl_bin,'x509','-in',str(cert/name),'-checkend','3600','-noout'],check=True,stdout=subprocess.DEVNULL)
-subprocess.run([openssl_bin,'verify','-CAfile',str(cert/'ca.pem'),'-verify_hostname','localhost',str(cert/'server.pem')],check=True,stdout=subprocess.DEVNULL)
+print('Acceptance certificate validity: ' + json.dumps(validate_certificates(cert, openssl_bin), sort_keys=True), flush=True)
 backend=Path(os.environ.get('SILVERHAND_ACCEPTANCE_BACKEND',str(repo/'rust/target/debug/silverhand-backend')))
 if not backend.is_file(): raise SystemExit(f'Missing freshly built acceptance backend: {backend}')
 assets=run/'app-build/acceptance-assets' if run else app/'app/build/acceptance-assets';assets.mkdir(parents=True,exist_ok=True);shutil.copy(cert/'ca.pem',assets/'acceptance-ca.pem')

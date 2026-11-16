@@ -244,7 +244,7 @@ class B3Entry(unittest.TestCase):
         for name in ['ca.pem','server.pem','server.key']:(cert/name).write_text('controlled certificate placeholder;never parsed by crypto')
         backend=self.run/'controlled-backend';backend.write_text('never executed')
         argv=[str(prepare),'--existing-ca','--task-write-observer',str(observer),'--task-write-events',str(out/'t2-events.jsonl'),'--task-tls-events',str(out/'t2-tls-events.jsonl')]
-        with patch.dict(os.environ, SILVERHAND_ANDROID_RUN_ROOT=str(self.run), OPENSSL_BIN='/controlled/openssl', SILVERHAND_ACCEPTANCE_BACKEND=str(backend), SILVERHAND_T1_CONTROL='/inherited/rejected', SILVERHAND_T1_TLS_EVENTS='/inherited/rejected', SILVERHAND_T2_TLS_EVENTS='/inherited/replaced'),patch.object(sys,'argv',argv),patch.object(w.subprocess,'run') as command,patch.object(w.subprocess,'Popen') as popen,patch.object(w.socket.socket,'connect_ex',return_value=111):
+        with patch.dict(os.environ, SILVERHAND_ANDROID_RUN_ROOT=str(self.run), OPENSSL_BIN='/controlled/openssl', SILVERHAND_ACCEPTANCE_BACKEND=str(backend), SILVERHAND_T1_CONTROL='/inherited/rejected', SILVERHAND_T1_TLS_EVENTS='/inherited/rejected', SILVERHAND_T2_TLS_EVENTS='/inherited/replaced'),patch.object(sys,'argv',argv),patch('acceptance_certificates.validate_certificates', return_value={'fixture_only': True}) as validity,patch.object(w.subprocess,'run') as command,patch.object(w.subprocess,'Popen') as popen,patch.object(w.socket.socket,'connect_ex',return_value=111):
             popen.return_value.pid=999991
             runpy.run_path(str(prepare),run_name='__main__')
         for child_call in popen.call_args_list: child_call.kwargs['stdout'].close()
@@ -252,7 +252,8 @@ class B3Entry(unittest.TestCase):
         env=popen.call_args_list[1].kwargs['env']
         self.assertEqual(env['SILVERHAND_T2_OBSERVER'],str(observer));self.assertEqual(env['SILVERHAND_T2_TLS_EVENTS'],str(out/'t2-tls-events.jsonl'))
         self.assertNotIn('SILVERHAND_T1_CONTROL',env);self.assertNotIn('SILVERHAND_T1_TLS_EVENTS',env)
-        self.assertTrue(all(str(call.args[0][0])=='/controlled/openssl' for call in command.call_args_list))
+        validity.assert_called_once_with(cert, '/controlled/openssl')
+        command.assert_not_called() # Crypto has real certificate/TLS controls; this test owns wiring.
 
     def test_t2_prepare_rejects_wrong_tls_and_private_owner_before_spawn(self):
         import runpy
