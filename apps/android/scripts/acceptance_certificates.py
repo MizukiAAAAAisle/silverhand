@@ -46,3 +46,34 @@ def validate_certificates(directory, openssl, *, now=None, output=None):
     if certificate_key.strip() != private_key.strip():
         raise ValueError('Acceptance server certificate/private key mismatch')
     return report
+
+
+def validate_packaged_certificates(directory, asset, openssl):
+    asset = Path(asset)
+    if asset.is_symlink() or not asset.is_file():
+        raise ValueError('Packaged acceptance CA must be a regular file')
+    # Validate the actual selected asset, even if it differs from prepared input.
+    dates = subprocess.check_output([openssl, 'x509', '-in', str(asset), '-noout', '-startdate', '-enddate'],
+                                    text=True, stderr=subprocess.STDOUT, timeout=30).strip()
+    try:
+        window = certificate_window(dates, int(time.time()))
+    except (ValueError, KeyError) as error:
+        raise ValueError(f'{asset}: {error}') from error
+    if asset.read_bytes() != (Path(directory) / 'ca.pem').read_bytes():
+        raise ValueError('Packaged acceptance CA differs from prepared CA')
+    report = validate_certificates(directory, openssl)
+    return {**report, 'packaged_asset': str(asset), 'packaged_asset_validity': window}
+
+
+if __name__ == '__main__':
+    import argparse
+    import json
+    import os
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--directory', type=Path, required=True)
+    parser.add_argument('--asset', type=Path, required=True)
+    args = parser.parse_args()
+    openssl = os.environ['OPENSSL_BIN']
+    if not Path(openssl).is_absolute():
+        raise ValueError('OPENSSL_BIN must be an explicit absolute path')
+    print(json.dumps(validate_packaged_certificates(args.directory, args.asset, openssl), sort_keys=True), flush=True)

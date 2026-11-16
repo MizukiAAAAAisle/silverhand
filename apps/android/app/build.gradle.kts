@@ -50,6 +50,8 @@ android {
     }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
 }
+apply(from = file("../acceptance-certificates.gradle"))
+
 // Validate only at asset merge, after web preparation. Core-only builds configure
 // this project before web outputs exist and must not consume or require them.
 tasks.configureEach {

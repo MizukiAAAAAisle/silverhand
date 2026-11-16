@@ -1,0 +1,21 @@
+// Every acceptance packaging graph checks time again, including up-to-date assets.
+// Registration/configuration alone never opens acceptance material.
+def certificateGate = tasks.register('validateAcceptanceCertificates', Exec) {
+    outputs.upToDateWhen { false }
+    doFirst {
+        def android = project.extensions.getByName('android')
+        def roots = android.sourceSets.getByName('main').assets.srcDirs +
+                    android.sourceSets.getByName('acceptance').assets.srcDirs
+        def assets = roots.collect { new File(it, 'acceptance-ca.pem') }.findAll { it.isFile() }.unique()
+        if (assets.size() != 1) {
+            throw new GradleException('Expected exactly one packaged acceptance-ca.pem; found ' + assets)
+        }
+        def run = System.getenv('SILVERHAND_ANDROID_RUN_ROOT')
+        def certs = run ? new File(run, 'acceptance/certs') : project.file('../.generated/acceptance/certs')
+        commandLine 'python3', project.file('../scripts/acceptance_certificates.py'),
+                    '--directory', certs, '--asset', assets[0]
+    }
+}
+tasks.configureEach {
+    if (name == 'mergeAcceptanceAssets') dependsOn(certificateGate)
+}
