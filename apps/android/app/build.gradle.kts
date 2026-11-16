@@ -9,8 +9,8 @@ android {
         applicationId = "com.silverhand.android.stage1"
         minSdk = 28
         targetSdk = 36
-        versionCode = 7
-        versionName = "0.4.3"
+        versionCode = 8
+        versionName = "0.4.4"
         ndk { abiFilters += "arm64-v8a" }
         testInstrumentationRunner = "com.silverhand.android.B1Instrumentation"
     }
