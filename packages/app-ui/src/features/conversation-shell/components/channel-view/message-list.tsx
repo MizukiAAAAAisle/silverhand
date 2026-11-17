@@ -352,6 +352,7 @@ export function MessageList({
   const ordinaryLocateBudget = useRef({ owner: jumpOwner, frames: 0 });
   const [ordinaryJumpError, setOrdinaryJumpError] = useState<{
     owner: string;
+    channelId: string;
     error: string;
   } | null>(null);
   const [systemLocate, setSystemLocate] = useState<{
@@ -408,6 +409,7 @@ export function MessageList({
     setIsAtBottom(true);
     setShowScrollBottom(false);
     setFlashedMessageId(null);
+    setOrdinaryJumpError(null);
   }, [channelId]);
 
   // A fresh jump overrides any prior back-to-bottom request and the previous
@@ -420,7 +422,10 @@ export function MessageList({
     }
     dispatchBottomAnchor({ type: "cancel" });
     setFlashedMessageId(null);
-  }, [jumpToMessageId, channelId, jumpAttemptId]);
+    // Releasing a failed target is not a new attempt: retain its diagnostic
+    // until another owner starts or this conversation is replaced.
+    setOrdinaryJumpError((previous) => (previous?.owner === jumpOwner ? previous : null));
+  }, [jumpToMessageId, channelId, jumpAttemptId, jumpOwner]);
 
   // Prepends and head-trims keep the scroller mounted: it holds the reader's
   // first visible row in place itself. Only a disjoint window remounts, and
@@ -606,13 +611,14 @@ export function MessageList({
       const fail = (error: unknown): void => {
         if (cancelled || activeJumpOwner.current !== owner) return;
         setFlashedMessageId(null);
-        setOrdinaryJumpError({ owner, error: String(error) });
+        setOrdinaryJumpError({ owner, channelId, error: String(error) });
         // Release a failed jump without publishing a successful flash.
         try {
           onJumped?.();
         } catch (secondary) {
           setOrdinaryJumpError({
             owner,
+            channelId,
             error: `${String(error)}; release failed: ${String(secondary)}`,
           });
         }
@@ -642,7 +648,7 @@ export function MessageList({
           cancelAnimationFrame(frame);
         } catch (error) {
           if (activeJumpOwner.current === owner)
-            setOrdinaryJumpError({ owner, error: String(error) });
+            setOrdinaryJumpError({ owner, channelId, error: String(error) });
         }
       };
     }
@@ -920,7 +926,10 @@ export function MessageList({
       data-message-list
       className="relative min-h-0 min-w-0 flex-1 flex flex-col"
       data-message-jump-error={
-        ordinaryJumpError?.owner === jumpOwner ? ordinaryJumpError.error : undefined
+        ordinaryJumpError?.channelId === channelId ? ordinaryJumpError.error : undefined
+      }
+      data-message-jump-error-owner={
+        ordinaryJumpError?.channelId === channelId ? ordinaryJumpError.owner : undefined
       }
       data-system-jump-state={systemLocate?.status}
       data-system-jump-message-id={systemLocate?.messageId}

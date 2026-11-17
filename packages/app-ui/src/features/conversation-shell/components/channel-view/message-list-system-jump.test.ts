@@ -471,6 +471,53 @@ describe("system event jump lifecycle with controlled MessageScroller/geometry",
     await act(async () => vi.advanceTimersByTime(3000));
     expect(done).not.toHaveBeenCalled();
   });
+  it("keeps failure identity after the real parent releases the jump, then clears it for a new attempt or conversation", async () => {
+    const messages = [{ ...event("e"), from_kind: "user" as const, metadata: null }];
+    const released = vi.fn();
+    let nextAttempt!: () => void;
+    let changeConversation!: () => void;
+    function Parent() {
+      const [target, setTarget] = React.useState<string | null>("e");
+      const [attempt, setAttempt] = React.useState(1);
+      const [channel, setChannel] = React.useState("c");
+      nextAttempt = () => {
+        setAttempt((n) => n + 1);
+        setTarget("e");
+      };
+      changeConversation = () => setChannel("other");
+      const release = React.useCallback(() => {
+        released();
+        setTarget(null);
+      }, []);
+      return React.createElement(MessageList, {
+        ...defaults,
+        messages,
+        channelId: channel,
+        jumpToMessageId: target,
+        jumpAttemptId: attempt,
+        onJumped: release,
+      });
+    }
+    h.scrollToKey.mockReturnValue(false);
+    await act(async () => root.render(React.createElement(Parent)));
+    const stale = [...callbacks.values()][0]!;
+    await frames(60);
+    expect(released).toHaveBeenCalledOnce();
+    expect(state().messageJumpError).toMatch(/not published/);
+    expect(state().messageJumpErrorOwner).toBe(JSON.stringify(["c", "e", 1]));
+    expect(container.querySelector(".msg-jump-flash")).toBeNull();
+    await act(async () => stale(100));
+    expect(released).toHaveBeenCalledOnce();
+    await act(async () => nextAttempt());
+    expect(state().messageJumpError).toBeUndefined();
+    expect(state().messageJumpErrorOwner).toBeUndefined();
+    await frames(60);
+    expect(released).toHaveBeenCalledTimes(2);
+    expect(state().messageJumpErrorOwner).toBe(JSON.stringify(["c", "e", 2]));
+    await act(async () => changeConversation());
+    expect(state().messageJumpError).toBeUndefined();
+    expect(state().messageJumpErrorOwner).toBeUndefined();
+  });
   it("keeps the ordinary message flash path and suppresses hidden-surface completion", async () => {
     const ordinary = { ...event("e"), from_kind: "user" as const, metadata: null },
       done = vi.fn();
