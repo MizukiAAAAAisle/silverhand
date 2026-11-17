@@ -4340,6 +4340,61 @@ export const migrations: Migration[] = [
       );
     `,
   },
+  {
+    version: 102,
+    name: 'conversation_inbox_settlement_states',
+    // An inbox row is pending, leased, delivered or failed; the stamps encode exactly one.
+    // Rows written before the guard are normalized first: a settled row drops its lease.
+    up: `
+      UPDATE conversation_inboxes SET failed_at = NULL, failed_reason = NULL
+        WHERE delivered_at IS NOT NULL AND failed_at IS NOT NULL;
+      UPDATE conversation_inboxes SET in_flight_owner = NULL, in_flight_at = NULL
+        WHERE (in_flight_owner IS NOT NULL OR in_flight_at IS NOT NULL)
+          AND (in_flight_owner IS NULL OR in_flight_at IS NULL
+               OR delivered_at IS NOT NULL OR failed_at IS NOT NULL);
+      CREATE TRIGGER conversation_inboxes_settlement_state_insert BEFORE INSERT ON conversation_inboxes
+        WHEN (NEW.in_flight_owner IS NULL) != (NEW.in_flight_at IS NULL)
+          OR (NEW.delivered_at IS NOT NULL AND NEW.failed_at IS NOT NULL)
+          OR (NEW.in_flight_owner IS NOT NULL
+              AND (NEW.delivered_at IS NOT NULL OR NEW.failed_at IS NOT NULL))
+        BEGIN SELECT RAISE(ABORT, 'invalid conversation inbox settlement state'); END;
+      CREATE TRIGGER conversation_inboxes_settlement_state_update
+        BEFORE UPDATE OF delivered_at, failed_at, in_flight_owner, in_flight_at ON conversation_inboxes
+        WHEN (NEW.in_flight_owner IS NULL) != (NEW.in_flight_at IS NULL)
+          OR (NEW.delivered_at IS NOT NULL AND NEW.failed_at IS NOT NULL)
+          OR (NEW.in_flight_owner IS NOT NULL
+              AND (NEW.delivered_at IS NOT NULL OR NEW.failed_at IS NOT NULL))
+        BEGIN SELECT RAISE(ABORT, 'invalid conversation inbox settlement state'); END;
+    `,
+  },
+  {
+    version: 103,
+    name: 'retire_conversation_status_and_close',
+    // Closing is retired; a historically closed conversation stays out of use as archived.
+    up: `
+      UPDATE conversations SET archived_at = COALESCE(archived_at, closed_at)
+        WHERE closed_at IS NOT NULL;
+      DROP INDEX idx_conversations_status;
+      ALTER TABLE conversations DROP COLUMN status;
+      ALTER TABLE conversations DROP COLUMN closed_at;
+      ALTER TABLE conversations DROP COLUMN close_summary;
+    `,
+  },
+  {
+    version: 104,
+    name: 'agent_runtime_credentials',
+    // SHA-256 of each bearer issued to a runtime generation, so a restarted server
+    // still authenticates the processes it started. Rows live only while that
+    // generation is claimed.
+    up: `
+      CREATE TABLE agent_runtime_credentials (
+        token_hash TEXT PRIMARY KEY,
+        slot_id    INTEGER NOT NULL REFERENCES agent_runtime_slots(id) ON DELETE CASCADE,
+        generation INTEGER NOT NULL
+      );
+      CREATE INDEX idx_agent_runtime_credentials_slot ON agent_runtime_credentials(slot_id);
+    `,
+  },
 ];
 
 /**

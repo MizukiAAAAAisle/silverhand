@@ -33,7 +33,7 @@
  */
 import type {
   HostAdmissionFailure,
-  HostStatusResponse,
+  HostStatusReadResponse,
   HostUnreachableReason,
 } from "@silverhand/shared";
 import { computerCopy } from "../../../features/computers/model/computer-copy";
@@ -168,7 +168,7 @@ export function describeAdmissionFailure(
  * this function only describes the **availability** of the host as a
  * whole.
  */
-export function describeHostStatus(status: HostStatusResponse): HostStatusView {
+export function describeHostStatus(status: HostStatusReadResponse): HostStatusView {
   switch (status.availability) {
     case "available":
       return {
@@ -191,7 +191,8 @@ export function describeHostStatus(status: HostStatusResponse): HostStatusView {
     case "unreachable":
       return {
         label: computerCopy().availabilityUnreachable,
-        detail: describeUnreachableReason(status.reason),
+        // The public tier carries no reason.
+        detail: status.view === "public" ? null : describeUnreachableReason(status.reason),
         tone: "warning",
       };
     case "revoked":
@@ -207,6 +208,14 @@ export function describeHostStatus(status: HostStatusResponse): HostStatusView {
       return _exhaustive;
     }
   }
+}
+
+/** Byte count as gigabytes for a used / total reading: one decimal below
+ *  100 GB, whole numbers above. `base` follows the OS convention of the
+ *  quantity (binary for memory, decimal for disk). */
+export function formatGigabytes(bytes: number, base: 1000 | 1024): string {
+  const gb = bytes / base ** 3;
+  return gb < 100 ? (Math.round(gb * 10) / 10).toString() : Math.round(gb).toString();
 }
 
 /**

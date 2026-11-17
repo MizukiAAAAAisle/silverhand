@@ -30,25 +30,35 @@ async fn open_db() -> (TempDir, PathBuf) {
          VALUES ('user-1', 'user-1', 'User One', 1, 1)",
         "INSERT INTO hosts (id, name, kind, created_at, user_id)
          VALUES ('host-1', 'host-1', 'remote', 1, 'user-1')",
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at,
-            display_name, created_by_user_id, session_scope)
-         VALUES ('agent-1', 'agent-1', 'codex', 'host-1', 1, 1, 'Agent', 'user-1', 'conversation')",
+        seed_agent!(
+            id = "agent-1",
+            runtime = "codex",
+            host_id = "host-1",
+            display_name = "Agent",
+            created_by_user_id = "user-1",
+        ),
         "INSERT INTO workspaces (id, name, name_key, created_at, updated_at)
          VALUES ('ws-1', 'ws', 'ws', 1, 1)",
         "INSERT INTO workspace_members (workspace_id, agent_id, joined_at)
          VALUES ('ws-1', 'agent-1', 1)",
         "INSERT INTO workspace_agent_capabilities (workspace_id, agent_id, capability)
          VALUES ('ws-1', 'agent-1', 'create_tasks')",
-        "INSERT INTO conversations
-            (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
-         VALUES ('conv-1', 'ws-1', 'workspace', 'open', 'general', 'general', 'active', 1, 1)",
+        seed_channel!(
+            id = "conv-1",
+            workspace_id = "ws-1",
+            title = "general",
+            title_key = "general",
+        ),
         "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
          VALUES ('conv-1', 'agent-1', 1)",
         // The conversation needs a stream-head row for the seq reservation to advance.
         "INSERT INTO conversation_stream_heads (conversation_id, thread_root_id, latest_seq)
          VALUES ('conv-1', NULL, 0)",
     ] {
-        sqlx::query(statement).execute(&mut connection).await.unwrap();
+        sqlx::query(statement)
+            .execute(&mut connection)
+            .await
+            .unwrap();
     }
     connection.close().await.unwrap();
     (directory, path)
@@ -212,11 +222,12 @@ async fn a_missing_source_is_refused_inside_the_batch_writer_with_zero_task_and_
 async fn a_source_from_another_conversation_refuses_the_whole_batch_before_any_write() {
     let (_dir, path) = open_db().await;
     let mut c = conn(&path).await;
-    sqlx::query(
-        "INSERT INTO conversations
-            (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
-         VALUES ('conv-other', 'ws-1', 'workspace', 'open', 'other', 'other', 'active', 1, 1)",
-    )
+    sqlx::query(seed_channel!(
+        id = "conv-other",
+        workspace_id = "ws-1",
+        title = "other",
+        title_key = "other",
+    ))
     .execute(&mut c)
     .await
     .unwrap();
@@ -347,16 +358,11 @@ async fn a_duplicate_source_inside_one_batch_rolls_back_every_task_and_event() {
 }
 
 #[tokio::test]
-async fn closed_and_archived_destinations_refuse_without_task_or_message() {
-    for column in ["closed_at", "archived_at"] {
+async fn archived_destinations_refuse_without_task_or_message() {
+    {
         let (_dir, path) = open_db().await;
         let mut c = conn(&path).await;
-        let update = if column == "closed_at" {
-            "UPDATE conversations SET closed_at = 9 WHERE id = ?"
-        } else {
-            "UPDATE conversations SET archived_at = 9 WHERE id = ?"
-        };
-        sqlx::query(update)
+        sqlx::query("UPDATE conversations SET archived_at = 9 WHERE id = ?")
             .bind(CONV)
             .execute(&mut c)
             .await
@@ -365,11 +371,7 @@ async fn closed_and_archived_destinations_refuse_without_task_or_message() {
 
         let writer = SqliteTaskCreateWrite::open(&path).await.unwrap();
         let outcome = writer.create_tasks(&batch(vec![plan(None)])).await.unwrap();
-        assert!(matches!(
-            (column, outcome),
-            ("closed_at", TaskCreateOutcome::ConversationClosed)
-                | ("archived_at", TaskCreateOutcome::ConversationArchived)
-        ));
+        assert!(matches!(outcome, TaskCreateOutcome::ConversationArchived));
 
         let mut c = conn(&path).await;
         let tasks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM tasks")
@@ -380,7 +382,7 @@ async fn closed_and_archived_destinations_refuse_without_task_or_message() {
             .fetch_one(&mut c)
             .await
             .unwrap();
-        assert_eq!((tasks, events), (0, 0), "{column}");
+        assert_eq!((tasks, events), (0, 0));
     }
 }
 
@@ -395,24 +397,37 @@ async fn a_readonly_direct_pair_destination_is_conversation_readonly() {
          VALUES ('user-1', 'user-1', 'User One', 1, 1)",
         "INSERT INTO hosts (id, name, kind, created_at, user_id)
          VALUES ('host-1', 'host-1', 'remote', 1, 'user-1')",
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at,
-            display_name, created_by_user_id, session_scope)
-         VALUES ('agent-1', 'agent-1', 'codex', 'host-1', 1, 1, 'Agent', 'user-1', 'conversation')",
+        seed_agent!(
+            id = "agent-1",
+            runtime = "codex",
+            host_id = "host-1",
+            display_name = "Agent",
+            created_by_user_id = "user-1",
+        ),
         // The peer exists at pair-insert time (a trigger requires it), then is
         // deleted below to make the pair read-only.
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at,
-            display_name, created_by_user_id, session_scope)
-         VALUES ('agent-gone', 'agent-gone', 'codex', 'host-1', 1, 1, 'Agent', 'user-1', 'conversation')",
+        seed_agent!(
+            id = "agent-gone",
+            runtime = "codex",
+            host_id = "host-1",
+            display_name = "Agent",
+            created_by_user_id = "user-1",
+        ),
         // pair between agent-1 and the (soon-gone) peer.
-        "INSERT INTO conversations
-            (id, placement_kind, roster_policy, title, status, created_at, updated_at,
-             endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id)
-         VALUES ('pair-1', 'direct_pair', 'fixed', '', 'active', 1, 1,
-             'agent', 'agent-1', 'agent', 'agent-gone')",
+        seed_direct_pair!(
+            id = "pair-1",
+            endpoint_a_kind = "agent",
+            endpoint_a_id = "agent-1",
+            endpoint_b_kind = "agent",
+            endpoint_b_id = "agent-gone",
+        ),
         "INSERT INTO conversation_stream_heads (conversation_id, thread_root_id, latest_seq)
          VALUES ('pair-1', NULL, 0)",
     ] {
-        sqlx::query(statement).execute(&mut connection).await.unwrap();
+        sqlx::query(statement)
+            .execute(&mut connection)
+            .await
+            .unwrap();
     }
     // Delete the peer principal → the pair now accepts no posts (read-only).
     sqlx::query("DELETE FROM agents WHERE id = 'agent-gone'")

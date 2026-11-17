@@ -7,7 +7,8 @@ use silverhand_backend_core::{
     },
     foundation::identity::{AgentId, ConversationId, DaemonInstanceId},
     host_runtime::runtime_credential::{
-        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope,
+        ClaimRuntimeCustody, RuntimeCredentialHash, RuntimeCustodyPort, RuntimeEventTime,
+        RuntimeScope,
     },
     host_runtime::runtime_event::RuntimeObservedStatus,
     host_runtime::runtime_transition::{
@@ -67,34 +68,46 @@ async fn fixture() -> Fixture {
     let path = directory.path().join("runtime-transition-fence.sqlite");
     let mut db = current_schema::create_current_schema(&path).await;
     db.execute(sqlx::raw_sql(
-        "INSERT INTO users(id,name,display_name,created_at,updated_at) \
-             VALUES('user-1','owner','Owner',0,0); \
-         INSERT INTO hosts(id,name,kind,created_at,user_id) \
-             VALUES('host-1','Host','remote',0,'user-1'); \
-         INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,display_name, \
-             created_by_user_id,materialization_status,session_scope) \
-             VALUES('transition-agent','agent','codex','host-1',0,0,'Agent', \
-                    'user-1','active','conversation'); \
-         INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) \
-             VALUES('workspace-1','Space','space','user-1',0,0); \
-         INSERT INTO workspace_members(workspace_id,agent_id,joined_at) \
-             VALUES('workspace-1','transition-agent',0); \
-         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key, \
-             status,visibility,created_at,updated_at,latest_message_seq) VALUES \
-             ('conversation0001','workspace-1','workspace','open','One','one', \
-              'open','private',0,0,1), \
-             ('conversation0002','workspace-1','workspace','open','Two','two', \
-              'open','private',0,0,1); \
-         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES \
-             ('conversation0001','transition-agent',0), \
-             ('conversation0002','transition-agent',0); \
-         INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at) VALUES \
-             ('message-1','conversation0001','user','user-1','one',1,1), \
-             ('message-2','conversation0002','user','user-1','two',1,1); \
-         INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,created_at,delivery_kind, \
-             in_flight_owner,in_flight_at) VALUES \
-             ('conversation0001','transition-agent','message-1',1,'turn','old-owner',1), \
-             ('conversation0002','transition-agent','message-2',1,'turn','old-owner',1);",
+        concat!(
+            "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('user-1','owner','Owner',0,0); ",
+            "INSERT INTO hosts(id,name,kind,created_at,user_id) VALUES('host-1','Host','remote',0,'user-1'); ",
+            seed_agent!(
+                id = "transition-agent",
+                name = "agent",
+                runtime = "codex",
+                host_id = "host-1",
+                created_at = 0,
+                updated_at = 0,
+                display_name = "Agent",
+                created_by_user_id = "user-1",
+            ),
+            "; ",
+            "INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) VALUES('workspace-1','Space','space','user-1',0,0); ",
+            "INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('workspace-1','transition-agent',0); ",
+            seed_channel!(
+                id = "conversation0001",
+                workspace_id = "workspace-1",
+                title = "One",
+                title_key = "one",
+                created_at = 0,
+                updated_at = 0,
+                latest_message_seq = 1,
+            ),
+            "; ",
+            seed_channel!(
+                id = "conversation0002",
+                workspace_id = "workspace-1",
+                title = "Two",
+                title_key = "two",
+                created_at = 0,
+                updated_at = 0,
+                latest_message_seq = 1,
+            ),
+            "; ",
+            "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES ('conversation0001','transition-agent',0), ('conversation0002','transition-agent',0); ",
+            "INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at) VALUES ('message-1','conversation0001','user','user-1','one',1,1), ('message-2','conversation0002','user','user-1','two',1,1); ",
+            "INSERT INTO conversation_inboxes(conversation_id,agent_id,message_id,created_at,delivery_kind, in_flight_owner,in_flight_at) VALUES ('conversation0001','transition-agent','message-1',1,'turn','old-owner',1), ('conversation0002','transition-agent','message-2',1,'turn','old-owner',1); ",
+        ),
     ))
     .await
     .unwrap();
@@ -111,6 +124,7 @@ async fn fixture() -> Fixture {
         .claim_or_current(ClaimRuntimeCustody::new(
             scope(),
             DaemonInstanceId::parse("daemon-a").unwrap(),
+            RuntimeCredentialHash::of_plaintext("test-bearer-0"),
             RuntimeEventTime::from_unix_millis(7),
         ))
         .await
@@ -175,6 +189,7 @@ async fn held_marker_fences_custody_and_claim_then_exact_reclaim_stays_stable() 
             .claim_or_current(ClaimRuntimeCustody::new(
                 scope(),
                 DaemonInstanceId::parse(daemon).unwrap(),
+                RuntimeCredentialHash::of_plaintext("test-bearer-1"),
                 RuntimeEventTime::from_unix_millis(101),
             ))
             .await

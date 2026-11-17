@@ -18,13 +18,13 @@ import { ComputerStatusSkeleton } from "./computer-skeletons";
  *                   The state row sits in the middle so the visual
  *                   order reads "name → live state → identifiers"
  *                   (shiki dogfood `hLEODapuI_dHuCPz`).
- *   System        — `HostSection` with a `<dl>` of OS / Daemon
- *                   version / PID / Uptime, one row per field, inline
- *                   label + value. OS label is intentionally terse
- *                   ("OS" not "Operating system") and the value is
- *                   condensed via `formatOsShort` (drops Linux paren
- *                   suffixes + LTS marker) — shiki dogfood feedback.
- *                   Only rendered when `availability === 'available'`.
+ *   Computer      — one label-left / value-right list describing the
+ *                   whole machine (hostname, OS, IP, memory, disk,
+ *                   uptime), then the daemon's own facts as a quiet
+ *                   footnote. Machine fields come from newer daemons
+ *                   only; a missing field drops its row. Only rendered
+ *                   when `availability === 'available'`. Offline, a
+ *                   user-managed computer leads with Connect instead.
  *   Agents on     — `HostSection` titled "Agents on this machine"
  *   this machine    with the count rendered inline after the title.
  *                   Body: one-per-row list of agent identity cards.
@@ -51,21 +51,25 @@ import { ComputerStatusSkeleton } from "./computer-skeletons";
  * editable when this Desktop can reach the physical daemon for `host.id`;
  * the server must not carry proxy bytes.
  *
- * Freshness contract: the detail pane itself stays manual-refresh-only
- * (`staleTime: Infinity`). Out-of-band attach/detach changes are reconciled
+ * Freshness contract: the shared status query stays a cache read
+ * (`staleTime: Infinity`); this page re-probes the daemon once on open and on
+ * Refresh via `useRefreshHostStatus`, which writes into the same key. Out-of-band attach/detach changes are reconciled
  * by the app-shell host connection sync, which invalidates this query from
  * viewer-scoped WS events / `snapshot_required`; no per-view poll loop needed.
  */
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  CheckIcon,
   ComputerIcon,
+  CopyIcon,
   CpuIcon,
   DisconnectedIcon,
+  PlusIcon,
   RefreshIcon,
   SpinnerIcon,
   WarningIcon,
 } from "@/icons";
-import { useMemo, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type JSX, type ReactNode } from "react";
 import type {
   AgentOnHostDto,
   HostAdmissionFailure,
@@ -73,10 +77,14 @@ import type {
   HostStatusResponse,
   RuntimeKind,
 } from "@silverhand/shared";
-import { RuntimeKindSchema } from "@silverhand/shared";
+import { reasoningEffortLabel, RuntimeKindSchema, runtimeLabel } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
+import { CreateAgentDialog } from "@/features/agents/components/create-agent-dialog";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
+import { useUsersById } from "@/features/users/hooks";
+import { useUserAvatarObjectUrl } from "@/features/users/avatar-hooks";
+import { UserAvatar } from "@/components/user-avatar";
 import {
   isBackendUnreachable,
   isRegistrationRequired,
@@ -85,7 +93,8 @@ import {
 } from "@/features/session/hooks";
 import { useNav } from "@/router";
 import { Button } from "@/components/ui/button";
-import { useCompactLayout } from "@/navigation/layout";
+import { useCoarsePointer, useCompactLayout } from "@/navigation/layout";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/cn";
 import { paneChrome } from "@/components/layout/pane-chrome";
 import {
@@ -93,6 +102,7 @@ import {
   useAgentOnlineByHost,
   useBackendInfoSnapshot,
   useHostStatusQuery,
+  useRefreshHostStatus,
   useDisconnectHostMutation,
   useRotateConnectTokenMutation,
   useUpdateHostMutation,
@@ -101,6 +111,7 @@ import { computerActions } from "../model/computer-actions";
 import {
   describeAdmissionFailure,
   describeHostStatus,
+  formatGigabytes,
   formatUptime,
   type HostStatusTone,
 } from "../model/host-status-presentation";
@@ -116,7 +127,8 @@ import {
   DeleteComputerSection,
 } from "./host-danger-sections";
 import { Banner, HostSection } from "./host-section";
-import { t } from "@/lib/i18n";
+import { t, tRich } from "@/lib/i18n";
+import { toast } from "@/lib/toast";
 
 /**
  * Lightweight status indicator — colored dot + uppercase text. shiki
@@ -146,8 +158,20 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
   const viewer = useViewerUser();
   const statusQuery = useHostStatusQuery(host.id);
   const renameMutation = useUpdateHostMutation(host.id);
+  const reprobe = useRefreshHostStatus(host.id);
+  const reprobeHost = reprobe.mutate;
 
-  const refresh = () => qc.invalidateQueries({ queryKey: hostStatusKey(host.id) });
+  const refresh = () => {
+    reprobe.mutate(undefined, {
+      onError: () => void qc.invalidateQueries({ queryKey: hostStatusKey(host.id) }),
+    });
+  };
+
+  // Machine usage is sampled when the daemon is asked, so opening the page
+  // takes one fresh sample; the cached read renders meanwhile.
+  useEffect(() => {
+    reprobeHost();
+  }, [host.id, reprobeHost]);
 
   const statusView = useMemo(
     () => (statusQuery.data ? describeHostStatus(statusQuery.data) : null),
@@ -189,7 +213,7 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
         statusLabel={statusView?.label ?? null}
         statusTone={statusView?.tone ?? null}
         statusLoading={statusQuery.isLoading && !statusQuery.data}
-        refreshing={statusQuery.isFetching}
+        refreshing={statusQuery.isFetching || reprobe.isPending}
         onRefresh={() => void refresh()}
         onRename={async (next) => {
           await renameMutation.mutateAsync({ display_label: next });
@@ -219,18 +243,32 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
               />
             ) : null}
             {statusQuery.data.availability === "available" ? (
-              <SystemSection snapshot={statusQuery.data.snapshot} createdAt={host.created_at} />
+              <ComputerSection
+                snapshot={statusQuery.data.snapshot}
+                createdAt={host.created_at}
+                creatorUserId={host.creator_user_id}
+              />
+            ) : actions.connection ? (
+              <ConnectionSection host={host} status={statusQuery.data} />
             ) : (
               <OfflineSection status={statusQuery.data} />
             )}
-            {actions.connection ? (
-              <ConnectionSection host={host} availability={statusQuery.data.availability} />
-            ) : null}
-            {actions.refresh ? <RefreshCredentialsSection host={host} /> : null}
-            <RegisteredAgentsSection hostId={host.id} agents={statusQuery.data.agents} />
+            <RegisteredAgentsSection
+              hostId={host.id}
+              agents={statusQuery.data.agents}
+              action={
+                canEditHostLocalConfig && host.placeable ? (
+                  <CreateAgentAction hostId={host.id} />
+                ) : null
+              }
+            />
             {canEditHostLocalConfig ? (
               <ProxySection hostId={host.id} availability={statusQuery.data.availability} />
             ) : null}
+            {actions.connection && statusQuery.data.availability === "available" ? (
+              <ConnectionSection host={host} status={statusQuery.data} />
+            ) : null}
+            {actions.refresh ? <RefreshCredentialsSection host={host} /> : null}
           </>
         ) : null}
         {/* Footer action group (#task:1619, shiki 2026-07-26). `Copy
@@ -279,14 +317,18 @@ export function HostDetailView({ host }: HostDetailViewProps): JSX.Element {
  */
 function ConnectionSection({
   host,
-  availability,
+  status,
 }: {
   host: HostDto;
-  availability: HostStatusResponse["availability"];
+  status: HostStatusResponse;
 }): JSX.Element {
+  const availability = status.availability;
   const rotate = useRotateConnectTokenMutation(host.id);
   const disconnect = useDisconnectHostMutation(host.id);
   const compact = useCompactLayout();
+  // Offline, this section leads the page, so it carries the status detail
+  // that `OfflineSection` would otherwise show.
+  const offlineDetail = availability === "available" ? null : describeHostStatus(status).detail;
   // #task:1428 — the command is assembled locally from this desktop's own
   // connected server URL, never the server-echoed `server_url`.
   const backendInfo = useBackendInfoSnapshot();
@@ -323,6 +365,7 @@ function ConnectionSection({
   return (
     <HostSection title={computerCopy().connectionSectionTitle}>
       <div className="flex flex-col gap-3">
+        {offlineDetail ? <p className="text-sm text-text-muted">{offlineDetail}</p> : null}
         {minted ? (
           <ConnectionCommandCard
             daemonNpmSpec={minted.daemonNpmSpec}
@@ -331,11 +374,11 @@ function ConnectionSection({
           />
         ) : null}
 
-        <div data-host-actions className="flex flex-col items-start gap-2">
+        <div className="flex flex-col gap-2">
           <Button
             size={compact ? "md" : "sm"}
             variant="primary"
-            className="gap-2"
+            className="w-full gap-2"
             onClick={() => void handleGenerate()}
             disabled={rotate.isPending}
           >
@@ -351,7 +394,7 @@ function ConnectionSection({
             <Button
               size={compact ? "md" : "sm"}
               variant="neutral"
-              className="gap-2"
+              className="w-full gap-2"
               onClick={() => void handleDisconnect()}
               disabled={disconnect.isPending}
             >
@@ -376,7 +419,7 @@ function ConnectionSection({
 
 /* ─── Hero ──────────────────────────────────────────────────────── */
 
-function HostHero({
+export function HostHero({
   host,
   showStableName,
   statusLabel,
@@ -387,14 +430,15 @@ function HostHero({
   onRename,
   appManaged,
 }: {
-  host: HostDto;
+  host: Pick<HostDto, "name" | "display_label">;
   showStableName: boolean;
   statusLabel: string | null;
   statusTone: HostStatusTone | null;
   statusLoading: boolean;
   refreshing: boolean;
   onRefresh: () => void;
-  onRename: (next: string | null) => Promise<void>;
+  /** Absent for a viewer who cannot rename the computer. */
+  onRename?: (next: string | null) => Promise<void>;
   /** Provenance chip in the state row. This is lifecycle/origin
    *  metadata (per doc §3.1), NOT a capability signal — the four
    *  danger surfaces below are picked by `computerActions`, not by
@@ -407,13 +451,17 @@ function HostHero({
 
       <div className="flex min-w-0 flex-1 flex-col gap-1.5">
         <div className="font-serif text-lg font-semibold leading-tight text-text-primary">
-          <InlineRename
-            value={host.display_label}
-            placeholder={host.name}
-            fallbackForEdit={host.display_label ?? host.name}
-            ariaLabel={t("computers.renameThisComputer")}
-            onCommit={onRename}
-          />
+          {onRename ? (
+            <InlineRename
+              value={host.display_label}
+              placeholder={host.name}
+              fallbackForEdit={host.display_label ?? host.name}
+              ariaLabel={t("computers.renameThisComputer")}
+              onCommit={onRename}
+            />
+          ) : (
+            <span className="wrap-break-word">{host.display_label?.trim() || host.name}</span>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -526,68 +574,251 @@ function ProvenanceChip(): JSX.Element {
   );
 }
 
-/* ─── System (available) ────────────────────────────────────────── */
+/* ─── Computer (available) ────────────────────────────────────── */
 
-function SystemSection({
+type HostSnapshot = Extract<HostStatusResponse, { availability: "available" }>["snapshot"];
+
+/** At or above this share a usage bar turns warning: the one reading on this
+ *  page that asks the user to act. */
+const USAGE_WARNING_RATIO = 0.9;
+
+function ComputerSection({
   snapshot,
   createdAt,
+  creatorUserId,
 }: {
-  snapshot: Extract<HostStatusResponse, { availability: "available" }>["snapshot"];
+  snapshot: HostSnapshot;
   createdAt: number;
+  creatorUserId: string | null;
 }): JSX.Element {
   return (
-    <HostSection title={t("computers.info")}>
-      {/* shiki dogfood `6QIZeGVS8u8yJ137`: one row per field. Inline
-          label + value (not stacked) so 4 short facts read as a tight
-          key-value list, not a stretched form.
-
-          v6.9 (#task:917, shiki computer-pane review): wrap the `<dl>`
-          in `data-host-system-list` and each value column in `data-
-          host-system-value` so poster can paint label-column HUD caps
-          + tabular spacing without leaking theme code into the base
-          structure. Base styling stays plain; ID/version/PID/uptime
-          values pick up `tabular-nums` here so digits line up across
-          rows regardless of theme. */}
-      <dl data-host-system-list className="flex flex-col gap-2.5">
-        <SystemField label={t("computers.os")}>
-          <span className="text-text-primary">{formatOsShort(snapshot.os)}</span>
-          {snapshot.os_arch ? (
-            <span className="ml-1 text-text-muted">({snapshot.os_arch})</span>
+    <HostSection title={t("computers.computer")}>
+      <TooltipProvider>
+        <dl data-host-system-list className="flex flex-col gap-2.5">
+          {snapshot.hostname ? (
+            <SystemField label={t("computers.hostname")}>
+              <span className="text-text-primary">{snapshot.hostname}</span>
+            </SystemField>
           ) : null}
+          <SystemField label={t("computers.os")}>
+            <span className="text-text-primary">{formatOsShort(snapshot.os)}</span>
+            {snapshot.os_arch ? (
+              <span className="ml-2 text-text-muted">{snapshot.os_arch}</span>
+            ) : null}
+          </SystemField>
+          {snapshot.ip ? (
+            <SystemField label={t("computers.ipAddress")}>
+              <CopyableValue value={snapshot.ip} />
+            </SystemField>
+          ) : null}
+          <UsageField
+            label={t("computers.memory")}
+            used={snapshot.memory_used_bytes}
+            total={snapshot.memory_total_bytes}
+            base={1024}
+          />
+          <UsageField
+            label={t("computers.disk")}
+            used={snapshot.disk_used_bytes}
+            total={snapshot.disk_total_bytes}
+            base={1000}
+          />
+          {snapshot.system_uptime_ms !== undefined ? (
+            <SystemField label={t("computers.uptime")}>
+              <span className="text-text-primary">{formatUptime(snapshot.system_uptime_ms)}</span>
+            </SystemField>
+          ) : null}
+        </dl>
+      </TooltipProvider>
+      <dl
+        data-host-system-list
+        className="mt-4 flex flex-col gap-1.5 border-t border-dashed border-border-subtle pt-4 text-xs text-text-muted"
+      >
+        <SystemField label={t("computers.daemon")} quiet>
+          {snapshot.daemon_version}
+          <span className="ml-2">
+            {t("computers.daemonProcess", {
+              pid: snapshot.daemon_pid,
+              uptime: formatUptime(snapshot.uptime_ms),
+            })}
+          </span>
         </SystemField>
-        <SystemField label={t("computers.daemonVersion")}>
-          <span className="font-mono text-text-primary">{snapshot.daemon_version}</span>
-        </SystemField>
-        <SystemField label={t("computers.processId")}>
-          <span className="font-mono text-text-primary">{snapshot.daemon_pid}</span>
-        </SystemField>
-        <SystemField label={t("computers.uptime")}>
-          <span className="text-text-primary">{formatUptime(snapshot.uptime_ms)}</span>
-        </SystemField>
-        <SystemField label={t("computers.created")}>
-          <span className="text-text-primary">{formatCreatedAt(createdAt)}</span>
-        </SystemField>
+        <CreatedField createdAt={createdAt} creatorUserId={creatorUserId} />
       </dl>
     </HostSection>
   );
 }
 
+/** When and by whom the computer was created, on one row. The creator is
+ *  resolved from the global user directory so a rename or new avatar shows
+ *  here without a host refetch; until it resolves (or with no creator) the row
+ *  shows the date alone rather than a raw id. */
+export function CreatedField({
+  createdAt,
+  creatorUserId,
+}: {
+  createdAt: number;
+  creatorUserId: string | null | undefined;
+}): JSX.Element {
+  const nav = useNav();
+  const usersById = useUsersById();
+  const avatarObjectUrl = useUserAvatarObjectUrl({ userId: creatorUserId ?? null });
+  const name = creatorUserId ? (usersById.get(creatorUserId)?.display_name ?? null) : null;
+  const date = formatCreatedAt(createdAt);
+
+  return (
+    <SystemField label={t("computers.created")} quiet>
+      {creatorUserId && name
+        ? tRich("computers.createdOnBy", {
+            date,
+            creator: (
+              <button
+                type="button"
+                onClick={() => nav.toMembersUser(creatorUserId)}
+                aria-label={t("computers.openProfile", { name })}
+                className="inline-flex items-baseline gap-1.5 text-text-secondary underline-offset-2 hover:text-text-primary hover:underline focus-visible:underline focus-visible:outline-none"
+              >
+                <UserAvatar
+                  size={AVATAR_PX.xs}
+                  avatarObjectUrl={avatarObjectUrl}
+                  alt={name}
+                  className="self-center"
+                />
+                {name}
+              </button>
+            ),
+          })
+        : date}
+    </SystemField>
+  );
+}
+
+/** Memory and disk share one reading: a short bar and the share. The amounts
+ *  live in a tooltip (tap on touch). Memory counts in binary units and disk in
+ *  decimal ones, matching how each OS reports them. */
+function UsageField({
+  label,
+  used,
+  total,
+  base,
+}: {
+  label: string;
+  used: number | undefined;
+  total: number | undefined;
+  base: 1000 | 1024;
+}): JSX.Element | null {
+  const coarse = useCoarsePointer();
+  const [tapped, setTapped] = useState(false);
+
+  if (used === undefined || total === undefined || total <= 0) {
+    return null;
+  }
+
+  const ratio = Math.min(1, Math.max(0, used / total));
+  const hot = ratio >= USAGE_WARNING_RATIO;
+  const detail = t("computers.usageDetail", {
+    used: formatGigabytes(used, base),
+    total: formatGigabytes(total, base),
+  });
+
+  return (
+    <SystemField label={label}>
+      <Tooltip open={coarse ? tapped : undefined} onOpenChange={coarse ? setTapped : undefined}>
+        <TooltipTrigger asChild onClick={coarse ? () => setTapped(true) : undefined}>
+          <span
+            tabIndex={0}
+            aria-label={`${label}: ${detail}`}
+            className="inline-flex items-center gap-3 outline-none"
+          >
+            <span
+              aria-hidden
+              className="relative h-1.5 w-16 shrink-0 overflow-hidden rounded-(--pill-radius) bg-bg-elevated [[data-layout=regular]_&]:w-28"
+            >
+              <span
+                className={cn("absolute inset-y-0 left-0", hot ? "bg-warning" : "bg-text-primary")}
+                style={{ width: `${ratio * 100}%` }}
+              />
+            </span>
+            <span className={hot ? "font-semibold text-warning" : "text-text-primary"}>
+              {Math.round(ratio * 100)}%
+            </span>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{detail}</TooltipContent>
+      </Tooltip>
+    </SystemField>
+  );
+}
+
+/** A value the user takes elsewhere (an address for screen sharing or SSH).
+ *  Copy confirms in place; no toast. */
+function CopyableValue({ value }: { value: string }): JSX.Element {
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (!copied) {
+      return;
+    }
+    const timer = window.setTimeout(() => setCopied(false), 1500);
+    return () => window.clearTimeout(timer);
+  }, [copied]);
+
+  const handleCopy = async (): Promise<void> => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+    } catch {
+      toast.error(t("common.copyFailed"));
+    }
+  };
+
+  return (
+    <button
+      type="button"
+      onClick={() => void handleCopy()}
+      aria-label={t("computers.copyValue", { value })}
+      className="group inline-flex items-center gap-2 text-text-primary"
+    >
+      {value}
+      {copied ? (
+        <CheckIcon className="size-3.5 text-success" aria-hidden />
+      ) : (
+        <CopyIcon
+          className="size-3.5 text-text-muted opacity-60 transition-opacity group-hover:opacity-100"
+          aria-hidden
+        />
+      )}
+    </button>
+  );
+}
+
 /** Host creation date as `YYYY-MM-DD`. Built from local calendar parts,
  *  zero-padded — a lifecycle date, no time of day. */
-function formatCreatedAt(createdAt: number): string {
+export function formatCreatedAt(createdAt: number): string {
   const d = new Date(createdAt);
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${d.getFullYear()}-${month}-${day}`;
 }
 
-function SystemField({ label, children }: { label: string; children: ReactNode }): JSX.Element {
+export function SystemField({
+  label,
+  quiet = false,
+  children,
+}: {
+  label: string;
+  quiet?: boolean;
+  children: ReactNode;
+}): JSX.Element {
   return (
     <div className="flex items-baseline gap-4">
-      <dt className="w-36 shrink-0 text-(length:--text-meta) font-medium uppercase tracking-wider text-text-muted">
+      <dt className="w-28 shrink-0 text-(length:--text-meta) font-medium uppercase tracking-wider text-text-muted">
         {label}
       </dt>
-      <dd data-host-system-value className="min-w-0 flex-1 text-sm tabular-nums">
+      <dd
+        data-host-system-value
+        className={cn("min-w-0 flex-1 tabular-nums wrap-anywhere", quiet ? "text-xs" : "text-sm")}
+      >
         {children}
       </dd>
     </div>
@@ -648,7 +879,7 @@ function OfflineSection({
   // precisely BECAUSE it will not come back unattended — printing a
   // wait-and-see promise there would be the one wrong thing to say.
   return (
-    <HostSection title={t("computers.info")}>
+    <HostSection title={t("computers.computer")}>
       <Banner tone={view.tone}>
         <span className="font-medium">{view.label}.</span> {view.detail}
       </Banner>
@@ -658,12 +889,18 @@ function OfflineSection({
 
 /* ─── Registered agents ─────────────────────────────────────────── */
 
-function RegisteredAgentsSection({
+export function RegisteredAgentsSection({
   hostId,
   agents,
+  live = true,
+  action = null,
 }: {
   hostId: string;
   agents: AgentOnHostDto[];
+  action?: ReactNode;
+  /** Off for a public read, which has no realtime liveness to follow: the
+   *  pips then show the status read's own `online`. */
+  live?: boolean;
 }): JSX.Element {
   const nav = useNav();
   // Agent-on-computer liveness (layer-2) is the SAME fact the rail dot
@@ -674,7 +911,7 @@ function RegisteredAgentsSection({
   // Falls back to the frozen snapshot's `online` until the first live
   // sample lands. Do NOT source layer-3 conversation status here —
   // this list's subject is the computer.
-  const liveOnlineByHost = useAgentOnlineByHost([hostId]);
+  const liveOnlineByHost = useAgentOnlineByHost(live ? [hostId] : []);
   // shiki dogfood `DXVl5tEBshVT2LqF` #2: route avatar uploads through
   // the shared object-URL cache so cards show the user-picked image
   // instead of the runtime tint fallback. Memoize the source list so
@@ -692,6 +929,7 @@ function RegisteredAgentsSection({
           <span className="text-text-muted">{agents.length}</span>
         </span>
       }
+      action={action}
     >
       {agents.length === 0 ? (
         <p className="text-sm text-text-muted">{t("computers.noAgentsAreRegistered")}</p>
@@ -714,6 +952,29 @@ function RegisteredAgentsSection({
         </ul>
       )}
     </HostSection>
+  );
+}
+
+/** Creates an agent with this computer preselected. Only the owner sees it;
+ *  the new agent joins the list through a re-read of this computer's status,
+ *  which creation does not otherwise signal. */
+function CreateAgentAction({ hostId }: { hostId: string }): JSX.Element {
+  const qc = useQueryClient();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <>
+      <Button variant="ghost" size="xs" className="gap-1.5" onClick={() => setOpen(true)}>
+        <PlusIcon className="size-3.5" aria-hidden />
+        {t("agentPage.newAgent")}
+      </Button>
+      <CreateAgentDialog
+        open={open}
+        onOpenChange={setOpen}
+        preferredHostId={hostId}
+        onCreated={() => void qc.invalidateQueries({ queryKey: hostStatusKey(hostId) })}
+      />
+    </>
   );
 }
 
@@ -780,20 +1041,50 @@ function AgentCard({
             <CpuIcon className="size-5" />
           </span>
         )}
-        <div className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-sm font-semibold text-text-primary">
-            {agent.display_name}
-          </span>
-          <span className="truncate text-xs text-text-muted">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="flex min-w-0 items-baseline gap-2">
+            <span className="truncate text-sm font-semibold text-text-primary">
+              {agent.display_name}
+            </span>
             {/* `handle` is already `@<name>` per backend DTO contract —
              *  do NOT prefix here or the UI shows `@@<name>`. */}
-            <span className="font-mono">{agent.handle}</span>
-            <span className="ml-3 uppercase tracking-wide">{agent.runtime}</span>
+            <span className="truncate font-mono text-xs text-text-muted">{agent.handle}</span>
           </span>
+          <AgentConfigLine agent={agent} />
         </div>
         <AgentStatusPip online={online} />
       </button>
     </li>
+  );
+}
+
+/** Runtime, then the configuration the agent runs with. Unset values are left
+ *  out rather than labelled as defaults: a backend that predates these fields
+ *  reports every one as null, which would mislabel configured agents. Parts
+ *  are separated by space, not a glyph: model ids carry their own `/`. */
+function AgentConfigLine({ agent }: { agent: AgentOnHostDto }): JSX.Element {
+  const knownRuntime = RuntimeKindSchema.safeParse(agent.runtime);
+  const parts = [
+    knownRuntime.success ? runtimeLabel(knownRuntime.data) : agent.runtime,
+    agent.model,
+    agent.reasoning_effort ? reasoningEffortLabel(agent.reasoning_effort) : null,
+    agent.fast_mode ? t("computers.fast") : null,
+  ].filter((part): part is string => part !== null);
+
+  return (
+    <span className="flex min-w-0 items-baseline gap-x-3 overflow-hidden text-(length:--text-meta) text-text-muted">
+      {parts.map((part, index) => (
+        <span
+          key={index}
+          className={cn(
+            index === 1 ? "min-w-0 truncate" : "shrink-0",
+            index === 0 && "font-semibold",
+          )}
+        >
+          {part}
+        </span>
+      ))}
+    </span>
   );
 }
 
@@ -818,7 +1109,10 @@ function AgentStatusPip({ online }: { online: "online" | "offline" }): JSX.Eleme
         )}
         aria-hidden
       />
-      {online === "online" ? t("computers.online") : t("computers.offline")}
+      {/* Phone width keeps the dot only, so the config line keeps its room. */}
+      <span className="[[data-layout=compact]_&]:hidden">
+        {online === "online" ? t("computers.online") : t("computers.offline")}
+      </span>
     </span>
   );
 }

@@ -1102,10 +1102,7 @@ CREATE TABLE "conversations" (
               AND NOT title_key GLOB '* '
             )
           ),
-        status                  TEXT NOT NULL,
         spawned_by_agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
-        closed_at               INTEGER,
-        close_summary           TEXT,
         pinned_at               INTEGER,
         created_at              INTEGER NOT NULL,
         updated_at              INTEGER NOT NULL,
@@ -1170,9 +1167,6 @@ CREATE UNIQUE INDEX idx_conversations_direct_pair_endpoints
 CREATE UNIQUE INDEX idx_conversations_pair_key
         ON conversations(pair_key)
         WHERE placement_kind = 'direct_pair';
-
-CREATE INDEX idx_conversations_status
-        ON conversations(status);
 
 CREATE UNIQUE INDEX idx_conversations_title_key
         ON conversations(workspace_id, title_key)
@@ -1407,3 +1401,26 @@ CREATE TABLE password_recovery_state (
         CHECK ((code_id IS NULL) = (code_hash IS NULL)),
         CHECK ((code_id IS NULL) = (code_expires_at IS NULL))
       );
+
+CREATE TRIGGER conversation_inboxes_settlement_state_insert BEFORE INSERT ON conversation_inboxes
+  WHEN (NEW.in_flight_owner IS NULL) != (NEW.in_flight_at IS NULL)
+    OR (NEW.delivered_at IS NOT NULL AND NEW.failed_at IS NOT NULL)
+    OR (NEW.in_flight_owner IS NOT NULL
+        AND (NEW.delivered_at IS NOT NULL OR NEW.failed_at IS NOT NULL))
+  BEGIN SELECT RAISE(ABORT, 'invalid conversation inbox settlement state'); END;
+
+CREATE TRIGGER conversation_inboxes_settlement_state_update
+  BEFORE UPDATE OF delivered_at, failed_at, in_flight_owner, in_flight_at ON conversation_inboxes
+  WHEN (NEW.in_flight_owner IS NULL) != (NEW.in_flight_at IS NULL)
+    OR (NEW.delivered_at IS NOT NULL AND NEW.failed_at IS NOT NULL)
+    OR (NEW.in_flight_owner IS NOT NULL
+        AND (NEW.delivered_at IS NOT NULL OR NEW.failed_at IS NOT NULL))
+  BEGIN SELECT RAISE(ABORT, 'invalid conversation inbox settlement state'); END;
+
+CREATE TABLE agent_runtime_credentials (
+        token_hash TEXT PRIMARY KEY,
+        slot_id    INTEGER NOT NULL REFERENCES agent_runtime_slots(id) ON DELETE CASCADE,
+        generation INTEGER NOT NULL
+      );
+
+CREATE INDEX idx_agent_runtime_credentials_slot ON agent_runtime_credentials(slot_id);

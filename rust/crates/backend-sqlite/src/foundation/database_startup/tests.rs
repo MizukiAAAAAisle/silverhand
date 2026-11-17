@@ -1,7 +1,9 @@
 use super::*;
 
-fn copy_tree(src: &Path, dest: &Path) -> std::io::Result<()> {
-    copy_tree_except(src, dest, &[])
+fn copy_database_backup(src: &Path, dest: &Path) -> std::io::Result<()> {
+    fs::create_dir(dest)?;
+    fs::copy(src.join("database.sqlite"), dest.join("database.sqlite"))?;
+    Ok(())
 }
 
 fn isolated() -> tempfile::TempDir {
@@ -36,7 +38,7 @@ async fn snapshot(
     db: &mut SqliteConnection,
     omit_retired_preferences: bool,
 ) -> Vec<(String, Vec<String>)> {
-    let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('_migrations','avatar_designs','password_recovery_state') ORDER BY name").fetch_all(&mut *db).await.unwrap();
+    let tables: Vec<String> = sqlx::query_scalar("SELECT name FROM sqlite_schema WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('_migrations','avatar_designs','password_recovery_state','agent_runtime_credentials') ORDER BY name").fetch_all(&mut *db).await.unwrap();
     let mut result = vec![];
     for table in tables {
         let columns: Vec<String> =
@@ -51,11 +53,14 @@ async fn snapshot(
             // Compare pre-existing columns, not new fields introduced by later
             // migrations. Step92's correlation values are checked separately;
             // step99's pending default belongs to profile setup migration tests;
-            // step100's avatar design is empty on upgrade.
+            // step100's avatar design is empty on upgrade; step103 drops the
+            // conversation close columns, checked by its own upgrade test.
             .filter(|c| {
                 (table != "messages"
                     || !matches!(c.as_str(), "client_message_id" | "client_request_json"))
                     && (table != "users" || c.as_str() != "embedded_profile_pending")
+                    && (table != "conversations"
+                        || !matches!(c.as_str(), "status" | "closed_at" | "close_summary"))
                     && c.as_str() != "avatar_design_id"
             })
             .map(|c| format!("quote({})", quoted(c)))
@@ -143,7 +148,7 @@ async fn empty_store_runs_shared_history_without_ts_then_current_is_noop() {
 }
 
 #[tokio::test]
-async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
+async fn step87_upgrade_requires_permission_and_restorable_database_backup() {
     let root = isolated();
     let path = root.path().join("data/database.sqlite");
     fs::create_dir(path.parent().unwrap()).unwrap();
@@ -153,10 +158,9 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
     prepare_connected(&mut db, &path, true, &old_plan)
         .await
         .unwrap();
-    db.execute(sqlx::raw_sql(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql"
-    ))))
+    db.execute(sqlx::raw_sql(sqlx::AssertSqlSafe(
+        cold_read_seed_before_step103(),
+    )))
     .await
     .unwrap();
     db.execute("INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at,author_id,author_name,author_display_name) VALUES ('message-1','conv-open','human','user-1','Preserved 世界',1,100,'user-1','viewer','Viewer'); INSERT INTO auth_sessions(id,user_id,token_hash,created_at,last_used_at) VALUES ('session-1','user-1','synthetic-not-a-real-token',100,100); INSERT INTO user_list_sort_mode(user_id,list_key,scope,mode,updated_at) VALUES ('user-1','workspaces','','manual',1),('user-1','workspaces','pinned','manual',1),('user-1','channels','','manual',1)").await.unwrap();
@@ -197,12 +201,13 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
         "legacy rows gain no invented retry identity"
     );
     live.close().await.unwrap();
+    assert!(!backup.join("blob").exists());
     assert_eq!(
-        fs::read(backup.join("blob")).unwrap(),
+        fs::read(path.parent().unwrap().join("blob")).unwrap(),
         b"preserve file contents"
     );
     let restored = root.path().join("restored");
-    copy_tree(&backup, &restored).unwrap();
+    copy_database_backup(&backup, &restored).unwrap();
     let restored_path = restored.join("database.sqlite");
     let mut db = connect(&restored_path).await;
     let version: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _migrations")
@@ -239,7 +244,7 @@ async fn step87_upgrade_requires_permission_and_restorable_directory_backup() {
                 .unwrap()
                 .starts_with(workspace.join(".cache"))
         );
-        copy_tree(&backup, &output).unwrap();
+        copy_database_backup(&backup, &output).unwrap();
     }
 }
 
@@ -283,10 +288,9 @@ async fn retired_workspace_starred_mode_upgrades_from_87_and_88_without_losing_o
         prepare_connected(&mut db, &path, true, &old_plan)
             .await
             .unwrap();
-        db.execute(sqlx::raw_sql(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql"
-        ))))
+        db.execute(sqlx::raw_sql(sqlx::AssertSqlSafe(
+            cold_read_seed_before_step103(),
+        )))
         .await
         .unwrap();
         db.execute("INSERT INTO user_list_sort_mode(user_id,list_key,scope,mode,updated_at) VALUES ('user-1','workspaces','starred','manual',1),('user-2','workspaces','starred','recent',2),('user-1','favorites','','manual',3),('user-1','channels:ws-regular','starred','manual',4)").await.unwrap();
@@ -347,27 +351,31 @@ async fn migration_lock_refuses_second_owner_then_releases() {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn database_hard_link_alias_is_refused_without_changing_data_or_ledger() {
+async fn backup_directory_failure_leaves_data_and_migration_ledger_unchanged() {
     let root = isolated();
-    let path = root.path().join("data/database.sqlite");
-    prepare_database(&path, true).await.unwrap();
+    // This directory fits NAME_MAX, but the timestamped backup sibling does not.
+    // A real filesystem failure works even when the test runs as root.
+    let path = root.path().join("d".repeat(240)).join("database.sqlite");
+    fs::create_dir(path.parent().unwrap()).unwrap();
+    let mut old_plan = plan();
+    old_plan.steps.retain(|s| s.version <= 87);
     let mut db = connect(&path).await;
-    db.execute("DELETE FROM _migrations WHERE version>=88")
+    prepare_connected(&mut db, &path, true, &old_plan)
         .await
         .unwrap();
+    db.execute(sqlx::raw_sql(sqlx::AssertSqlSafe(
+        cold_read_seed_before_step103(),
+    )))
+    .await
+    .unwrap();
+    let before = snapshot(&mut db, false).await;
     db.close().await.unwrap();
-    fs::hard_link(&path, path.with_file_name("database-alias")).unwrap();
-    let original = fs::read(&path).unwrap();
     assert!(matches!(
         prepare_database(&path, true).await,
         Err(DatabaseStartupError::Backup(_))
     ));
-    assert_eq!(fs::read(&path).unwrap(), original);
-    assert_eq!(
-        fs::read(path.with_file_name("database-alias")).unwrap(),
-        original
-    );
     let mut db = connect(&path).await;
+    assert_eq!(snapshot(&mut db, false).await, before);
     let step: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _migrations")
         .fetch_one(&mut db)
         .await
@@ -496,8 +504,8 @@ async fn current_store_rejects_bad_persisted_address_keys() {
 }
 
 #[cfg(unix)]
-#[test]
-fn backup_preserves_links_and_files_but_omits_runtime_socket() {
+#[tokio::test]
+async fn migration_backup_only_contains_database_and_preserves_permissions() {
     use std::os::unix::{
         fs::{PermissionsExt, symlink},
         net::UnixListener,
@@ -505,24 +513,66 @@ fn backup_preserves_links_and_files_but_omits_runtime_socket() {
     let root = isolated();
     let data = root.path().join("data");
     fs::create_dir(&data).unwrap();
-    fs::write(data.join("file"), b"payload").unwrap();
-    fs::set_permissions(data.join("file"), fs::Permissions::from_mode(0o600)).unwrap();
-    symlink("file", data.join("link")).unwrap();
-    let socket = data.join("s");
-    let _listener = UnixListener::bind(&socket).unwrap();
-    let dest = root.path().join("backup");
-    copy_tree(&data, &dest).unwrap();
-    assert_eq!(fs::read(dest.join("file")).unwrap(), b"payload");
-    assert_eq!(fs::read_link(dest.join("link")).unwrap(), Path::new("file"));
+    fs::set_permissions(&data, fs::Permissions::from_mode(0o700)).unwrap();
+    let path = data.join("database.sqlite");
+    let mut old_plan = plan();
+    old_plan.steps.retain(|s| s.version <= 102);
+    let mut db = connect(&path).await;
+    prepare_connected(&mut db, &path, true, &old_plan)
+        .await
+        .unwrap();
+    db.close().await.unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    for dir in ["blobs", "logs", "backups"] {
+        fs::create_dir(data.join(dir)).unwrap();
+        fs::write(data.join(dir).join("payload"), b"unchanged").unwrap();
+    }
+    symlink("blobs", data.join("link")).unwrap();
+    symlink("missing", data.join("dangling-link")).unwrap();
+    fs::hard_link(&path, data.join("database-alias")).unwrap();
+    let _listener = UnixListener::bind(data.join("s")).unwrap();
+
+    let outcome = prepare_database(&path, true).await.unwrap();
+    let backup = outcome.backup_path.unwrap();
+    let names: Vec<_> = fs::read_dir(&backup)
+        .unwrap()
+        .map(|e| e.unwrap().file_name())
+        .collect();
+    assert_eq!(names, vec![std::ffi::OsString::from("database.sqlite")]);
     assert_eq!(
-        fs::metadata(dest.join("file"))
+        fs::metadata(&backup).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    assert_eq!(
+        fs::metadata(backup.join("database.sqlite"))
             .unwrap()
             .permissions()
             .mode()
             & 0o777,
         0o600
     );
-    assert!(!dest.join("s").exists());
+    for dir in ["blobs", "logs", "backups"] {
+        assert_eq!(
+            fs::read(data.join(dir).join("payload")).unwrap(),
+            b"unchanged"
+        );
+    }
+    assert_eq!(
+        fs::read_link(data.join("link")).unwrap(),
+        Path::new("blobs")
+    );
+    let mut db = connect(&backup.join("database.sqlite")).await;
+    let check: String = sqlx::query_scalar("PRAGMA quick_check")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(check, "ok");
+    let step: i64 = sqlx::query_scalar("SELECT MAX(version) FROM _migrations")
+        .fetch_one(&mut db)
+        .await
+        .unwrap();
+    assert_eq!(step, 102);
+    db.close().await.unwrap();
 }
 
 #[tokio::test]
@@ -536,10 +586,9 @@ async fn agent_stream_upgrade_preserves_history_without_guessing_generation() {
     prepare_connected(&mut db, &path, true, &previous)
         .await
         .unwrap();
-    db.execute(sqlx::raw_sql(include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql"
-    ))))
+    db.execute(sqlx::raw_sql(sqlx::AssertSqlSafe(
+        cold_read_seed_before_step103(),
+    )))
     .await
     .unwrap();
     db.execute("INSERT INTO conversation_events(id,conversation_id,kind,payload,created_at) VALUES(101,'conv-open','thinking','{\"text\":\"original historical content\"}',12)").await.unwrap();
@@ -631,4 +680,137 @@ async fn task_title_migration_rejects_unrepairable_values_transactionally() {
             .unwrap();
         assert_eq!(ledger, 0);
     }
+}
+
+#[tokio::test]
+async fn inbox_settlement_upgrade_normalizes_mixed_stamps_then_guards_writes() {
+    let root = isolated();
+    let path = root.path().join("data/database.sqlite");
+    fs::create_dir(path.parent().unwrap()).unwrap();
+    let mut previous = plan();
+    previous.steps.retain(|s| s.version <= 101);
+    let mut db = connect(&path).await;
+    prepare_connected(&mut db, &path, true, &previous)
+        .await
+        .unwrap();
+    db.execute(sqlx::raw_sql(sqlx::AssertSqlSafe(
+        cold_read_seed_before_step103(),
+    )))
+    .await
+    .unwrap();
+    db.execute(sqlx::raw_sql(
+        "INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at)
+             VALUES('m1','conv-open','user','user-1','x',1,1),('m2','conv-open','user','user-1','x',2,1),
+                   ('m3','conv-open','user','user-1','x',3,1),('m4','conv-open','user','user-1','x',4,1);
+         INSERT INTO conversation_inboxes
+             (id,conversation_id,agent_id,message_id,delivered_at,failed_at,failed_reason,
+              in_flight_owner,in_flight_at,created_at,delivery_kind)
+         VALUES (1,'conv-open','agent-1','m1',5,6,'driver_refused',NULL,NULL,1,'turn'),
+                (2,'conv-open','agent-1','m2',5,NULL,NULL,'old',4,1,'turn'),
+                (3,'conv-open','agent-1','m3',NULL,NULL,NULL,'old',NULL,1,'turn'),
+                (4,'conv-open','agent-1','m4',NULL,NULL,NULL,'live',4,1,'turn');",
+    ))
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+
+    prepare_database(&path, true).await.unwrap();
+    let mut db = connect(&path).await;
+    type InboxRow = (
+        i64,
+        Option<i64>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+    );
+    let rows: Vec<InboxRow> = sqlx::query_as(
+        "SELECT id,delivered_at,failed_at,failed_reason,in_flight_owner
+               FROM conversation_inboxes ORDER BY id",
+    )
+    .fetch_all(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        [
+            (1, Some(5), None, None, None),
+            (2, Some(5), None, None, None),
+            (3, None, None, None, None),
+            (4, None, None, None, Some("live".into())),
+        ]
+    );
+    for invalid in [
+        "UPDATE conversation_inboxes SET failed_at = 9 WHERE id = 1",
+        "UPDATE conversation_inboxes SET delivered_at = 9 WHERE id = 4",
+        "UPDATE conversation_inboxes SET in_flight_owner = 'x' WHERE id = 3",
+    ] {
+        assert!(db.execute(invalid).await.is_err(), "{invalid}");
+    }
+    db.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn conversation_close_upgrade_folds_into_archive_then_drops_close_columns() {
+    let root = isolated();
+    let path = root.path().join("data/database.sqlite");
+    fs::create_dir(path.parent().unwrap()).unwrap();
+    let mut previous = plan();
+    previous.steps.retain(|s| s.version <= 102);
+    let mut db = connect(&path).await;
+    prepare_connected(&mut db, &path, true, &previous)
+        .await
+        .unwrap();
+    db.execute(sqlx::raw_sql(
+        "INSERT INTO workspaces(id,name,name_key,created_at,updated_at) VALUES('w','W','w',1,1);
+         INSERT INTO conversations
+             (id,workspace_id,placement_kind,roster_policy,title,title_key,status,
+              closed_at,close_summary,archived_at,created_at,updated_at)
+         VALUES ('closed','w','workspace','open','Closed','closed','idle',20,'done',NULL,1,1),
+                ('both','w','workspace','open','Both','both','archived',20,NULL,30,1,1),
+                ('open','w','workspace','open','Open','open','active',NULL,NULL,NULL,1,1);",
+    ))
+    .await
+    .unwrap();
+    db.close().await.unwrap();
+
+    prepare_database(&path, true).await.unwrap();
+    let mut db = connect(&path).await;
+    let rows: Vec<(String, Option<i64>)> =
+        sqlx::query_as("SELECT id,archived_at FROM conversations ORDER BY id")
+            .fetch_all(&mut db)
+            .await
+            .unwrap();
+    assert_eq!(
+        rows,
+        [
+            ("both".into(), Some(30)),
+            ("closed".into(), Some(20)),
+            ("open".into(), None),
+        ]
+    );
+    let columns: Vec<String> =
+        sqlx::query_scalar("SELECT name FROM pragma_table_xinfo('conversations')")
+            .fetch_all(&mut db)
+            .await
+            .unwrap();
+    for dropped in ["status", "closed_at", "close_summary"] {
+        assert!(!columns.iter().any(|c| c == dropped), "{dropped}");
+    }
+    db.close().await.unwrap();
+}
+
+/// The shared cold-read seed targets the current schema; before step 103
+/// `conversations.status` is NOT NULL without a default.
+fn cold_read_seed_before_step103() -> String {
+    include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../../rust/test-fixtures/fixtures/workspace-cold-read/seed.sql"
+    ))
+    .replace(
+        "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, created_at, updated_at)\n  VALUES (",
+        "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, created_at, updated_at, status)\n  VALUES (",
+    )
+    .replace("', 20, 20);", "', 20, 20, 'idle');")
+    .replace("', 10, 10);", "', 10, 10, 'idle');")
+    .replace("', 5, 5);", "', 5, 5, 'idle');")
 }

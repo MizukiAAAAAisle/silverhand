@@ -113,11 +113,18 @@ export type SetChannelAttentionPreferenceInput = z.infer<
 // The tiers PARTITION the viewer's conversations, so an `all`-tier channel never
 // double-counts an @me: §8's positional count already includes it.
 
-/** `GET /api/attention/badges` — the viewer's cross-workspace badge roll-up.
+/** `GET /api/attention/badges` — the viewer's app-level badge roll-up.
  *  `by_workspace` omits workspaces whose badge is 0 (absent ≡ 0), matching the
- *  notification roll-up's shape. `total` is the sum, i.e. the app-level badge. */
+ *  notification roll-up's shape. `total = direct_pairs + Σ by_workspace` is the
+ *  whole app badge (Dock, menu bar). */
 export const AttentionBadgeRollupDtoSchema = z.object({
   by_workspace: z.record(z.string(), z.number()),
+  /** Unread across the viewer's direct pairs, which have no workspace. A pair is
+   *  always `all` tier (its whole positional unread counts); a pair whose
+   *  counterpart is deleted is skipped, as the sidebar hides it. Its live carrier
+   *  is `direct_pairs_changed`, a refetch signal for this roll-up. Absent ≡ 0
+   *  (an older server, whose `total` then excludes DMs). */
+  direct_pairs: z.number().int().nonnegative().optional(),
   total: z.number(),
   /** The workspaces the viewer has MUTED (#task:1877), so the rail can mark a
    *  muted row without a second request. Absent ≡ not muted, exactly like
@@ -226,20 +233,22 @@ export type ActivitySalience = (typeof ACTIVITY_SALIENCES)[number];
 
 /**
  * The claim class of an Activity item — drives the icon and the eliminate route
- * (§5.3). `mention` / `agent_failed` clear via `notifications.read_at`; `unread`
- * clears via the stream cursor (`observe`).
- *   - `mention`      = a `mention_self` notification (directed @me).
- *   - `agent_failed` = an `agent_start_failed` notification (the viewer's agent).
- *   - `unread`       = a positional stream's ambient/DM unread aggregate.
+ * (§5.3).
+ *   - `agent_failed` = an `agent_start_failed` notification (the viewer's agent);
+ *     clears via `notifications.read_at`.
+ *   - `unread`       = one STREAM (main line or thread) waiting on the viewer: its
+ *     ambiently entered unread, its unread mentions of the viewer, or both. Clears
+ *     via the stream cursor (`observe`), which also reads its mentions.
  *
- * NOTE — there is no `task` kind in v1. A standing `in_review && member`
- * projection of task state mirrored the task panel as a permanent,
- * non-eliminable item; tasks belong in the task panel. A task source re-enters
- * Activity only when it is event-shaped & notification-backed
- * (`task_needs_review`), read-cleared like a mention — see
- * docs/activity-lifecycle-v1.md §5.1 (v2).
+ * NAMING: `unread` really means "stream". It keeps the old wire word from when
+ * mentions were separate rows, because the kind enum is closed and renaming it
+ * would fail every older client's parse of the whole list (#task:3054).
+ *
+ * NOTE — there is no `task` kind in v1. Tasks belong in the task panel; a task
+ * source re-enters Activity only when it is event-shaped & notification-backed
+ * (`task_needs_review`) — see docs/activity-lifecycle-v1.md §5.1 (v2).
  */
-export const ACTIVITY_ITEM_KINDS = ['mention', 'agent_failed', 'unread'] as const;
+export const ACTIVITY_ITEM_KINDS = ['agent_failed', 'unread'] as const;
 export type ActivityItemKind = (typeof ACTIVITY_ITEM_KINDS)[number];
 
 /**
@@ -309,18 +318,16 @@ export const ActivityLocationSchema = z.union([
 ]);
 export type ActivityLocation = z.infer<typeof ActivityLocationSchema>;
 
-/** One row in the Activity list. Heterogeneous by `kind`: directed
- *  single-event items (`mention` / `agent_failed`) anchor on one message; an
- *  `unread` item is a per-STREAM aggregate (§7.3) carrying a count and anchored
- *  at its first-unread message.
+/** One row in the Activity list: an `agent_failed` notice, or an `unread` row
+ *  for one stream, anchored at its first unread mention of the viewer, else its
+ *  first unread message.
  *
  *  §5.3 answerability — every item's eliminate route (source_ref-out) is
  *  reconstructable from EXPLICIT fields here; `id` is a render list key ONLY and
  *  MUST NOT be parsed for source routing:
- *    - `mention` / `agent_failed` → set `notifications.read_at` by
- *      `notification_id`.
- *    - `unread`                   → advance the stream cursor (`observe`) keyed
- *      by `conversation_id` + `thread_root_id`. */
+ *    - `agent_failed` → set `notifications.read_at` by `notification_id`.
+ *    - `unread`       → advance the stream cursor (`observe`) keyed by
+ *      `conversation_id` + `thread_root_id`. */
 export const ActivityItemDtoSchema = z.object({
   /** Stable synthesized list key for the client (NOT a stored row id, and NOT a
    *  source_ref — never parse it; use the explicit source fields below). */
@@ -330,16 +337,14 @@ export const ActivityItemDtoSchema = z.object({
   /** Source routing (the §5.3 source_ref). */
   conversation_id: z.string(),
   /** Which stream: NULL = mainline / channel-level; non-NULL = that reply
-   *  cluster. Carried for `mention` items too, so routing reaches the thread. */
+   *  cluster. */
   thread_root_id: z.string().nullable(),
   /** The anchor message the item points at. NULL only for `agent_failed` (no
-   *  anchor message — pure `read_at` clearing). `mention` / `unread` carry the
-   *  anchor message id. */
+   *  anchor message — pure `read_at` clearing). */
   message_id: z.string().nullable(),
   /** The notification this item eliminates through (`notifications.read_at`).
-   *  Set for `mention` / `agent_failed`; NULL for `unread` (which clears via the
-   *  stream cursor). This is the source_ref-out for directed notification-backed
-   *  claims — the renderer marks read BY this id, never by parsing `id`. */
+   *  Set for `agent_failed`; NULL for `unread` (which clears via the stream
+   *  cursor). The renderer marks read BY this id, never by parsing `id`. */
   notification_id: z.string().nullable(),
   // NO conversation-classification field rides this DTO beyond
   // {@link ActivityLocationSchema}'s own discriminant — in particular no roster
@@ -359,8 +364,7 @@ export const ActivityItemDtoSchema = z.object({
 
   /** For a thread item (`thread_root_id != null`): a one-line excerpt of the
    *  thread's ROOT message, rendered above the reply `preview` so the row reads
-   *  root → reply. NULL for non-thread items (mainline unread, channel mention,
-   *  agent_failed) — there is no distinct root to show. */
+   *  root → reply. NULL for non-thread items — there is no distinct root to show. */
   thread_root_preview: z.string().nullable(),
   /** Short preview of the anchor (message excerpt / failure summary). For a
    *  thread item this is the REPLY content (paired with `thread_root_preview`). */
@@ -373,10 +377,13 @@ export const ActivityItemDtoSchema = z.object({
   preview_sender: MessageAuthorDtoSchema.nullable(),
   /** Recency used for the within-tier sort (epoch ms). */
   timestamp: z.number(),
-  /** `unread` items: count of ambient unread in the stream, already net of any
-   *  directed claims in it (§8 `positional \ directed`). NULL for directed
-   *  single-event items. */
+  /** `unread` items: the stream's unread messages — all of them when the stream
+   *  enters ambiently (DM, 所有消息 channel, followed thread), else only its
+   *  mentions. NULL for `agent_failed`. */
   unread_count: z.number().int().nonnegative().nullable(),
+  /** `unread` items: how many of them mention the viewer; a row with any is
+   *  `directed`. NULL for `agent_failed`. */
+  mention_count: z.number().int().nonnegative().nullable(),
 });
 export type ActivityItemDto = z.infer<typeof ActivityItemDtoSchema>;
 
@@ -460,3 +467,26 @@ export const ObserveDtoSchema = z.object({
   changed: z.boolean(),
 });
 export type ObserveDto = z.infer<typeof ObserveDtoSchema>;
+
+/** Why a message interrupts its reader (#task:3053): a fixed-roster line (direct pair
+ *  or a home channel), a mention of the reader, or a channel set to 所有消息 (main line
+ *  or a followed thread). */
+export const MESSAGE_ALERT_REASONS = ['direct', 'mention', 'ambient'] as const;
+
+/** The viewer-scoped `message_alert` event: one per message per reader it should
+ *  interrupt, decided by the server. Not stored; a reader offline at the time misses it. */
+export const MessageAlertSchema = z.object({
+  conversation_id: z.string(),
+  workspace_id: z.string().nullable(),
+  /** The channel's title; null for a direct line. */
+  conversation_title: z.string().nullable(),
+  message_id: z.string(),
+  thread_root_id: z.string().nullable(),
+  reason: z.enum(MESSAGE_ALERT_REASONS),
+  sender: MessageAuthorDtoSchema.nullable(),
+  /** Whitespace-collapsed body, at most 160 characters. */
+  excerpt: z.string(),
+});
+export type MessageAlert = z.infer<typeof MessageAlertSchema>;
+
+export const MESSAGE_ALERT_EVENT = 'message_alert';

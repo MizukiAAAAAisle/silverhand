@@ -160,13 +160,25 @@ async fn the_onboarding_writer_appends_one_complete_system_cluster() {
         "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
         "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1', \
          'human', 'Human', 0, 0)",
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
-         created_by_user_id) VALUES ('agent-1', 'alice', 'claude', 'host-1', 0, 0, 'Alice', \
-         'user-1')",
-        "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
-         endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, \
-         updated_at) VALUES ('pair-1', 'direct_pair', 'fixed', 'DM', 'open', 'agent', \
-         'agent-1', 'human', 'user-1', 0, 0)",
+        seed_agent!(
+            id = "agent-1",
+            name = "alice",
+            host_id = "host-1",
+            created_at = 0,
+            updated_at = 0,
+            display_name = "Alice",
+            created_by_user_id = "user-1",
+        ),
+        seed_direct_pair!(
+            id = "pair-1",
+            title = "DM",
+            endpoint_a_kind = "agent",
+            endpoint_a_id = "agent-1",
+            endpoint_b_kind = "human",
+            endpoint_b_id = "user-1",
+            created_at = 0,
+            updated_at = 0,
+        ),
     ] {
         sqlx::query(statement).execute(&mut conn).await.unwrap();
     }
@@ -266,25 +278,55 @@ async fn seed_onboarding_ensure_graph(path: &std::path::Path) -> MessagingStore 
         "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
         "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1', \
          'human', 'Human', 0, 0)",
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
-         created_by_user_id) VALUES ('agent-ws', 'wsagent', 'claude', 'host-1', 0, 0, 'Ws', \
-         'user-1')",
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
-         created_by_user_id) VALUES ('agent-dp', 'dpagent', 'claude', 'host-1', 0, 0, 'Dp', \
-         'user-1')",
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
-         created_by_user_id) VALUES ('agent-out', 'outagent', 'claude', 'host-1', 0, 0, 'Out', \
-         'user-1')",
+        seed_agent!(
+            id = "agent-ws",
+            name = "wsagent",
+            host_id = "host-1",
+            created_at = 0,
+            updated_at = 0,
+            display_name = "Ws",
+            created_by_user_id = "user-1",
+        ),
+        seed_agent!(
+            id = "agent-dp",
+            name = "dpagent",
+            host_id = "host-1",
+            created_at = 0,
+            updated_at = 0,
+            display_name = "Dp",
+            created_by_user_id = "user-1",
+        ),
+        seed_agent!(
+            id = "agent-out",
+            name = "outagent",
+            host_id = "host-1",
+            created_at = 0,
+            updated_at = 0,
+            display_name = "Out",
+            created_by_user_id = "user-1",
+        ),
         "INSERT INTO workspaces (id, name, name_key, created_at, updated_at) VALUES \
          ('workspace-1', 'Space', 'space', 0, 0)",
-        "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
-         title_key, status, visibility, created_at, updated_at, latest_message_seq) VALUES \
-         ('conv-ws', 'workspace-1', 'workspace', 'open', 'Chan', 'chan', 'open', 'private', 0, \
-         0, 3)",
-        "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
-         endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, \
-         updated_at, latest_message_seq) VALUES ('conv-dp', 'direct_pair', 'fixed', 'DM', \
-         'open', 'agent', 'agent-dp', 'human', 'user-1', 0, 0, 1)",
+        seed_channel!(
+            id = "conv-ws",
+            workspace_id = "workspace-1",
+            title = "Chan",
+            title_key = "chan",
+            created_at = 0,
+            updated_at = 0,
+            latest_message_seq = 3,
+        ),
+        seed_direct_pair!(
+            id = "conv-dp",
+            title = "DM",
+            endpoint_a_kind = "agent",
+            endpoint_a_id = "agent-dp",
+            endpoint_b_kind = "human",
+            endpoint_b_id = "user-1",
+            created_at = 0,
+            updated_at = 0,
+            latest_message_seq = 1,
+        ),
         "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES \
          ('conv-ws', 'agent-ws', 0)",
         // A genuine onboarding system message in each line: system from-kind, metadata that
@@ -527,11 +569,11 @@ async fn an_ensure_over_an_existing_row_leaves_its_delivery_columns_untouched() 
     let path = directory.path().join("ensure-idempotent.sqlite");
     let store = seed_onboarding_ensure_graph(&path).await;
 
-    // A prior delivery already ran: the row is delivered, once leased, and now failed.
+    // A prior delivery already ran: the row failed with a recorded reason.
     sqlx::query(
         "INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, \
-         delivered_at, failed_at, in_flight_owner, delivery_kind, created_at) VALUES \
-         ('conv-ws', 'agent-ws', 'msg-ws', 555, 777, 'daemon-9', 'turn', 111)",
+         failed_at, failed_reason, delivery_kind, created_at) VALUES \
+         ('conv-ws', 'agent-ws', 'msg-ws', 777, 'driver_refused', 'turn', 111)",
     )
     .execute(&store.pool)
     .await
@@ -545,8 +587,8 @@ async fn an_ensure_over_an_existing_row_leaves_its_delivery_columns_untouched() 
 
     // Still exactly one row, and every delivery-state column is exactly as the prior
     // delivery left it — the ON CONFLICT DO NOTHING wrote nothing new.
-    let row: (i64, Option<i64>, Option<i64>, Option<String>, String, i64) = sqlx::query_as(
-        "SELECT count(*) OVER (), delivered_at, failed_at, in_flight_owner, delivery_kind, \
+    let row: (i64, Option<i64>, Option<String>, String, i64) = sqlx::query_as(
+        "SELECT count(*) OVER (), failed_at, failed_reason, delivery_kind, \
          created_at FROM conversation_inboxes WHERE conversation_id = 'conv-ws' AND agent_id = \
          'agent-ws' AND message_id = 'msg-ws'",
     )
@@ -554,15 +596,14 @@ async fn an_ensure_over_an_existing_row_leaves_its_delivery_columns_untouched() 
     .await
     .unwrap();
     assert_eq!(row.0, 1, "the ensure created a duplicate row");
-    assert_eq!(row.1, Some(555), "delivered_at was reset");
-    assert_eq!(row.2, Some(777), "failed_at was reset");
+    assert_eq!(row.1, Some(777), "failed_at was reset");
     assert_eq!(
-        row.3.as_deref(),
-        Some("daemon-9"),
-        "the lease owner was reset"
+        row.2.as_deref(),
+        Some("driver_refused"),
+        "failed_reason was reset"
     );
-    assert_eq!(row.4, "turn");
-    assert_eq!(row.5, 111, "created_at was overwritten");
+    assert_eq!(row.3, "turn");
+    assert_eq!(row.4, 111, "created_at was overwritten");
 }
 
 /// The entitlement read must stay bounded by the NAMES A BODY USED. It runs while
@@ -689,12 +730,25 @@ async fn a_mixed_page_resolves_every_arm_through_one_batch_authority() {
         "INSERT INTO users (id, name, display_name, avatar_storage_key, avatar_content_type, \
          created_at, updated_at) VALUES ('user-1', 'human', 'Human', 'avatars/u.png', \
          'image/png', 0, 7)",
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
-         created_by_user_id) VALUES ('agent-1', 'lio', 'claude', 'host-1', 0, 0, 'Lio', \
-         'user-1')",
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
-         created_by_user_id) VALUES ('agent-2', 'cin', 'codex', 'host-1', 0, 0, 'Cin', \
-         'user-1')",
+        seed_agent!(
+            id = "agent-1",
+            name = "lio",
+            host_id = "host-1",
+            created_at = 0,
+            updated_at = 0,
+            display_name = "Lio",
+            created_by_user_id = "user-1",
+        ),
+        seed_agent!(
+            id = "agent-2",
+            name = "cin",
+            runtime = "codex",
+            host_id = "host-1",
+            created_at = 0,
+            updated_at = 0,
+            display_name = "Cin",
+            created_by_user_id = "user-1",
+        ),
     ] {
         sqlx::query(statement).execute(&mut db).await.unwrap();
     }
@@ -810,9 +864,16 @@ async fn one_broken_runtime_fails_the_whole_batch_with_its_source() {
          'human', 'Human', 0, 0)",
         // A stored runtime the domain does not accept — the DB has no CHECK on the
         // value, so this is exactly the data-invariant fault the store must own.
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, \
-         created_by_user_id) VALUES ('agent-bad', 'bad', 'aider', 'host-1', 0, 0, 'Bad', \
-         'user-1')",
+        seed_agent!(
+            id = "agent-bad",
+            name = "bad",
+            runtime = "aider",
+            host_id = "host-1",
+            created_at = 0,
+            updated_at = 0,
+            display_name = "Bad",
+            created_by_user_id = "user-1",
+        ),
     ] {
         sqlx::query(statement).execute(&mut db).await.unwrap();
     }
@@ -863,13 +924,25 @@ async fn the_two_participation_texts_agree_when_a_follower_no_longer_exists() {
         "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1', 'host', 'local', 0)",
         "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1', \
          'human', 'Human', 0, 0)",
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, \
-         display_name, created_by_user_id) VALUES ('agent-gone', 'gone', 'claude', 'host-1', \
-         0, 0, 'Gone', 'user-1')",
-        "INSERT INTO conversations (id, placement_kind, roster_policy, title, status, \
-         endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id, created_at, \
-         updated_at) VALUES ('pair-1', 'direct_pair', 'fixed', 'DM', 'open', 'agent', \
-         'agent-gone', 'human', 'user-1', 0, 0)",
+        seed_agent!(
+            id = "agent-gone",
+            name = "gone",
+            host_id = "host-1",
+            created_at = 0,
+            updated_at = 0,
+            display_name = "Gone",
+            created_by_user_id = "user-1",
+        ),
+        seed_direct_pair!(
+            id = "pair-1",
+            title = "DM",
+            endpoint_a_kind = "agent",
+            endpoint_a_id = "agent-gone",
+            endpoint_b_kind = "human",
+            endpoint_b_id = "user-1",
+            created_at = 0,
+            updated_at = 0,
+        ),
         "INSERT INTO messages (id, conversation_id, from_kind, content, seq, created_at) \
          VALUES ('root-000000000000', 'pair-1', 'system', 'anchor', 1, 0)",
         "INSERT INTO thread_followers (thread_root_id, conversation_id, principal_kind, \

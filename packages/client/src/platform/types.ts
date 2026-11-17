@@ -70,6 +70,20 @@ export interface NotificationCapability {
   setBadgeCount(count: number): Promise<void>;
 }
 
+/** One conversation with unread messages, as the menu bar lists it. */
+export interface MenuBarConversation {
+  id: string;
+  title: string;
+  /** The project a channel belongs to; omitted for direct messages. */
+  project?: string;
+  count: number;
+}
+
+export interface MenuBarCapability {
+  setConversations(items: MenuBarConversation[]): void;
+  onOpenConversation(handler: (conversationId: string) => void): () => void;
+}
+
 export interface FileCapability {
   openExternal(url: string): Promise<void>;
   /** Omitted when the host cannot hand attachment files to external apps. */
@@ -167,6 +181,119 @@ export interface AvatarMakerCapability {
   } | null>;
 }
 
+/** The phone's signed-out screen, drawn natively: a welcome scene with the
+ *  login, signup, password recovery and server address forms in sheets. The
+ *  page keeps the session calls, validation and every string, and declares the
+ *  whole screen; native keeps the fields and reports what was typed. */
+export interface AuthScreenAvatar {
+  parts: Record<string, number>;
+  bg: number;
+}
+export interface AuthScreenState {
+  dark: boolean;
+  brand: string;
+  headline: string;
+  headlineAccent: string;
+  scene: {
+    channel: string;
+    messages: { name: string; text: string; avatar: AuthScreenAvatar }[];
+    own: string;
+    typist: AuthScreenAvatar;
+  };
+  logInLabel: string;
+  /** Absent when the server takes no signups. */
+  createAccountLabel?: string;
+  privacy: { label: string; url: string };
+  /** Absent where the server address cannot be changed. */
+  server?: { url: string; label: string };
+  /** A check in flight, or why the server cannot take a sign-in. */
+  connection?:
+    | { kind: "checking"; label: string }
+    | {
+        kind: "failed";
+        title: string;
+        detail: string;
+        technical: string;
+        technicalLabel: string;
+        retryLabel?: string;
+      };
+  /** False while the server cannot take a sign-in. */
+  enabled: boolean;
+  sheet?: AuthScreenSheet;
+}
+export type AuthScreenSheet =
+  | {
+      kind: "login" | "signup";
+      title: string;
+      closeLabel: string;
+      submitLabel: string;
+      emailPlaceholder: string;
+      passwordPlaceholder: string;
+      forgotLabel?: string;
+      handlePlaceholder?: string;
+      /** Under the username: the problem when `handleInvalid`, otherwise a note. */
+      handleNote?: string;
+      handleInvalid?: boolean;
+      /** Fills the username until the person types one of their own. */
+      handleSuggestion?: string;
+      avatarCaption?: string;
+      /** The face the sheet opens with; native shuffles it from there. */
+      avatar?: AuthScreenAvatar;
+      /** The email the sheet opens with. */
+      email?: string;
+      minPasswordLength: number;
+      busy: boolean;
+      error?: string;
+      notice?: string;
+    }
+  | {
+      kind: "recovery";
+      title: string;
+      closeLabel: string;
+      /** `unavailable` when the server has recovery switched off. */
+      step: "email" | "reset" | "unavailable";
+      message?: string;
+      email: string;
+      emailPlaceholder: string;
+      sendLabel: string;
+      codePlaceholder: string;
+      passwordPlaceholder: string;
+      confirmPlaceholder: string;
+      resetLabel: string;
+      resendLabel: string;
+      backLabel: string;
+      busy: boolean;
+      error?: string;
+    }
+  | {
+      kind: "server";
+      title: string;
+      closeLabel: string;
+      url: string;
+      placeholder: string;
+      saveLabel: string;
+      busy: boolean;
+      error?: string;
+    };
+export type AuthScreenEvent =
+  | { kind: "open"; sheet: "login" | "signup" | "server" }
+  | { kind: "dismiss" }
+  | { kind: "input"; field: "email" | "handle"; value: string }
+  | { kind: "avatar"; config: AuthScreenAvatar }
+  | { kind: "submit"; email: string; password: string; handle?: string }
+  | { kind: "forgot"; email: string }
+  | { kind: "recoveryRequest"; email: string }
+  | { kind: "recoveryReset"; code: string; password: string; confirm: string }
+  | { kind: "recoveryBack" }
+  | { kind: "serverSave"; url: string }
+  | { kind: "retry" };
+export interface AuthScreenCapability {
+  /** Shows the screen, or updates the one showing. */
+  show(state: AuthScreenState): Promise<void>;
+  hide(): Promise<void>;
+  subscribe(handler: (event: AuthScreenEvent) => void): Promise<() => void>;
+}
+
 /** Installed once by an application entry point, before mounting the UI. */
 export interface ClientPlatform {
   /** A committed system Back request. True consumes exactly this request;
@@ -188,6 +315,9 @@ export interface ClientPlatform {
   toast?: ToastCapability;
   avatarMaker?: AvatarMakerCapability;
   contextMenu?: ContextMenuCapability;
+  authScreen?: AuthScreenCapability;
+  /** The system menu bar item lists conversations with unread messages. */
+  menuBar?: MenuBarCapability;
   /** Present only where the app can update itself. */
   appUpdate?: AppUpdateCapability;
   /** Native chrome (menus, tabs, sheets) follows the language the page resolved. */
@@ -328,7 +458,8 @@ export interface ComposerMenuItem {
   id: string;
   label: string;
   icon: string;
-  pick?: "photos" | "files";
+  /** `camera` is left out where the device has none. */
+  pick?: "photos" | "camera" | "files";
 }
 /** The composer, drawn natively over the page. The shared
  * UI keeps the draft, the send and every string; native edits the text and
@@ -396,7 +527,16 @@ export type ComposerEvent =
   | { kind: "add"; key: string; id: string }
   | { kind: "pick"; key: string; id: string }
   | { kind: "activity"; key: string; id: string }
-  | { kind: "files"; key: string; files: { name: string; type: string; base64: string }[] }
+  /** Files the user chose, announced before their bytes are read so their
+   * cards show at once; each later arrives in `files` under its `id`, or in
+   * `filesFailed`. */
+  | { kind: "filesPending"; key: string; files: { id: string; name: string; type: string }[] }
+  | {
+      kind: "files";
+      key: string;
+      files: { id?: string; name: string; type: string; base64: string }[];
+    }
+  | { kind: "filesFailed"; key: string; ids: string[] }
   /** Distances up from the bottom of the window to the composer's top: at
    * rest, at the height its text gives it (the keyboard included), and as
    * drawn; `picker` is the room the candidate list takes over it. */

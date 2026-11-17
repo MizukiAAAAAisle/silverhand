@@ -3,6 +3,7 @@ import { toast } from "@/lib/toast";
 import type { AttachmentSnapshot } from "@silverhand/shared";
 import { fetchAttachmentBytes } from "@/lib/api";
 import { t } from "@/lib/i18n";
+import { runAttachmentTask } from "./attachment-busy";
 
 /**
  * Save-as flow for a chat attachment. Fetches the bytes through the
@@ -24,20 +25,22 @@ export async function saveAttachmentToDisk(
   attachment: Pick<AttachmentSnapshot, "id" | "filename">,
   deps: SaveAttachmentDeps = defaultDeps,
 ): Promise<void> {
-  try {
-    const { bytes } = await deps.fetchBytes(attachment.id);
-    const result = await deps.save({ filename: attachment.filename, bytes });
-    if (result.ok) {
-      deps.toastSuccess(t("messages.saved"));
-      return;
+  await runAttachmentTask("save", attachment.id, async () => {
+    try {
+      const { bytes } = await deps.fetchBytes(attachment.id);
+      const result = await deps.save({ filename: attachment.filename, bytes });
+      if (result.ok) {
+        deps.toastSuccess(t("messages.saved"));
+        return;
+      }
+      if ("canceled" in result) return;
+      deps.toastError(t("messages.saveFailed", { reason: result.reason }));
+    } catch (err) {
+      deps.toastError(
+        t("messages.saveFailed", { reason: err instanceof Error ? err.message : String(err) }),
+      );
     }
-    if ("canceled" in result) return;
-    deps.toastError(t("messages.saveFailed", { reason: result.reason }));
-  } catch (err) {
-    deps.toastError(
-      t("messages.saveFailed", { reason: err instanceof Error ? err.message : String(err) }),
-    );
-  }
+  });
 }
 
 /** Injectable seam — production wiring below, tests supply mocks. */

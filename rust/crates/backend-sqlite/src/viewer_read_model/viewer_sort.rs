@@ -8,6 +8,7 @@
 //! one multi-row primitive and runs as a single `BEGIN IMMEDIATE` transaction —
 //! `order ⟹ manual` can never observe a torn state.
 
+use crate::foundation::conversation_lifecycle_sql::conversation_open;
 use silverhand_backend_core::foundation::identity::{ConversationId, WorkspaceId};
 use silverhand_backend_core::{
     foundation::identity::UserId,
@@ -239,7 +240,8 @@ async fn resolve_list_groups_tx(
     }
 }
 
-const SELECT_FAVORITE_KEYS_TX: &str = "\
+const SELECT_FAVORITE_KEYS_TX: &str = concat!(
+    "\
     SELECT use.entity_id AS entity_id \
       FROM user_sort_entry use \
       JOIN conversations c ON c.id = use.entity_id \
@@ -248,7 +250,9 @@ const SELECT_FAVORITE_KEYS_TX: &str = "\
      WHERE use.user_id = ? \
        AND use.list_key = 'channels:' || c.workspace_id \
        AND use.starred_at IS NOT NULL \
-       AND c.archived_at IS NULL \
+       AND ",
+    conversation_open!("c."),
+    " \
        AND w.archived_at IS NULL \
        AND ( \
          EXISTS (SELECT 1 FROM conversation_users cu \
@@ -264,7 +268,8 @@ const SELECT_FAVORITE_KEYS_TX: &str = "\
        AND use.list_key = 'direct_pairs' \
        AND use.starred_at IS NOT NULL \
        AND ((c.endpoint_a_kind = 'human' AND c.endpoint_a_id = ?) \
-         OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ?))";
+         OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = ?))"
+);
 
 const SELECT_VIEWER_DIRECT_PAIR_IDS_TX: &str = "\
     SELECT c.id AS id FROM conversations c \
@@ -733,15 +738,27 @@ mod tests {
 
     // A regular workspace `ws-1` (user-1 owner) with two OPEN public channels the
     // viewer can see. `conv-a`,`conv-b` are the live `channels:ws-1` group.
-    const SEED_SQL: &str = "\
-INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1','u','U',1,1); \
-INSERT INTO workspaces (id, name, name_key, description, owner_agent_id, owner_user_id, archived_at, created_at, updated_at) \
-  VALUES ('ws-1','W','w',NULL,NULL,'user-1',NULL,1,1); \
-INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws-1','user-1',1,'owner'); \
-INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, visibility, created_at, updated_at) \
-  VALUES ('conv-a','ws-1','workspace','open','A','a','idle','public',1,1); \
-INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, visibility, created_at, updated_at) \
-  VALUES ('conv-b','ws-1','workspace','open','B','b','idle','public',1,1);";
+    const SEED_SQL: &str = concat!(
+        "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1','u','U',1,1); ",
+        "INSERT INTO workspaces (id, name, name_key, description, owner_agent_id, owner_user_id, archived_at, created_at, updated_at) VALUES ('ws-1','W','w',NULL,NULL,'user-1',NULL,1,1); ",
+        "INSERT INTO workspace_users (workspace_id, user_id, joined_at, role) VALUES ('ws-1','user-1',1,'owner'); ",
+        seed_channel!(
+            id = "conv-a",
+            workspace_id = "ws-1",
+            title = "A",
+            title_key = "a",
+            visibility = "public",
+        ),
+        "; ",
+        seed_channel!(
+            id = "conv-b",
+            workspace_id = "ws-1",
+            title = "B",
+            title_key = "b",
+            visibility = "public",
+        ),
+        "; ",
+    );
 
     async fn open_seeded() -> (tempfile::TempDir, SqliteViewerSort, sqlx::SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
@@ -786,7 +803,15 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
         let (_dir, store, pool) = open_seeded().await;
         for statement in [
             "INSERT INTO hosts(id,name,kind,created_at) VALUES('host-1','Host','local',0)",
-            "INSERT INTO agents(id,name,display_name,runtime,host_id,created_by_user_id,created_at,updated_at) VALUES('agent-1','agent','Agent','claude','host-1','user-1',0,0)",
+            seed_agent!(
+                id = "agent-1",
+                name = "agent",
+                display_name = "Agent",
+                host_id = "host-1",
+                created_by_user_id = "user-1",
+                created_at = 0,
+                updated_at = 0,
+            ),
             "INSERT INTO workspaces(id,name,name_key,owner_agent_id,created_at,updated_at) VALUES('space-1','Space',NULL,'agent-1',0,0)",
             "INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) VALUES('ws-0','Earlier','earlier','user-1',0,0)",
             "INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES('space-1','user-1',0,'member'),('ws-0','user-1',0,'owner')",
@@ -1252,8 +1277,13 @@ INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, titl
         let (_dir, sort, pool) = open_seeded().await;
         for statement in [
             "INSERT INTO users (id,name,display_name,created_at,updated_at) VALUES ('user-2','v','V',1,1)",
-            "INSERT INTO conversations (id,placement_kind,roster_policy,title,status,visibility,created_at,updated_at,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id) \
-             VALUES ('dm-1','direct_pair','fixed','','idle','private',1,1,'human','user-1','human','user-2')",
+            seed_direct_pair!(
+                id = "dm-1",
+                endpoint_a_kind = "human",
+                endpoint_a_id = "user-1",
+                endpoint_b_kind = "human",
+                endpoint_b_id = "user-2",
+            ),
         ] {
             sqlx::query(statement).execute(&pool).await.unwrap();
         }

@@ -4,6 +4,7 @@
 //! `(archived_at IS NOT NULL) ASC, updated_at DESC` — the exact
 //! `listAgentVisibleChannels` query.
 
+use crate::foundation::conversation_lifecycle_sql::{conversation_archived, conversation_open};
 use silverhand_backend_core::{
     conversation_messaging::messaging::collaboration::agent_channel_list::{
         AgentChannelListRead, AgentListedChannel, ListChannelsRefusal, ListChannelsResult,
@@ -61,7 +62,8 @@ impl From<AgentChannelListError> for PersistenceFailure {
     }
 }
 
-const SELECT_AGENT_VISIBLE_CHANNELS: &str = "\
+const SELECT_AGENT_VISIBLE_CHANNELS: &str = concat!(
+    "\
     SELECT c.id AS id, c.title AS title, c.roster_policy AS roster_policy, \
            c.visibility AS visibility, c.archived_at AS archived_at, c.updated_at AS updated_at, \
            EXISTS (SELECT 1 FROM conversation_agents ca \
@@ -72,9 +74,14 @@ const SELECT_AGENT_VISIBLE_CHANNELS: &str = "\
          EXISTS (SELECT 1 FROM conversation_agents ca2 \
                   WHERE ca2.conversation_id = c.id AND ca2.agent_id = ?) \
          OR (c.placement_kind = 'workspace' AND c.roster_policy = 'open' \
-             AND c.visibility = 'public' AND c.archived_at IS NULL) \
+             AND c.visibility = 'public' AND ",
+    conversation_open!("c."),
+    ") \
        ) \
-     ORDER BY (c.archived_at IS NOT NULL) ASC, c.updated_at DESC";
+     ORDER BY (",
+    conversation_archived!("c."),
+    ") ASC, c.updated_at DESC"
+);
 
 impl AgentChannelListRead for SqliteAgentChannelList {
     async fn list_channels(
@@ -265,21 +272,60 @@ mod tests {
     // ws: agent-a member+cap; source conv `src` in ws (agent-a member). Channels:
     // `pub-open` (public open, non-member discovery), `priv-mem` (private, agent-a
     // member), `priv-other` (private, NOT agent-a — must not leak).
-    const SEED: &str = "\
-INSERT INTO users (id,name,display_name,created_at,updated_at) VALUES ('u1','u','U',1,1); \
-INSERT INTO hosts (id,name,kind,created_at) VALUES ('h1','H','local',1); \
-INSERT INTO agents (id,name,display_name,runtime,host_id,created_by_user_id,created_at,updated_at,session_scope) VALUES ('agent-a','alice','Alice','claude','h1','u1',1,1,'conversation'); \
-INSERT INTO agents (id,name,display_name,runtime,host_id,created_by_user_id,created_at,updated_at,session_scope) VALUES ('agent-b','bob','Bob','codex','h1','u1',1,1,'conversation'); \
-INSERT INTO workspaces (id,name,name_key,owner_agent_id,created_at,updated_at) VALUES ('ws','Team','team',NULL,1,1); \
-INSERT INTO workspace_members (workspace_id,agent_id,joined_at) VALUES ('ws','agent-a',1); \
-INSERT INTO workspace_agent_capabilities (workspace_id,agent_id,capability) VALUES ('ws','agent-a','read_messages'); \
-INSERT INTO conversations (id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES ('src','ws','workspace','open','Src','src','idle','private',1,1); \
-INSERT INTO conversation_agents (conversation_id,agent_id,joined_at) VALUES ('src','agent-a',1); \
-INSERT INTO conversations (id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES ('pub-open','ws','workspace','open','Pub','pub','idle','public',1,20); \
-INSERT INTO conversations (id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES ('priv-mem','ws','workspace','open','Mem','mem','idle','private',1,30); \
-INSERT INTO conversation_agents (conversation_id,agent_id,joined_at) VALUES ('priv-mem','agent-a',1); \
-INSERT INTO conversations (id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at) VALUES ('priv-other','ws','workspace','open','Other','other','idle','private',1,40); \
-INSERT INTO conversation_agents (conversation_id,agent_id,joined_at) VALUES ('priv-other','agent-b',1);";
+    const SEED: &str = concat!(
+        "INSERT INTO users (id,name,display_name,created_at,updated_at) VALUES ('u1','u','U',1,1); ",
+        "INSERT INTO hosts (id,name,kind,created_at) VALUES ('h1','H','local',1); ",
+        seed_agent!(
+            id = "agent-a",
+            name = "alice",
+            display_name = "Alice",
+            host_id = "h1",
+            created_by_user_id = "u1",
+        ),
+        "; ",
+        seed_agent!(
+            id = "agent-b",
+            name = "bob",
+            display_name = "Bob",
+            runtime = "codex",
+            host_id = "h1",
+            created_by_user_id = "u1",
+        ),
+        "; ",
+        "INSERT INTO workspaces (id,name,name_key,owner_agent_id,created_at,updated_at) VALUES ('ws','Team','team',NULL,1,1); ",
+        "INSERT INTO workspace_members (workspace_id,agent_id,joined_at) VALUES ('ws','agent-a',1); ",
+        "INSERT INTO workspace_agent_capabilities (workspace_id,agent_id,capability) VALUES ('ws','agent-a','read_messages'); ",
+        seed_channel!(id = "src", workspace_id = "ws", title = "Src"),
+        "; ",
+        "INSERT INTO conversation_agents (conversation_id,agent_id,joined_at) VALUES ('src','agent-a',1); ",
+        seed_channel!(
+            id = "pub-open",
+            workspace_id = "ws",
+            title = "Pub",
+            title_key = "pub",
+            visibility = "public",
+            updated_at = 20,
+        ),
+        "; ",
+        seed_channel!(
+            id = "priv-mem",
+            workspace_id = "ws",
+            title = "Mem",
+            title_key = "mem",
+            updated_at = 30,
+        ),
+        "; ",
+        "INSERT INTO conversation_agents (conversation_id,agent_id,joined_at) VALUES ('priv-mem','agent-a',1); ",
+        seed_channel!(
+            id = "priv-other",
+            workspace_id = "ws",
+            title = "Other",
+            title_key = "other",
+            updated_at = 40,
+        ),
+        "; ",
+        "INSERT INTO conversation_agents (conversation_id,agent_id,joined_at) VALUES ('priv-other','agent-b',1); ",
+    );
 
     async fn seeded() -> (tempfile::TempDir, SqliteAgentChannelList) {
         let dir = tempfile::tempdir().unwrap();

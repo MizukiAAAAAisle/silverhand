@@ -41,8 +41,8 @@ use silverhand_backend_core::{
     foundation::persistence::PersistenceFailure,
     host_runtime::aftermath::{CustodyEffectFailure, DaemonConnectionControl},
     host_runtime::runtime_credential::{
-        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeGeneration,
-        RuntimePrincipal, RuntimeScope,
+        ClaimRuntimeCustody, RuntimeCredentialHash, RuntimeCustodyPort, RuntimeEventTime,
+        RuntimeGeneration, RuntimePrincipal, RuntimeScope,
     },
     host_runtime::runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
@@ -80,7 +80,7 @@ use silverhand_backend_server::{
     host_runtime::host_control::runtime_catalog::{
         self, CatalogCoordinateMismatch, RuntimeCatalogOutcome, RuntimeCatalogRequest,
     },
-    host_runtime::host_control::status_seed::{SeedAttempt, SeedRead},
+    host_runtime::host_control::status_seed::{RefreshOutcome, SeedAttempt, SeedRead},
     host_runtime::host_control::status_snapshot::{
         self, SnapshotCoordinateMismatch, StatusSnapshotOutcome, StatusSnapshotRequest,
     },
@@ -233,6 +233,16 @@ async fn management_request(
     uri: &str,
     body: &'static str,
 ) -> (StatusCode, Value) {
+    management_request_as(app, "user-1", method, uri, body).await
+}
+
+async fn management_request_as(
+    app: &Router,
+    viewer: &str,
+    method: &str,
+    uri: &str,
+    body: &'static str,
+) -> (StatusCode, Value) {
     let mut request = Request::builder()
         .method(method)
         .uri(uri)
@@ -241,7 +251,7 @@ async fn management_request(
         .unwrap();
     request
         .extensions_mut()
-        .insert(UserId::parse("user-1").unwrap());
+        .insert(UserId::parse(viewer).unwrap());
     let response = app.clone().oneshot(request).await.unwrap();
     let status = response.status();
     let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -615,13 +625,14 @@ async fn seed_participants(db: &mut SqliteConnection) {
     .execute(&mut *db)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO agents (
-            id, name, runtime, host_id, created_at, updated_at,
-            display_name, created_by_user_id, session_scope
-         ) VALUES (?, 'agent-delivery', 'codex', 'host-1', 1, 1,
-             'Delivery Agent', 'user-1', 'conversation')",
-    )
+    sqlx::query(seed_agent!(
+        id = ?,
+        name = "agent-delivery",
+        runtime = "codex",
+        host_id = "host-1",
+        display_name = "Delivery Agent",
+        created_by_user_id = "user-1",
+    ))
     .bind(AGENT)
     .execute(&mut *db)
     .await
@@ -649,13 +660,12 @@ async fn seed_participants(db: &mut SqliteConnection) {
     .execute(&mut *db)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO conversations (
-            id, workspace_id, placement_kind, roster_policy, title, title_key,
-            status, created_at, updated_at
-         ) VALUES (?, 'workspace-1', 'workspace', 'open', 'Conversation One',
-             'conversation one', 'active', 1, 1)",
-    )
+    sqlx::query(seed_channel!(
+        id = ?,
+        workspace_id = "workspace-1",
+        title = "Conversation One",
+        title_key = "conversation one",
+    ))
     .bind(CONVERSATION)
     .execute(&mut *db)
     .await
@@ -861,6 +871,29 @@ async fn send_ready_with_name(
                 "instance_id": instance_id,
                 "host_descriptor": { "name": host_name, "kind": "remote" },
                 "capabilities": [],
+                "daemon_pid": 42,
+                "started_at": 100,
+            })
+            .to_string()
+            .into(),
+        ))
+        .await
+        .unwrap();
+}
+
+async fn send_ready_with_capabilities(socket: &mut Socket, capabilities: Value) {
+    socket
+        .send(Message::Text(
+            json!({
+                "direction": "daemon_to_server",
+                "type": "event",
+                "kind": "ready",
+                "protocol_version": OUTBOUND_PROTOCOL_VERSION,
+                "daemon_version": "test",
+                "daemon_id": "daemon-test",
+                "instance_id": "instance-test",
+                "host_descriptor": { "name": "Test host", "kind": "remote" },
+                "capabilities": capabilities,
                 "daemon_pid": 42,
                 "started_at": 100,
             })
@@ -2242,6 +2275,7 @@ async fn compatible_ready_cannot_finalize_or_settle_before_hydration_attaches() 
         .claim_or_current(ClaimRuntimeCustody::new(
             runtime_scope(),
             DaemonInstanceId::parse("instance-test").unwrap(),
+            RuntimeCredentialHash::of_plaintext("test-bearer-0"),
             RuntimeEventTime::from_unix_millis(10),
         ))
         .await
@@ -2680,7 +2714,7 @@ async fn ambiguous_disconnect_releases_the_lease_but_preserves_custody_for_hydra
 }
 
 #[tokio::test]
-async fn restart_hydration_stops_the_new_process_and_finalizes_old_daemon_custody() {
+async fn restart_hydration_keeps_a_process_whose_credential_survived() {
     let fixture = fixture("hydrate.sqlite").await;
     let custody = SqliteRuntimeCustodyStore::open(&fixture.path)
         .await
@@ -2688,7 +2722,8 @@ async fn restart_hydration_stops_the_new_process_and_finalizes_old_daemon_custod
     let principal = custody
         .claim_or_current(ClaimRuntimeCustody::new(
             runtime_scope(),
-            DaemonInstanceId::parse("previous-daemon").unwrap(),
+            DaemonInstanceId::parse("instance-test").unwrap(),
+            RuntimeCredentialHash::of_plaintext("test-bearer-1"),
             RuntimeEventTime::from_unix_millis(10),
         ))
         .await
@@ -2696,6 +2731,84 @@ async fn restart_hydration_stops_the_new_process_and_finalizes_old_daemon_custod
         .unwrap()
         .into_principal();
     assert_eq!(principal.custody().generation().as_i64(), 1);
+
+    let mut socket = connect(fixture.address).await;
+    send_ready(&mut socket, OUTBOUND_PROTOCOL_VERSION).await;
+    let status = next_json(&mut socket).await;
+    assert_eq!(status["kind"], "runtime_status");
+    respond(
+        &mut socket,
+        &status,
+        json!({
+            "runtimes": [{
+                "runtime_scope": {
+                    "kind": "conversation",
+                    "conversation_id": CONVERSATION,
+                    "agent_id": AGENT,
+                },
+                "conversation_id": CONVERSATION,
+                "agent_id": AGENT,
+                "runtime_generation": 1,
+                "pid": 7,
+                "phase": "ready",
+                "run_state": null,
+                "started_at": 100,
+            }]
+        }),
+    )
+    .await;
+    wait_for_attachment(&fixture.controller).await;
+    // Hydration would have stopped the runtime before attaching; the first
+    // post-attach frame is the ordinary host probe.
+    assert_eq!(next_json(&mut socket).await["kind"], "host_status");
+
+    let mut db = open(&fixture.path).await;
+    let slot = sqlx::query(
+        "SELECT generation, claimed_by_daemon_instance_id
+           FROM agent_runtime_slots
+          WHERE agent_id = ? AND conversation_id = ?",
+    )
+    .bind(AGENT)
+    .bind(CONVERSATION)
+    .fetch_one(&mut db)
+    .await
+    .unwrap();
+    assert_eq!(slot.get::<i64, _>("generation"), 1);
+    assert_eq!(
+        slot.get::<Option<String>, _>("claimed_by_daemon_instance_id")
+            .as_deref(),
+        Some("instance-test")
+    );
+
+    socket.close(None).await.unwrap();
+    fixture.controller.close().await;
+    fixture.server.abort();
+}
+
+#[tokio::test]
+async fn restart_hydration_stops_a_process_without_a_stored_credential() {
+    let fixture = fixture("hydrate.sqlite").await;
+    let custody = SqliteRuntimeCustodyStore::open(&fixture.path)
+        .await
+        .unwrap();
+    let principal = custody
+        .claim_or_current(ClaimRuntimeCustody::new(
+            runtime_scope(),
+            DaemonInstanceId::parse("instance-test").unwrap(),
+            RuntimeCredentialHash::of_plaintext("test-bearer-1"),
+            RuntimeEventTime::from_unix_millis(10),
+        ))
+        .await
+        .unwrap()
+        .unwrap()
+        .into_principal();
+    assert_eq!(principal.custody().generation().as_i64(), 1);
+    // A runtime started by a build that kept credentials only in memory.
+    let mut db = open(&fixture.path).await;
+    sqlx::query("DELETE FROM agent_runtime_credentials")
+        .execute(&mut db)
+        .await
+        .unwrap();
 
     let mut socket = connect(fixture.address).await;
     send_ready(&mut socket, OUTBOUND_PROTOCOL_VERSION).await;
@@ -2733,7 +2846,6 @@ async fn restart_hydration_stops_the_new_process_and_finalizes_old_daemon_custod
     .await;
     wait_for_attachment(&fixture.controller).await;
 
-    let mut db = open(&fixture.path).await;
     let slot = sqlx::query(
         "SELECT generation, claimed_by_daemon_instance_id
            FROM agent_runtime_slots
@@ -2946,6 +3058,39 @@ async fn the_unmounted_host_management_router_composes_sqlite_live_transport_and
     .await
     .unwrap();
 
+    sqlx::query(
+        "UPDATE agents SET model = 'gpt-5.6-sol', reasoning_effort = 'high', fast_mode = 1",
+    )
+    .execute(&mut db)
+    .await
+    .unwrap();
+    sqlx::query(concat!(
+        seed_agent!(
+            id = "agent-pending",
+            runtime = "codex",
+            host_id = "host-1",
+            created_at = 2,
+            updated_at = 2,
+            display_name = "Pending Agent",
+            created_by_user_id = "user-1",
+            materialization_status = "pending_materialization",
+        ),
+        "; ",
+        seed_agent!(
+            id = "agent-failed",
+            runtime = "codex",
+            host_id = "host-1",
+            created_at = 3,
+            updated_at = 3,
+            display_name = "Failed Agent",
+            created_by_user_id = "user-1",
+            materialization_status = "failed",
+        ),
+    ))
+    .execute(&mut db)
+    .await
+    .unwrap();
+
     let announcements = RecordingHostLabelChange::default();
     let app = management_app(&fixture, announcements.clone()).await;
 
@@ -2986,8 +3131,32 @@ async fn the_unmounted_host_management_router_composes_sqlite_live_transport_and
 
     let (status, body) = management_request(&app, "GET", "/api/hosts/host-1/status", "").await;
     assert_eq!(status, StatusCode::OK);
+    // Desktop 0.4.8 parses the owner body strictly; `view` must stay absent.
+    assert!(body.get("view").is_none());
     assert_eq!(body["availability"], "disconnected");
+    let listed = |body: &Value| -> Vec<String> {
+        body["agents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|agent| agent["agent_id"].as_str().unwrap().to_owned())
+            .collect()
+    };
+    // The owner keeps today's rows (failed hidden); a public reader sees active only.
+    assert_eq!(listed(&body), vec!["agent-delivery", "agent-pending"]);
+    let (status, public) =
+        management_request_as(&app, "u-stranger", "GET", "/api/hosts/host-1/status", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(public["view"], "public");
+    assert_eq!(listed(&public), vec!["agent-delivery"]);
     assert_eq!(body["agents"][0]["online"], "offline");
+    assert_eq!(body["agents"][0]["model"], "gpt-5.6-sol");
+    assert_eq!(body["agents"][0]["reasoning_effort"], "high");
+    assert_eq!(body["agents"][0]["fast_mode"], true);
+    let (status, refreshed) =
+        management_request(&app, "POST", "/api/hosts/host-1/status/refresh", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(refreshed, body);
 
     let (status, body) = management_request(&app, "POST", "/api/hosts/host-1/disconnect", "").await;
     assert_eq!(status, StatusCode::OK);
@@ -3003,6 +3172,53 @@ async fn the_unmounted_host_management_router_composes_sqlite_live_transport_and
     assert_eq!(body["availability"], "available");
     assert_eq!(body["snapshot"]["daemon_pid"], 4_242);
     assert_eq!(body["agents"][0]["online"], "offline");
+    assert!(body["snapshot"].get("hostname").is_none());
+
+    let refresh_app = app.clone();
+    let refresh = tokio::spawn(async move {
+        management_request(&refresh_app, "POST", "/api/hosts/host-1/status/refresh", "").await
+    });
+    let command = next_json(&mut daemon).await;
+    assert_eq!(command["kind"], "host_status");
+    assert_eq!(command["params"], json!({}));
+    let mut answer = machine_status(300);
+    answer["daemon_pid"] = json!(5_000);
+    respond(&mut daemon, &command, answer).await;
+    let (status, body) = refresh.await.unwrap();
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["availability"], "available");
+    assert_eq!(body["snapshot"]["daemon_pid"], 5_000);
+    assert_eq!(body["snapshot"]["memory_used_bytes"], 300);
+    assert_eq!(body["snapshot"]["disk_total_bytes"], 2_000);
+    assert!(body["snapshot"]["system_uptime_ms"].as_i64().unwrap() >= 60_000);
+    let (_, cached) = management_request(&app, "GET", "/api/hosts/host-1/status", "").await;
+    assert_eq!(cached["snapshot"]["daemon_pid"], 5_000);
+
+    // Any other signed-in human reads the public tier: OS only, agents kept.
+    let (status, public) =
+        management_request_as(&app, "u-stranger", "GET", "/api/hosts/host-1/status", "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        public,
+        json!({
+            "view": "public",
+            "availability": "available",
+            "host_id": "host-1",
+            "snapshot": { "os": "macOS 14.5" },
+            "agents": [cached["agents"][0].clone()],
+            "last_seen_at": cached["last_seen_at"],
+        })
+    );
+    // Refresh probes the daemon, so it stays the owner's.
+    let (status, _) = management_request_as(
+        &app,
+        "u-stranger",
+        "POST",
+        "/api/hosts/host-1/status/refresh",
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 
     let proxy_app = app.clone();
     let proxy_read = tokio::spawn(async move {
@@ -3214,6 +3430,88 @@ async fn the_seed_store_asks_the_attached_custody_and_every_handle_reads_what_it
     fixture.controller.close().await;
     viewer_events.close(None).await.unwrap();
     fixture.event_controller.close().await;
+    fixture.server.abort();
+}
+
+fn machine_status(memory_used: i64) -> Value {
+    json!({
+        "os": "macOS 14.5",
+        "daemon_pid": 4_242,
+        "daemon_version": "1.2.3",
+        "started_at": 1_700_000_000_000_i64,
+        "uptime_ms": 90_000,
+        "active_agent_ids": [],
+        "hostname": "studio.local",
+        "ip": "10.0.0.7",
+        "memory_total_bytes": 1_000,
+        "memory_used_bytes": memory_used,
+        "disk_total_bytes": 2_000,
+        "disk_used_bytes": 500,
+        "system_uptime_ms": 60_000,
+    })
+}
+
+#[tokio::test]
+async fn machine_facts_are_requested_by_capability_and_refreshed_on_demand() {
+    let fixture = fixture("host-status-machine.sqlite").await;
+    let seeds = fixture.controller.host_status_seeds();
+    let host = host_id("host-1");
+
+    let mut socket = connect(fixture.address).await;
+    send_ready_with_capabilities(&mut socket, json!(["host_status.machine.v1"])).await;
+    let hydrate = next_json(&mut socket).await;
+    assert_eq!(hydrate["kind"], "runtime_status");
+    respond(&mut socket, &hydrate, json!({ "runtimes": [] })).await;
+    wait_for_attached_count(&fixture.controller, 1).await;
+    let probe = next_json(&mut socket).await;
+    assert_eq!(probe["kind"], "host_status");
+    assert_eq!(probe["params"], json!({ "include_machine": true }));
+    respond(&mut socket, &probe, machine_status(100)).await;
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while !matches!(seeds.read(&host), Ok(SeedRead::Seeded(_))) {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+
+    let refreshing = tokio::spawn({
+        let seeds = seeds.clone();
+        let host = host.clone();
+        async move { seeds.refresh(&host).await }
+    });
+    let probe = next_json(&mut socket).await;
+    assert_eq!(probe["params"], json!({ "include_machine": true }));
+    respond(&mut socket, &probe, machine_status(900)).await;
+    assert_eq!(refreshing.await.unwrap(), Ok(RefreshOutcome::Refreshed));
+    let SeedRead::Seeded(status) = seeds.read(&host).unwrap() else {
+        panic!("a refreshed host reads seeded")
+    };
+    assert_eq!(status.machine.hostname.as_deref(), Some("studio.local"));
+    assert_eq!(
+        status.machine.memory.map(|usage| usage.used_bytes),
+        Some(900)
+    );
+    assert_eq!(
+        status.machine.disk.map(|usage| usage.total_bytes),
+        Some(2_000)
+    );
+    socket.close(None).await.unwrap();
+    wait_for_attached_count(&fixture.controller, 0).await;
+    assert_eq!(seeds.refresh(&host).await, Ok(RefreshOutcome::Disconnected));
+
+    // A daemon that did not advertise the capability is never asked for the facts.
+    let mut older = connect(fixture.address).await;
+    send_ready_with_capabilities(&mut older, json!([])).await;
+    let hydrate = next_json(&mut older).await;
+    respond(&mut older, &hydrate, json!({ "runtimes": [] })).await;
+    wait_for_attached_count(&fixture.controller, 1).await;
+    let probe = next_json(&mut older).await;
+    assert_eq!(probe["kind"], "host_status");
+    assert_eq!(probe["params"], json!({}));
+
+    older.close(None).await.unwrap();
+    fixture.controller.close().await;
     fixture.server.abort();
 }
 
@@ -5266,23 +5564,47 @@ async fn agent_slot_activity_is_shared_across_channels_and_dm_without_source_con
     let fixture = fixture("daemon-agent-slot-status.sqlite").await;
     let mut db = open(&fixture.path).await;
     sqlx::raw_sql(
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id, session_scope)
-         VALUES ('agent-aggregate', 'agent-aggregate', 'codex', 'host-1', 1, 1, 'Aggregate Agent', 'user-1', 'agent');
-         INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('workspace-1', 'agent-aggregate', 1);
-         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0001', 'agent-aggregate', 1);
-         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
-         VALUES ('conversation0002', 'workspace-1', 'workspace', 'fixed', 'Second', 'second', 'active', 1, 1);
-         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0002', 'agent-aggregate', 1);
-         INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES ('conversation0002', 'user-1', 1);
-         INSERT INTO conversations(id,placement_kind,roster_policy,title,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id,status,visibility,created_at,updated_at)
-         VALUES('activity-dm','direct_pair','fixed','','agent','agent-aggregate','human','user-1','idle','private',1,1);
-         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at)
-         VALUES('secret-origin','workspace-1','workspace','open','Secret','secret','idle','private',1,1);
-         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('secret-origin','agent-aggregate',1);
-         INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at)
-         VALUES ('aggregate-message', 'conversation0001', 'user', 'user-1', 'wake aggregate', 2, 2);
-         INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, created_at, delivery_kind)
-         VALUES ('conversation0001', 'agent-aggregate', 'aggregate-message', 2, 'turn');",
+        concat!(
+            seed_agent!(
+                id = "agent-aggregate",
+                runtime = "codex",
+                host_id = "host-1",
+                display_name = "Aggregate Agent",
+                created_by_user_id = "user-1",
+                session_scope = "agent",
+            ),
+            "; ",
+            "INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('workspace-1', 'agent-aggregate', 1); ",
+            "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0001', 'agent-aggregate', 1); ",
+            seed_channel!(
+                id = "conversation0002",
+                workspace_id = "workspace-1",
+                roster_policy = "fixed",
+                title = "Second",
+                title_key = "second",
+            ),
+            "; ",
+            "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0002', 'agent-aggregate', 1); ",
+            "INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES ('conversation0002', 'user-1', 1); ",
+            seed_direct_pair!(
+                id = "activity-dm",
+                endpoint_a_kind = "agent",
+                endpoint_a_id = "agent-aggregate",
+                endpoint_b_kind = "human",
+                endpoint_b_id = "user-1",
+            ),
+            "; ",
+            seed_channel!(
+                id = "secret-origin",
+                workspace_id = "workspace-1",
+                title = "Secret",
+                title_key = "secret",
+            ),
+            "; ",
+            "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('secret-origin','agent-aggregate',1); ",
+            "INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at) VALUES ('aggregate-message', 'conversation0001', 'user', 'user-1', 'wake aggregate', 2, 2); ",
+            "INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, created_at, delivery_kind) VALUES ('conversation0001', 'agent-aggregate', 'aggregate-message', 2, 'turn'); ",
+        ),
     )
     .execute(&mut db)
     .await
@@ -6029,24 +6351,48 @@ async fn agent_full_activity_has_one_http_ws_stream_across_focus_and_revocation(
     let fixture = fixture("daemon-agent-slot-status.sqlite").await;
     let mut db = open(&fixture.path).await;
     sqlx::raw_sql(
-        "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('stream-peer','stream-peer','Stream Peer',1,1);
-         INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id, session_scope)
-         VALUES ('agent-aggregate', 'agent-aggregate', 'codex', 'host-1', 1, 1, 'Aggregate Agent', 'stream-peer', 'agent');
-         INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('workspace-1', 'agent-aggregate', 1);
-         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0001', 'agent-aggregate', 1);
-         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
-         VALUES ('conversation0002', 'workspace-1', 'workspace', 'fixed', 'Second', 'second', 'active', 1, 1);
-         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0002', 'agent-aggregate', 1);
-         INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES ('conversation0002', 'user-1', 1);
-         INSERT INTO conversations(id,placement_kind,roster_policy,title,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id,status,visibility,created_at,updated_at)
-         VALUES('activity-dm','direct_pair','fixed','','agent','agent-aggregate','human','stream-peer','idle','private',1,1);
-         INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,visibility,created_at,updated_at)
-         VALUES('secret-origin','workspace-1','workspace','open','Secret','secret','idle','private',1,1);
-         INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('secret-origin','agent-aggregate',1);
-         INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at)
-         VALUES ('aggregate-message', 'conversation0001', 'user', 'user-1', 'wake aggregate', 2, 2);
-         INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, created_at, delivery_kind)
-         VALUES ('conversation0001', 'agent-aggregate', 'aggregate-message', 2, 'turn');",
+        concat!(
+            "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('stream-peer','stream-peer','Stream Peer',1,1); ",
+            seed_agent!(
+                id = "agent-aggregate",
+                runtime = "codex",
+                host_id = "host-1",
+                display_name = "Aggregate Agent",
+                created_by_user_id = "stream-peer",
+                session_scope = "agent",
+            ),
+            "; ",
+            "INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('workspace-1', 'agent-aggregate', 1); ",
+            "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0001', 'agent-aggregate', 1); ",
+            seed_channel!(
+                id = "conversation0002",
+                workspace_id = "workspace-1",
+                roster_policy = "fixed",
+                title = "Second",
+                title_key = "second",
+            ),
+            "; ",
+            "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0002', 'agent-aggregate', 1); ",
+            "INSERT INTO conversation_users (conversation_id, user_id, joined_at) VALUES ('conversation0002', 'user-1', 1); ",
+            seed_direct_pair!(
+                id = "activity-dm",
+                endpoint_a_kind = "agent",
+                endpoint_a_id = "agent-aggregate",
+                endpoint_b_kind = "human",
+                endpoint_b_id = "stream-peer",
+            ),
+            "; ",
+            seed_channel!(
+                id = "secret-origin",
+                workspace_id = "workspace-1",
+                title = "Secret",
+                title_key = "secret",
+            ),
+            "; ",
+            "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('secret-origin','agent-aggregate',1); ",
+            "INSERT INTO messages (id, conversation_id, from_kind, from_user_id, content, seq, created_at) VALUES ('aggregate-message', 'conversation0001', 'user', 'user-1', 'wake aggregate', 2, 2); ",
+            "INSERT INTO conversation_inboxes (conversation_id, agent_id, message_id, created_at, delivery_kind) VALUES ('conversation0001', 'agent-aggregate', 'aggregate-message', 2, 'turn'); ",
+        ),
     )
     .execute(&mut db)
     .await
@@ -6294,8 +6640,18 @@ async fn initial_and_refined_tool_inputs_share_ts_limits_in_both_activity_scopes
     for scope_kind in ["conversation", "agent"] {
         let fixture = fixture("input-limits.sqlite").await;
         let mut db = open(&fixture.path).await;
-        sqlx::query("INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,display_name,created_by_user_id,session_scope) VALUES('input-agent','input-agent','codex','host-1',1,1,'Input Agent','user-1',?)")
-            .bind(scope_kind).execute(&mut db).await.unwrap();
+        sqlx::query(seed_agent!(
+            id = "input-agent",
+            runtime = "codex",
+            host_id = "host-1",
+            display_name = "Input Agent",
+            created_by_user_id = "user-1",
+            session_scope = ?,
+        ))
+        .bind(scope_kind)
+        .execute(&mut db)
+        .await
+        .unwrap();
         sqlx::raw_sql("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('workspace-1','input-agent',1);
             INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('conversation0001','input-agent',1);
             INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at) VALUES('input-wake','conversation0001','user','user-1','wake',2,2);
@@ -6552,12 +6908,14 @@ async fn grok_pre_session_auth_error_reaches_durable_http_and_live_activity() {
 }
 
 async fn seed_grok_auth_agent(db: &mut SqliteConnection, scope_kind: &str) {
-    sqlx::query(
-        "INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,
-         display_name,created_by_user_id,session_scope)
-         VALUES('grok-auth-agent','grok-auth-agent','grok','host-1',1,1,
-         'Grok Auth','user-1',?)",
-    )
+    sqlx::query(seed_agent!(
+        id = "grok-auth-agent",
+        runtime = "grok",
+        host_id = "host-1",
+        display_name = "Grok Auth",
+        created_by_user_id = "user-1",
+        session_scope = ?,
+    ))
     .bind(scope_kind)
     .execute(&mut *db)
     .await

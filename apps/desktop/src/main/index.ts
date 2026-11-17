@@ -20,6 +20,9 @@ import type {
 import { SessionGeneration } from "@silverhand/client";
 import { classifyMeFetchOutcome, type SessionValidationResult } from "@silverhand/client";
 import { desktopDaemonLauncher } from "./local-host/daemon-launcher";
+import { markEmbeddedDockIcon } from "./shell/embedded-dock-icon";
+import { watchProcessHealth } from "./shell/process-health";
+import { createMenuBar, setMenuBarConversations, setMenuBarUnread } from "./shell/menu-bar.js";
 import {
   app,
   BrowserWindow,
@@ -1640,6 +1643,7 @@ async function bootstrap(): Promise<void> {
       },
       "logger initialized",
     );
+    watchProcessHealth(logger);
 
     const savedBootProfileView = readServerConnectionProfileViewOrNull({
       profilePath: desktopAppPaths().desktop.serverProfile,
@@ -1758,6 +1762,7 @@ async function bootstrap(): Promise<void> {
 
     const paths = daemonPaths();
     if (startupPlan.mode === "embedded") {
+      markEmbeddedDockIcon();
       await fsRm(paths.controlPlaneServerUrlPath, { force: true });
     }
     const daemonLauncher = resolveDaemonLauncher();
@@ -2210,6 +2215,31 @@ function checkForUpdatesFromMenu(): void {
   void appUpdate.check();
 }
 
+/** Brings the main window forward, recreating it if it was closed. */
+function showMainWindow(): void {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    createWindow();
+  }
+  const win = mainWindow;
+  if (!win) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  app.focus({ steal: true });
+}
+
+/** Sends to the main window's page once it has loaded, so a recreated window
+ *  still receives it. */
+function sendToRenderer(channel: string, ...args: unknown[]): void {
+  const win = mainWindow;
+  if (!win || win.isDestroyed()) return;
+  const send = (): void => {
+    if (!win.isDestroyed()) win.webContents.send(channel, ...args);
+  };
+  if (win.webContents.isLoading()) win.webContents.once("did-finish-load", send);
+  else send();
+}
+
 function openSettings(): void {
   if (!mainWindow || mainWindow.isDestroyed()) {
     createWindow();
@@ -2271,6 +2301,10 @@ function closeTargetFor(window: BrowserWindow): CloseTarget {
 function handleContextualClose(triggeringWindow: BrowserWindow): void {
   contextualClose.begin(closeTargetFor(triggeringWindow));
 }
+
+guardedIpc.on("menu-bar:set-conversations", (_event, items: unknown) => {
+  setMenuBarConversations(items);
+});
 
 guardedIpc.on("app:set-locale", (_event, value: unknown) => {
   if (setNativeLocale(value)) {
@@ -2648,6 +2682,14 @@ app
     );
     Menu.setApplicationMenu(buildAppMenu());
     createWindow();
+    createMenuBar({
+      remoteUrl: backend?.kind === "embedded" ? null : requireBackendUrl(),
+      openApp: showMainWindow,
+      openConversation: (conversationId) => {
+        showMainWindow();
+        sendToRenderer("menu-bar:open-conversation", conversationId);
+      },
+    });
     if (appUpdate) {
       appUpdate.subscribe((state) => mainWindow?.webContents.send(APP_UPDATE_STATE_CHANNEL, state));
       appUpdate.start();
@@ -2860,6 +2902,7 @@ app.on("before-quit", (event) => {
   // ~10s the shutdown takes, which looks like the app is still alive
   // with new messages waiting.
   app.setBadgeCount(0);
+  setMenuBarUnread(0);
 
   // Hard ceiling so a wedged shutdown can't hang the app forever.
   // Embedded startup/fatal/published ownership is drained before successful exit:

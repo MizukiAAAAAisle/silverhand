@@ -80,7 +80,8 @@ use silverhand_backend_core::{
     foundation::identity::{AgentId, ConversationId},
     foundation::persistence::PersistenceFailure,
     host_runtime::runtime_credential::{
-        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimePrincipal, RuntimeScope,
+        ClaimRuntimeCustody, RuntimeCredentialHash, RuntimeCustodyPort, RuntimeEventTime,
+        RuntimePrincipal, RuntimeScope,
     },
     host_runtime::{
         aftermath::DaemonConnectionControl, read::ComputerReadModel, rotation::DaemonRotationAck,
@@ -132,6 +133,7 @@ fn attach_for_command_test(
                 AttachedDaemon {
                     daemon_instance: instance,
                     host_name: host.as_str().to_owned(),
+                    reports_machine_facts: false,
                 },
             )
             .unwrap()
@@ -177,6 +179,7 @@ async fn command_metrics_observe_timeout_success_and_disconnection_once() {
         connection_id: "private-connection-id".to_owned(),
         daemon_instance: DaemonInstanceId::parse("instance-test").unwrap(),
         host_name: "private-name".into(),
+        reports_machine_facts: false,
         commands,
     };
     let encode = || command::host_status(json!({}));
@@ -222,6 +225,7 @@ async fn production_dequeue_to_wire_gate_drops_a_queued_set_after_its_budget_exp
         connection_id: "connection-1".to_owned(),
         daemon_instance: DaemonInstanceId::parse("instance-1").unwrap(),
         host_name: "host".to_owned(),
+        reports_machine_facts: false,
         commands,
     };
 
@@ -317,6 +321,7 @@ async fn production_status_adapter_never_re_resolves_captured_custody_by_host_an
                 AttachedDaemon {
                     daemon_instance: instance.clone(),
                     host_name: "host-a".to_owned(),
+                    reports_machine_facts: false,
                 },
             )
             .unwrap()
@@ -343,6 +348,7 @@ async fn production_status_adapter_never_re_resolves_captured_custody_by_host_an
                 AttachedDaemon {
                     daemon_instance: instance,
                     host_name: "host-b".to_owned(),
+                    reports_machine_facts: false,
                 },
             )
             .unwrap()
@@ -469,6 +475,7 @@ mod scope_runtime_stop_adapter {
                     AttachedDaemon {
                         daemon_instance: instance,
                         host_name: host.as_str().to_owned(),
+                        reports_machine_facts: false,
                     },
                 )
                 .unwrap()
@@ -1059,7 +1066,7 @@ mod run_states_same_owner {
     use silverhand_backend_core::{
         conversation_messaging::messaging::{
             collaboration::{
-                channel_directory::{ChannelStatus, ChannelVisibility, DirectoryRoster},
+                channel_directory::{ChannelVisibility, DirectoryRoster},
                 channel_lifecycle::{
                     ChannelDetailFact, ChannelDetailReadPort, ChannelDetailRefusal,
                     ChannelLifecycleRow,
@@ -1115,9 +1122,6 @@ mod run_states_same_owner {
                     WorkspaceId::parse("w").unwrap(),
                     DirectoryRoster::Open,
                     CanonicalConversationTitle::parse("General").unwrap(),
-                    ChannelStatus::Active,
-                    None,
-                    None,
                     None,
                     None,
                     0,
@@ -2002,6 +2006,27 @@ impl silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPo
     ) -> Result<bool, PersistenceFailure> {
         Ok(true)
     }
+
+    async fn authenticate(
+        &self,
+        _credential: RuntimeCredentialHash,
+    ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+        unreachable!("ClearCustody never authenticates custody")
+    }
+
+    async fn holds_credential(
+        &self,
+        _principal: RuntimePrincipal,
+    ) -> Result<bool, PersistenceFailure> {
+        unreachable!("ClearCustody never hydrates custody")
+    }
+
+    async fn revoke_credential(
+        &self,
+        _credential: RuntimeCredentialHash,
+    ) -> Result<(), PersistenceFailure> {
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -2420,6 +2445,27 @@ impl silverhand_backend_core::host_runtime::runtime_credential::RuntimeCustodyPo
         _finalization: silverhand_backend_core::host_runtime::runtime_credential::FinalizeRuntimeCustody,
     ) -> Result<bool, PersistenceFailure> {
         Ok(true)
+    }
+
+    async fn authenticate(
+        &self,
+        _credential: RuntimeCredentialHash,
+    ) -> Result<Option<RuntimePrincipal>, PersistenceFailure> {
+        unreachable!("StartCustody never authenticates custody")
+    }
+
+    async fn holds_credential(
+        &self,
+        _principal: RuntimePrincipal,
+    ) -> Result<bool, PersistenceFailure> {
+        unreachable!("StartCustody never hydrates custody")
+    }
+
+    async fn revoke_credential(
+        &self,
+        _credential: RuntimeCredentialHash,
+    ) -> Result<(), PersistenceFailure> {
+        Ok(())
     }
 }
 
@@ -2902,13 +2948,13 @@ async fn start_archive_fixture(path: &std::path::Path) -> sqlx::SqliteConnection
     .execute(&mut db)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO agents (
-            id, name, runtime, host_id, created_at, updated_at,
-            display_name, created_by_user_id, session_scope
-         ) VALUES ('agent-lease', 'agent-lease', 'codex', 'host-b', 1, 1,
-             'Lease Agent', 'user-1', 'conversation')",
-    )
+    sqlx::query(seed_agent!(
+        id = "agent-lease",
+        runtime = "codex",
+        host_id = "host-b",
+        display_name = "Lease Agent",
+        created_by_user_id = "user-1",
+    ))
     .execute(&mut db)
     .await
     .unwrap();
@@ -2927,13 +2973,12 @@ async fn start_archive_fixture(path: &std::path::Path) -> sqlx::SqliteConnection
     .execute(&mut db)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO conversations (
-            id, workspace_id, placement_kind, roster_policy, title, title_key,
-            status, created_at, updated_at
-         ) VALUES ('conversation0001', 'workspace-1', 'workspace', 'open',
-             'Conversation One', 'conversation one', 'active', 1, 1)",
-    )
+    sqlx::query(seed_channel!(
+        id = "conversation0001",
+        workspace_id = "workspace-1",
+        title = "Conversation One",
+        title_key = "conversation one",
+    ))
     .execute(&mut db)
     .await
     .unwrap();
@@ -3039,13 +3084,13 @@ async fn a_restarted_process_cannot_release_an_old_hosts_real_inbox_lease() {
     .execute(&mut db)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO agents (
-            id, name, runtime, host_id, created_at, updated_at,
-            display_name, created_by_user_id, session_scope
-         ) VALUES ('agent-lease', 'agent-lease', 'codex', 'host-b', 1, 1,
-             'Lease Agent', 'user-1', 'conversation')",
-    )
+    sqlx::query(seed_agent!(
+        id = "agent-lease",
+        runtime = "codex",
+        host_id = "host-b",
+        display_name = "Lease Agent",
+        created_by_user_id = "user-1",
+    ))
     .execute(&mut db)
     .await
     .unwrap();
@@ -3064,13 +3109,12 @@ async fn a_restarted_process_cannot_release_an_old_hosts_real_inbox_lease() {
     .execute(&mut db)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO conversations (
-            id, workspace_id, placement_kind, roster_policy, title, title_key,
-            status, created_at, updated_at
-         ) VALUES ('conversation0001', 'workspace-1', 'workspace', 'open',
-             'Conversation One', 'conversation one', 'active', 1, 1)",
-    )
+    sqlx::query(seed_channel!(
+        id = "conversation0001",
+        workspace_id = "workspace-1",
+        title = "Conversation One",
+        title_key = "conversation one",
+    ))
     .execute(&mut db)
     .await
     .unwrap();
@@ -3129,6 +3173,7 @@ async fn a_restarted_process_cannot_release_an_old_hosts_real_inbox_lease() {
         .claim_or_current(ClaimRuntimeCustody::new(
             scope,
             DaemonInstanceId::parse("daemon-old").unwrap(),
+            RuntimeCredentialHash::of_plaintext("test-bearer-0"),
             RuntimeEventTime::from_unix_millis(1),
         ))
         .await
@@ -3279,6 +3324,7 @@ fn attach_generation(
             AttachedDaemon {
                 daemon_instance: instance.clone(),
                 host_name: host.to_owned(),
+                reports_machine_facts: false,
             },
         )
         .expect("attach");
@@ -3333,6 +3379,7 @@ async fn a_generation_pinned_purge_refuses_a_reused_connection_with_a_new_instan
             AttachedDaemon {
                 daemon_instance: DaemonInstanceId::parse("instance-2").expect("instance"),
                 host_name: "host-1".to_owned(),
+                reports_machine_facts: false,
             },
         )
         .expect("re-attach");

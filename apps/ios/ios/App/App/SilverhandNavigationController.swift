@@ -53,6 +53,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
   private let names = ["chat", "activity", "tasks", "me"]
   private var session = ""
   private var entryKey = ""
+  /// The tab the last sync showed. A tap moves `selectedIndex` ahead of it.
+  private var syncedTab = 0
   private var invalidatedSessions = Set<String>()
   private var pendingBadges: (session: String, values: [Bool])?
   private var modalVersion = 0
@@ -176,6 +178,9 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     let bars: Bars
     let width: CGFloat
     let enabled: Bool
+    /// The bar's edge can settle a layout pass after the width does (Duo
+    /// unfolding), so it must redraw the titlebar on its own.
+    let vertical: Bool
   }
 
   /// What the selected page's navigation bar carries: the titlebar in the
@@ -192,7 +197,8 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       let host = stack.topViewController
     else { return }
     let next = AppliedBars(
-      host: ObjectIdentifier(host), bars: bars, width: view.bounds.width, enabled: !blocked)
+      host: ObjectIdentifier(host), bars: bars, width: view.bounds.width, enabled: !blocked,
+      vertical: verticalBarEdge != nil)
     // Layout passes call this too; rebuilding unchanged items would restart
     // their glass animations.
     guard next != appliedBars else {
@@ -297,7 +303,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     let top = view.safeAreaInsets.top
     let bottom: CGFloat
     if verticalBarEdge != nil, titlebar.state != nil {
-      // The panes' own 48pt headers clear the display's corners by their own
+      // The panes' own headers clear the display's corners by their own
       // padding, so they need only a small gap above.
       bottom = view.safeAreaInsets.top + 10
     } else if verticalBarEdge != nil {
@@ -416,7 +422,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     }
     applyBadges()
     let previousKey = entryKey
-    let previousTab = selectedIndex
+    let previousTab = syncedTab
     entryKey = call.getString("key") ?? ""
     modalVersion = call.getInt("modalVersion") ?? 0
     blocked = call.getBool("blocked") ?? false
@@ -433,6 +439,7 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
       selectedIndex = index
       attachContent(to: host)
     }
+    syncedTab = selectedIndex
     // A page pushed or popped within the tab takes the tab bar with it.
     let moved = selectedIndex == previousTab && entryKey != previousKey && !previousKey.isEmpty
     hideBar(!visible || blocked, animated: moved && !UIAccessibility.isReduceMotionEnabled)
@@ -598,7 +605,9 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     requestedVisible = false
     blocked = false
     hideBar(true, animated: false)
-    presentedViewController?.dismiss(animated: false)
+    if !(presentedViewController is AuthWelcomeController) {
+      presentedViewController?.dismiss(animated: false)
+    }
   }
 
   // MARK: Composer
@@ -715,8 +724,13 @@ final class SilverhandNavigationController: UITabBarController, UITabBarControll
     onIntent?([
       "session": session, "modalVersion": modalVersion, "kind": "tab", "target": names[index],
     ])
-    // Selection is acknowledged exclusively through shared state sync.
-    return false
+    // Re-tapping the current tab is the page's own pop-to-root; nothing moves.
+    guard index != selectedIndex, let host = page(index) else { return false }
+    // UIKit animates the selection only when it makes it itself; one set from
+    // sync after the round trip jumps. Sync stays the authority: it confirms
+    // this index, or puts the previous one back when the page refuses.
+    attachContent(to: host)
+    return true
   }
 
   /// The Me tab shows the viewer's avatar; without one it keeps the asset glyph.

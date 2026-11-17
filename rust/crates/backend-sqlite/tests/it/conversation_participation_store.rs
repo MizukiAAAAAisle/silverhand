@@ -28,12 +28,22 @@ async fn seed(path: &std::path::Path) {
     )
     .await
     .unwrap();
-    db.execute(
-        "INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,\
-         status,visibility,created_at,updated_at) VALUES \
-         ('workspace-private','workspace','workspace','open','Private','private','idle','private',1,1),\
-         ('workspace-public','workspace','workspace','open','Public','public','idle','public',1,1)",
-    )
+    db.execute(concat!(
+        seed_channel!(
+            id = "workspace-private",
+            workspace_id = "workspace",
+            title = "Private",
+            title_key = "private",
+        ),
+        "; ",
+        seed_channel!(
+            id = "workspace-public",
+            workspace_id = "workspace",
+            title = "Public",
+            title_key = "public",
+            visibility = "public",
+        ),
+    ))
     .await
     .unwrap();
     db.execute(
@@ -42,11 +52,13 @@ async fn seed(path: &std::path::Path) {
     )
     .await
     .unwrap();
-    db.execute(
-        "INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,endpoint_a_kind,\
-         endpoint_a_id,endpoint_b_kind,endpoint_b_id,title,title_key,status,visibility,created_at,updated_at) \
-         VALUES('pair',NULL,'direct_pair','fixed','human','peer','human','viewer','',NULL,'idle','private',1,1)",
-    )
+    db.execute(seed_direct_pair!(
+        id = "pair",
+        endpoint_a_kind = "human",
+        endpoint_a_id = "peer",
+        endpoint_b_kind = "human",
+        endpoint_b_id = "viewer",
+    ))
     .await
     .unwrap();
     db.close().await.unwrap();
@@ -149,12 +161,12 @@ async fn orphan_workspace_and_malformed_selected_row_fail_before_success() {
     db.execute("PRAGMA ignore_check_constraints=ON")
         .await
         .unwrap();
-    db.execute("UPDATE conversations SET status='smuggled' WHERE id='workspace-private'")
+    db.execute("UPDATE conversations SET visibility='smuggled' WHERE id='workspace-private'")
         .await
         .unwrap();
     assert!(read.read(&viewer, &conversation).await.is_err());
 
-    db.execute("UPDATE conversations SET status='idle' WHERE id='workspace-private'")
+    db.execute("UPDATE conversations SET visibility='private' WHERE id='workspace-private'")
         .await
         .unwrap();
     assert!(read.read(&viewer, &conversation).await.unwrap().is_ok());

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_TABS,
   addTab,
+  adjacentTabKey,
   firstTabKey,
   isDefaultTabs,
   isRemovable,
@@ -228,8 +229,23 @@ describe("parseTab / parseTabs — reject non-conforming, repair builtins", () =
 describe("isDefaultTabs", () => {
   it("is true only for the untouched default order", () => {
     expect(isDefaultTabs([...DEFAULT_TABS])).toBe(true);
-    expect(isDefaultTabs([chat, tasks])).toBe(true);
-    expect(isDefaultTabs([tasks, chat])).toBe(false); // reordered builtins must persist
-    expect(isDefaultTabs([chat, tasks, att("a")])).toBe(false);
+    expect(isDefaultTabs([chat, tasks, panel("threads"), panel("attachments")])).toBe(true);
+    expect(isDefaultTabs([chat, tasks])).toBe(false); // closed default panels must persist
+    expect(isDefaultTabs([tasks, chat, panel("threads"), panel("attachments")])).toBe(false);
+    expect(isDefaultTabs([...DEFAULT_TABS, att("a")])).toBe(false);
+  });
+});
+
+describe("adjacentTabKey", () => {
+  const tabs = [chat, tasks, panel("threads")];
+
+  it("steps forward and back in strip order, wrapping at both ends", () => {
+    expect(adjacentTabKey(tabs, "chat", 1)).toBe("tasks");
+    expect(adjacentTabKey(tabs, tabKey(panel("threads")), 1)).toBe("chat");
+    expect(adjacentTabKey(tabs, "chat", -1)).toBe(tabKey(panel("threads")));
+  });
+
+  it("starts from the first tab when the active key is gone", () => {
+    expect(adjacentTabKey(tabs, "missing", 1)).toBe("tasks");
   });
 });

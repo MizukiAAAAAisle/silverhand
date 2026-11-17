@@ -82,7 +82,7 @@ it.each([
     const host = document.createElement("div");
     const root = createRoot(host);
     function Consumer() {
-      useNotificationToasts(conversation);
+      useNotificationToasts({ conversationId: conversation, threadRootId: null });
       return null;
     }
     const settle = async () => {
@@ -119,7 +119,7 @@ it.each([
   },
 );
 
-it("notifies once for a genuinely unread mention delivered by the viewer stream", async () => {
+it("notifies once through message_alert while the unread mention row remains an Activity/badge input", async () => {
   const unread = mentionRow({ id: "new", message_id: "new-message", read_at: null });
   let rows: NotificationDto[] = [];
   show.mockClear();
@@ -133,7 +133,7 @@ it("notifies once for a genuinely unread mention delivered by the viewer stream"
   const host = document.createElement("div");
   const root = createRoot(host);
   function Consumer() {
-    useNotificationToasts(null);
+    useNotificationToasts({ conversationId: null, threadRootId: null });
     return null;
   }
   const settle = async () => {
@@ -160,8 +160,29 @@ it("notifies once for a genuinely unread mention delivered by the viewer stream"
       payload: { kind: "mention_self", conversation_id: "channel", message_id: "new-message" },
     } as ServerFrame);
     await settle();
+    expect(show).not.toHaveBeenCalled(); // A list refresh cannot duplicate the message alert.
+    await act(async () =>
+      stream.listener!({
+        type: "event",
+        scope: "viewer:me",
+        epoch: "one",
+        seq: 2,
+        kind: "message_alert",
+        payload: {
+          conversation_id: "channel",
+          workspace_id: "ws-1",
+          conversation_title: "Channel",
+          message_id: "new-message",
+          thread_root_id: null,
+          reason: "mention",
+          sender: null,
+          excerpt: "hello",
+        },
+      } as ServerFrame),
+    );
+    await settle();
     expect(show).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ force: true, notificationId: "new" }),
+      expect.objectContaining({ force: true, notificationId: "alert:new-message" }),
     );
   } finally {
     await act(async () => root.unmount());

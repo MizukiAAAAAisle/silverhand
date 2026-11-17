@@ -1,10 +1,11 @@
 //! SQLite authority for the tiered badge and per-workspace mode cold faces.
 
+use crate::foundation::conversation_lifecycle_sql::conversation_open;
 use crate::{
     conversation_messaging::messaging::MessagingStore,
     viewer_read_model::unread_read::{
-        CHANNEL_DEFAULT_MODE, UnreadReadModelError, attention_badge_counts, directed_claim_count,
-        effective_directed_mention,
+        CHANNEL_DEFAULT_MODE, UnreadReadModelError, attention_badge_counts,
+        direct_pair_badge_count, directed_claim_count, effective_directed_mention,
     },
 };
 use silverhand_backend_core::{
@@ -38,7 +39,9 @@ const CHANNEL_TIERS: &str = concat!(
     ") AS directed_unread_count FROM conversations c JOIN conversation_users cu ON \
      cu.conversation_id=c.id AND cu.user_id=(SELECT viewer FROM p) WHERE \
      c.workspace_id=(SELECT workspace FROM p) AND c.placement_kind='workspace' AND \
-     c.roster_policy='open' AND c.id IS NOT NULL AND c.archived_at IS NULL ORDER BY \
+     c.roster_policy='open' AND c.id IS NOT NULL AND ",
+    conversation_open!("c."),
+    " ORDER BY \
      c.created_at ASC, c.id ASC"
 );
 
@@ -113,6 +116,9 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
             let badge_rows = attention_badge_counts(&mut tx, viewer)
                 .await
                 .map_err(AttentionProjectionStoreError::from)?;
+            let direct_pairs = direct_pair_badge_count(&mut tx, viewer)
+                .await
+                .map_err(AttentionProjectionStoreError::from)?;
             let muted_rows = sqlx::query(MUTED_VISIBLE_WORKSPACES)
                 .bind(viewer.as_str())
                 .bind(viewer.as_str())
@@ -143,15 +149,18 @@ impl AttentionProjectionPort for SqliteAttentionProjection {
                     .map_err(|_| AttentionProjectionStoreError::MalformedIdentity)?;
                 muted_workspaces.push(workspace);
             }
-            let projected = AttentionBadgeRollup::projected(by_workspace, muted_workspaces)
-                .map_err(|error| match error {
-                    AttentionBadgeProjectionError::DuplicateWorkspace => {
-                        AttentionProjectionStoreError::DuplicateWorkspace
-                    }
-                    AttentionBadgeProjectionError::TotalOverflow => {
-                        AttentionProjectionStoreError::TotalOverflow
-                    }
-                })?;
+            let direct_pairs = AttentionCount::new(direct_pairs)
+                .map_err(|_| AttentionProjectionStoreError::MalformedCount)?;
+            let projected =
+                AttentionBadgeRollup::projected(by_workspace, direct_pairs, muted_workspaces)
+                    .map_err(|error| match error {
+                        AttentionBadgeProjectionError::DuplicateWorkspace => {
+                            AttentionProjectionStoreError::DuplicateWorkspace
+                        }
+                        AttentionBadgeProjectionError::TotalOverflow => {
+                            AttentionProjectionStoreError::TotalOverflow
+                        }
+                    })?;
             Ok(projected)
         }
         .await;

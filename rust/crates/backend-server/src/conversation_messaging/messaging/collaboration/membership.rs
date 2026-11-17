@@ -292,14 +292,6 @@ where
             )
             .await;
         }
-        Ok(ConversationAgentRemovalPreflight::Closed) => {
-            return mutation(
-                ConversationMemberMutation::Closed,
-                MutationOperation::RemoveAgent,
-                &state.aftermath,
-            )
-            .await;
-        }
         Ok(ConversationAgentRemovalPreflight::Forbidden) => {
             return mutation(
                 ConversationMemberMutation::Forbidden,
@@ -511,11 +503,6 @@ async fn mutation<A: ConversationMembershipAftermath>(
                     "conversation_member_remove_unsupported"
                 }
             }),
-        ),
-        ConversationMemberMutation::Closed => response(
-            StatusCode::CONFLICT,
-            "conversation is closed",
-            Some("conversation_closed"),
         ),
         ConversationMemberMutation::Forbidden => response(StatusCode::FORBIDDEN, "forbidden", None),
         ConversationMemberMutation::CandidateNotFound => match operation {
@@ -850,13 +837,57 @@ mod tests {
         db.execute("INSERT INTO hosts(id,name,kind,created_at) VALUES('host','host','local',1)")
             .await
             .unwrap();
-        db.execute("INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id,display_name,session_scope) VALUES('caller','caller','codex','host',1,1,'owner','Caller','agent'),('peer','peer','codex','host',1,1,'owner','Peer','conversation')").await.unwrap();
+        db.execute(concat!(
+            seed_agent!(
+                id = "caller",
+                runtime = "codex",
+                host_id = "host",
+                created_by_user_id = "owner",
+                display_name = "Caller",
+                session_scope = "agent",
+            ),
+            "; ",
+            seed_agent!(
+                id = "peer",
+                runtime = "codex",
+                host_id = "host",
+                created_by_user_id = "owner",
+                display_name = "Peer",
+            ),
+        ))
+        .await
+        .unwrap();
         db.execute("INSERT INTO workspaces(id,name,name_key,created_at,updated_at,owner_user_id) VALUES('workspace','Workspace','workspace',1,1,'owner')").await.unwrap();
         db.execute("INSERT INTO workspace_users(workspace_id,user_id,joined_at,role) VALUES('workspace','owner',1,'owner'),('workspace','member',2,'member'),('workspace','target',3,'member')").await.unwrap();
         db.execute("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('workspace','caller',1),('workspace','peer',2)").await.unwrap();
         db.execute("INSERT INTO workspace_agent_capabilities(workspace_id,agent_id,capability) VALUES('workspace','caller','manage_conversation_members')").await.unwrap();
-        db.execute("INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,created_at,updated_at,visibility) VALUES('public','workspace','workspace','open','Public','public','idle',1,1,'public')").await.unwrap();
-        db.execute("INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,endpoint_a_kind,endpoint_a_id,endpoint_b_kind,endpoint_b_id,title,status,created_at,updated_at,visibility) VALUES('caller-pair',NULL,'direct_pair','fixed','agent','caller','human','owner','','idle',1,1,'private'),('foreign-pair',NULL,'direct_pair','fixed','agent','peer','human','target','','idle',1,1,'private')").await.unwrap();
+        db.execute(seed_channel!(
+            id = "public",
+            workspace_id = "workspace",
+            title = "Public",
+            visibility = "public",
+        ))
+        .await
+        .unwrap();
+        db.execute(concat!(
+            seed_direct_pair!(
+                id = "caller-pair",
+                endpoint_a_kind = "agent",
+                endpoint_a_id = "caller",
+                endpoint_b_kind = "human",
+                endpoint_b_id = "owner",
+            ),
+            "; ",
+            seed_direct_pair!(
+                id = "foreign-pair",
+                endpoint_a_kind = "agent",
+                endpoint_a_id = "peer",
+                endpoint_b_kind = "human",
+                endpoint_b_id = "target",
+            ),
+        ))
+        .await
+        .unwrap();
         db.execute("INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES('public','owner',1),('public','member',2)").await.unwrap();
         db.execute("INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('public','caller',1),('public','peer',2)").await.unwrap();
         db.close().await.unwrap();
@@ -943,7 +974,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn agent_remove_classifies_fixed_and_closed_before_nonparticipant_visibility() {
+    async fn agent_remove_classifies_a_fixed_roster_as_unsupported() {
         let fixed = public_call(
             Method::DELETE,
             "/api/conversations/foreign-pair/members/agents/peer",
@@ -956,37 +987,6 @@ mod tests {
             serde_json::from_slice(&to_bytes(fixed.into_body(), usize::MAX).await.unwrap())
                 .unwrap();
         assert_eq!(fixed_json["code"], "conversation_member_remove_unsupported");
-
-        let (_dir, database) = route_fixture().await;
-        let mut db = sqlx::SqliteConnection::connect(&format!("sqlite://{}", database.display()))
-            .await
-            .unwrap();
-        db.execute("UPDATE conversations SET closed_at=50 WHERE id='public'")
-            .await
-            .unwrap();
-        db.execute(
-            "DELETE FROM conversation_users WHERE conversation_id='public' AND user_id='owner'",
-        )
-        .await
-        .unwrap();
-        db.close().await.unwrap();
-        let store = MessagingStore::open(&database).await.unwrap();
-        let response = public_router(store, Clock, Effects::default())
-            .layer(Extension(UserId::parse("owner").unwrap()))
-            .oneshot(
-                Request::builder()
-                    .method(Method::DELETE)
-                    .uri("/api/conversations/public/members/agents/peer")
-                    .body(Body::empty())
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CONFLICT);
-        let json: serde_json::Value =
-            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
-                .unwrap();
-        assert_eq!(json["code"], "conversation_closed");
     }
 
     #[tokio::test]
@@ -1043,7 +1043,17 @@ mod tests {
             .await
             .unwrap();
         db.execute("INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('same-human','same','Same Human',1,1)").await.unwrap();
-        db.execute("INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,created_by_user_id,display_name,session_scope) VALUES('same-agent','same','codex','host',1,1,'owner','Same Agent','agent')").await.unwrap();
+        db.execute(seed_agent!(
+            id = "same-agent",
+            name = "same",
+            runtime = "codex",
+            host_id = "host",
+            created_by_user_id = "owner",
+            display_name = "Same Agent",
+            session_scope = "agent",
+        ))
+        .await
+        .unwrap();
         db.execute("INSERT INTO workspace_members(workspace_id,agent_id,joined_at) VALUES('workspace','same-agent',1)").await.unwrap();
         db.close().await.unwrap();
         let store = MessagingStore::open(&database).await.unwrap();

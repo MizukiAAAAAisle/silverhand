@@ -105,9 +105,14 @@ mod tests {
 
     fn seed_agent(id: &str) -> String {
         format!(
-            "INSERT INTO agents (id, name, display_name, runtime, host_id, \
-             materialization_status, session_scope, created_by_user_id, created_at, updated_at) \
-             VALUES ('{id}', '{id}', '{id}', 'codex', 'h1', 'active', 'conversation', 'u1', 1, 1)"
+            seed_agent!(
+                id = "{id}",
+                display_name = "{id}",
+                runtime = "codex",
+                host_id = "h1",
+                created_by_user_id = "u1",
+            ),
+            id = id
         )
     }
 
@@ -122,9 +127,17 @@ mod tests {
 
     fn seed_conversation(id: &str, ws: &str, title: &str, created_at: i64) -> String {
         format!(
-            "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, \
-             title_key, status, created_at, updated_at) \
-             VALUES ('{id}', '{ws}', 'workspace', 'fixed', '{title}', '{id}', 'idle', {created_at}, 1)"
+            seed_channel!(
+                id = "{id}",
+                workspace_id = "{ws}",
+                roster_policy = "fixed",
+                title = "{title}",
+                created_at = ["{created_at}"],
+            ),
+            id = id,
+            ws = ws,
+            title = title,
+            created_at = created_at
         )
     }
 
@@ -149,9 +162,15 @@ mod tests {
         seed.push(seed_conversation("foreign", "home-other", "Onboarding", 0));
         // A non-onboarding fixed channel that must NOT be picked.
         seed.push(seed_conversation("dm-a1", "home-one", "dm-a1", 1));
-        seed.push("INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, \
-                   title, title_key, status, created_at, updated_at) VALUES \
-                   ('open-onb', 'home-one', 'workspace', 'open', 'Onboarding', 'open-onb', 'idle', 2, 1)".into());
+        seed.push(
+            seed_channel!(
+                id = "open-onb",
+                workspace_id = "home-one",
+                title = "Onboarding",
+                created_at = 2,
+            )
+            .into(),
+        );
         seed.push(seed_conversation("onb-a1", "home-one", "Onboarding", 3));
         seed.push(seed_conversation("later-onb", "home-one", "Onboarding", 4));
         let store = open(&dir, "home-dm.db", &seed).await;

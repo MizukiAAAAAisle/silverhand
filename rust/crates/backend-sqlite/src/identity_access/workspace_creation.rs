@@ -291,8 +291,8 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
         // (5) Onboarding channel + founding roster (all current workspace users + each
         // member agent), same tx.
         sqlx::query(
-            "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, visibility, created_at, updated_at) \
-             VALUES (?, ?, 'workspace', 'open', 'Onboarding', 'onboarding', 'idle', 'private', ?, ?)",
+            "INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, visibility, created_at, updated_at) \
+             VALUES (?, ?, 'workspace', 'open', 'Onboarding', 'onboarding', 'private', ?, ?)",
         )
         .bind(onboarding_channel_id.as_str())
         .bind(workspace_id.as_str())
@@ -413,24 +413,20 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
         let face = decode_created_face(&row)?;
 
         // Read the committed onboarding-channel facts back in the SAME tx:
-        // the 201 body reflects the STORED visibility/title/status (an
+        // the 201 body reflects the STORED visibility/title (an
         // onboarding conversation is `private`) rather than a hard-coded literal that
         // could drift from the insert.
-        let channel_row =
-            sqlx::query("SELECT visibility, title, status FROM conversations WHERE id = ?")
-                .bind(onboarding_channel_id.as_str())
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(WorkspaceCreationStoreError::from)?
-                .ok_or(WorkspaceCreationStoreError::CommittedWorkspaceMissing)?;
+        let channel_row = sqlx::query("SELECT visibility, title FROM conversations WHERE id = ?")
+            .bind(onboarding_channel_id.as_str())
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(WorkspaceCreationStoreError::from)?
+            .ok_or(WorkspaceCreationStoreError::CommittedWorkspaceMissing)?;
         let channel_visibility: String = channel_row
             .try_get("visibility")
             .map_err(WorkspaceCreationStoreError::from)?;
         let channel_title: String = channel_row
             .try_get("title")
-            .map_err(WorkspaceCreationStoreError::from)?;
-        let channel_status: String = channel_row
-            .try_get("status")
             .map_err(WorkspaceCreationStoreError::from)?;
 
         tx.commit()
@@ -453,7 +449,6 @@ impl WorkspaceCreationWrite for SqliteWorkspaceCreation {
                     workspace: workspace_id,
                     visibility: channel_visibility,
                     title: channel_title,
-                    status: channel_status,
                     created_at: now_ms,
                     updated_at: now_ms,
                 },
@@ -634,14 +629,28 @@ mod tests {
     const CURRENT_SCHEMA: &str =
         include_str!("../../../../../rust/test-fixtures/migration-baseline/schema-current.sql");
 
-    const SEED_SQL: &str = "\
-INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1','owner','Owner',1,1); \
-INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-2','member','Member',1,1); \
-INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1','Host','local',1); \
-INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id, created_at, updated_at, session_scope) \
-  VALUES ('agent-a','alice','Alice','claude','host-1','user-1',1,1,'conversation'); \
-INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id, created_at, updated_at, session_scope) \
-  VALUES ('agent-b','bob','Bob','codex','host-1','user-1',1,1,'conversation');";
+    const SEED_SQL: &str = concat!(
+        "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-1','owner','Owner',1,1); ",
+        "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-2','member','Member',1,1); ",
+        "INSERT INTO hosts (id, name, kind, created_at) VALUES ('host-1','Host','local',1); ",
+        seed_agent!(
+            id = "agent-a",
+            name = "alice",
+            display_name = "Alice",
+            host_id = "host-1",
+            created_by_user_id = "user-1",
+        ),
+        "; ",
+        seed_agent!(
+            id = "agent-b",
+            name = "bob",
+            display_name = "Bob",
+            runtime = "codex",
+            host_id = "host-1",
+            created_by_user_id = "user-1",
+        ),
+        "; ",
+    );
 
     async fn open_seeded() -> (tempfile::TempDir, SqliteWorkspaceCreation, sqlx::SqlitePool) {
         let dir = tempfile::tempdir().unwrap();
@@ -1061,7 +1070,6 @@ INSERT INTO agents (id, name, display_name, runtime, host_id, created_by_user_id
         // witness the 201 body is built from say so (never a hard-coded "public").
         assert_eq!(p.onboarding_channel.visibility, "private");
         assert_eq!(p.onboarding_channel.title, "Onboarding");
-        assert_eq!(p.onboarding_channel.status, "idle");
         let stored_visibility: String =
             sqlx::query_scalar("SELECT visibility FROM conversations WHERE id = ?")
                 .bind(p.onboarding_channel.channel.as_str())

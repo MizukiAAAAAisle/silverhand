@@ -69,8 +69,15 @@ function isPanelTabKind(value: unknown): value is PanelTabKind {
 const BUILTIN_KINDS = ["chat", "tasks"] as const;
 type BuiltinKind = (typeof BUILTIN_KINDS)[number];
 
-/** The default order for a conversation with no persisted layout. */
-export const DEFAULT_TABS: readonly Tab[] = [{ kind: "chat" }, { kind: "tasks" }];
+/** The default order for a viewer with no persisted layout. Threads and
+ *  Attachments open by default but stay removable panel tabs, so a viewer who
+ *  closes them keeps that choice. */
+export const DEFAULT_TABS: readonly Tab[] = [
+  { kind: "chat" },
+  { kind: "tasks" },
+  { kind: "panel", panel: "threads" },
+  { kind: "panel", panel: "attachments" },
+];
 
 /** True for tabs the viewer may close. Builtins are non-removable; custom tabs
  *  (attachment previewers and panel surfaces) can be removed from a
@@ -180,6 +187,18 @@ export function resolveActiveTabKey(
 ): string {
   if (desiredKey && tabs.some((t) => tabKey(t) === desiredKey)) return desiredKey;
   return firstTabKey(tabs);
+}
+
+/**
+ * The tab `delta` steps from the active one, wrapping at both ends, so the
+ * keyboard cycles the strip in its visible order.
+ */
+export function adjacentTabKey(tabs: readonly Tab[], activeKey: string, delta: number): string {
+  if (tabs.length === 0) return activeKey;
+  const index = tabs.findIndex((t) => tabKey(t) === activeKey);
+  const base = index < 0 ? 0 : index;
+  const next = (((base + delta) % tabs.length) + tabs.length) % tabs.length;
+  return tabKey(tabs[next]!);
 }
 
 /**

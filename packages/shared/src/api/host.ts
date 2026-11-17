@@ -2,7 +2,13 @@
 // Bounded context: host. Re-exported via api/index.ts → @silverhand/shared.
 import { z } from 'zod';
 import { DAEMON_ADMISSION } from '../daemon-admission.generated.js';
-import { HostKindSchema, HostProvisioningSourceSchema, RuntimeKindSchema } from '../db/schema.js';
+import {
+  FastModeSchema,
+  HostKindSchema,
+  HostProvisioningSourceSchema,
+  ReasoningEffortTokenSchema,
+  RuntimeKindSchema,
+} from '../db/schema.js';
 
 export const HostLifecycleStatusSchema = z.enum(['pending', 'attached', 'active', 'revoked']);
 export type HostLifecycleStatus = z.infer<typeof HostLifecycleStatusSchema>;
@@ -90,6 +96,20 @@ export const HostDtoSchema = z.object({
 });
 export type HostDto = z.infer<typeof HostDtoSchema>;
 
+/** The public tier of `GET /api/hosts/{id}`: what any signed-in human on the
+ *  server may read. Restricted fields are absent, not null. */
+export const HostPublicDtoSchema = HostDtoSchema.pick({
+  id: true,
+  name: true,
+  display_label: true,
+  kind: true,
+  status: true,
+  creator_user_id: true,
+  created_at: true,
+  last_seen_at: true,
+});
+export type HostPublicDto = z.infer<typeof HostPublicDtoSchema>;
+
 /** `PATCH /api/hosts/:id` rename input. Currently only `display_label`
  *  is mutable; `name` is the stable identifier and never changes after
  *  claim. Pass `null` to clear the custom label (renderer falls back to
@@ -167,11 +187,9 @@ export const HOST_WS_CLOSE_REASON_DISCONNECTED = 'host_disconnected';
  *  retryable. */
 export const HOST_WS_CLOSE_REASON_UPDATE_REQUIRED = DAEMON_ADMISSION.updateRequiredCloseReason;
 
-export const HostConnectionChangedEventSchema = z
-  .object({
-    host_id: z.string(),
-  })
-  .strict();
+export const HostConnectionChangedEventSchema = z.object({
+  host_id: z.string(),
+});
 export type HostConnectionChangedEvent = z.infer<typeof HostConnectionChangedEventSchema>;
 
 /** #task:1588 slice 2 — WS event kind published on `viewer:{ownerUserId}`
@@ -182,11 +200,9 @@ export type HostConnectionChangedEvent = z.infer<typeof HostConnectionChangedEve
  *  never become a second source of truth. */
 export const HOST_AGENT_LIVENESS_CHANGED_EVENT = 'host_agent_liveness_changed';
 
-export const HostAgentLivenessChangedEventSchema = z
-  .object({
-    host_id: z.string(),
-  })
-  .strict();
+export const HostAgentLivenessChangedEventSchema = z.object({
+  host_id: z.string(),
+});
 export type HostAgentLivenessChangedEvent = z.infer<typeof HostAgentLivenessChangedEventSchema>;
 
 export const HostUnreachableReasonSchema = z.enum([
@@ -221,15 +237,13 @@ export type HostUnreachableReason = z.infer<typeof HostUnreachableReasonSchema>;
  * actionable copy needs them: which version the machine offers vs which
  * one this server requires.
  */
-export const HostAdmissionFailureSchema = z
-  .object({
-    kind: z.literal('protocol_mismatch'),
-    offered_protocol_version: z.number().int().nonnegative(),
-    expected_protocol_version: z.number().int().nonnegative(),
-    /** Epoch ms of the refused attempt. */
-    observed_at: z.number(),
-  })
-  .strict();
+export const HostAdmissionFailureSchema = z.object({
+  kind: z.literal('protocol_mismatch'),
+  offered_protocol_version: z.number().int().nonnegative(),
+  expected_protocol_version: z.number().int().nonnegative(),
+  /** Epoch ms of the refused attempt. */
+  observed_at: z.number(),
+});
 export type HostAdmissionFailure = z.infer<typeof HostAdmissionFailureSchema>;
 
 /** Per-agent registration entry returned at the top level of every
@@ -265,6 +279,11 @@ export const AgentOnHostDtoSchema = z.object({
    *  unconditionally (`buildAgentRows` in routes.ts); the tolerance
    *  here is only the receive-side safety net. */
   avatar_url: z.string().nullable().optional().default(null),
+  /** Same values as `AgentDto`; the viewer may not have this agent in its
+   *  cache (someone else's computer). Skew-tolerant like `avatar_url`. */
+  model: z.string().nullable().optional().default(null),
+  reasoning_effort: ReasoningEffortTokenSchema.nullable().optional().default(null),
+  fast_mode: FastModeSchema.nullable().optional().default(null),
   /** Narrow UI state derived backend-side: 'online' iff this agent's id
    *  appears in the daemon's active-runtime set for this host. Raw
    *  daemon phase strings stay daemon-side; renderer never branches on
@@ -289,7 +308,20 @@ export const HostStatusSnapshotSchema = z.object({
   daemon_version: z.string(),
   daemon_pid: z.number().int(),
   started_at: z.number().int(),
+  /** Daemon process uptime. */
   uptime_ms: z.number().int(),
+  /** Machine facts read live per status RPC. All optional: older daemons
+   *  omit them, and a fact the daemon cannot read is omitted, not zeroed. */
+  hostname: z.string().optional(),
+  /** IPv4 of the default-route interface (not the egress/public IP). */
+  ip: z.string().optional(),
+  memory_total_bytes: z.number().int().nonnegative().optional(),
+  memory_used_bytes: z.number().int().nonnegative().optional(),
+  /** System volume (`/`), not the daemon's working directory. */
+  disk_total_bytes: z.number().int().nonnegative().optional(),
+  disk_used_bytes: z.number().int().nonnegative().optional(),
+  /** Machine uptime since boot. */
+  system_uptime_ms: z.number().int().nonnegative().optional(),
 });
 export type HostStatusSnapshot = z.infer<typeof HostStatusSnapshotSchema>;
 
@@ -324,48 +356,48 @@ export type HostStatusSnapshot = z.infer<typeof HostStatusSnapshotSchema>;
  *                    agents all offline (registrations stay visible until
  *                    the user deletes the host); `last_seen_at` optional.
  */
-const HostStatusAvailableArmSchema = z
-  .object({
-    host_id: z.string(),
-    availability: z.literal('available'),
-    snapshot: HostStatusSnapshotSchema,
-    agents: z.array(AgentOnHostDtoSchema),
-    last_seen_at: z.number().nullable().optional(),
-  })
-  .strict();
+const HostStatusAvailableArmSchema = z.object({
+  host_id: z.string(),
+  /** Absent from older backends; absent or `privileged` mean the same. */
+  view: z.literal('privileged').optional(),
+  availability: z.literal('available'),
+  snapshot: HostStatusSnapshotSchema,
+  agents: z.array(AgentOnHostDtoSchema),
+  last_seen_at: z.number().nullable().optional(),
+});
 
-const HostStatusDisconnectedArmSchema = z
-  .object({
-    host_id: z.string(),
-    availability: z.literal('disconnected'),
-    agents: z.array(AgentOnHostDtoSchema),
-    last_seen_at: z.number().nullable().optional(),
-    /** #task:1631 — present only when the last authenticated connection
-     *  attempt was refused for a known terminal reason (today: wire
-     *  protocol mismatch). Absent = ordinary offline. See
-     *  {@link HostAdmissionFailureSchema}. */
-    admission_failure: HostAdmissionFailureSchema.optional(),
-  })
-  .strict();
+const HostStatusDisconnectedArmSchema = z.object({
+  host_id: z.string(),
+  /** Absent from older backends; absent or `privileged` mean the same. */
+  view: z.literal('privileged').optional(),
+  availability: z.literal('disconnected'),
+  agents: z.array(AgentOnHostDtoSchema),
+  last_seen_at: z.number().nullable().optional(),
+  /** #task:1631 — present only when the last authenticated connection
+   *  attempt was refused for a known terminal reason (today: wire
+   *  protocol mismatch). Absent = ordinary offline. See
+   *  {@link HostAdmissionFailureSchema}. */
+  admission_failure: HostAdmissionFailureSchema.optional(),
+});
 
-const HostStatusUnreachableArmSchema = z
-  .object({
-    host_id: z.string(),
-    availability: z.literal('unreachable'),
-    reason: HostUnreachableReasonSchema,
-    agents: z.array(AgentOnHostDtoSchema),
-    last_seen_at: z.number().nullable().optional(),
-  })
-  .strict();
+const HostStatusUnreachableArmSchema = z.object({
+  host_id: z.string(),
+  /** Absent from older backends; absent or `privileged` mean the same. */
+  view: z.literal('privileged').optional(),
+  availability: z.literal('unreachable'),
+  reason: HostUnreachableReasonSchema,
+  agents: z.array(AgentOnHostDtoSchema),
+  last_seen_at: z.number().nullable().optional(),
+});
 
-const HostStatusRevokedArmSchema = z
-  .object({
-    host_id: z.string(),
-    availability: z.literal('revoked'),
-    agents: z.array(AgentOnHostDtoSchema),
-    last_seen_at: z.number().nullable().optional(),
-  })
-  .strict();
+const HostStatusRevokedArmSchema = z.object({
+  host_id: z.string(),
+  /** Absent from older backends; absent or `privileged` mean the same. */
+  view: z.literal('privileged').optional(),
+  availability: z.literal('revoked'),
+  agents: z.array(AgentOnHostDtoSchema),
+  last_seen_at: z.number().nullable().optional(),
+});
 
 export const HostStatusResponseSchema = z.discriminatedUnion('availability', [
   HostStatusAvailableArmSchema,
@@ -375,27 +407,59 @@ export const HostStatusResponseSchema = z.discriminatedUnion('availability', [
 ]);
 export type HostStatusResponse = z.infer<typeof HostStatusResponseSchema>;
 
+/** The public tier of a running computer's facts: OS only, never hostname,
+ *  address, resources, or daemon process facts. */
+export const HostStatusPublicSnapshotSchema = HostStatusSnapshotSchema.pick({
+  os: true,
+  os_arch: true,
+});
+export type HostStatusPublicSnapshot = z.infer<typeof HostStatusPublicSnapshotSchema>;
+
+const publicArmBase = {
+  host_id: z.string(),
+  view: z.literal('public'),
+  agents: z.array(AgentOnHostDtoSchema),
+  last_seen_at: z.number().nullable().optional(),
+};
+
+/** Public tier of `GET /api/hosts/{id}/status`: same arms, without the
+ *  snapshot detail, the unreachable reason, or the admission failure. */
+export const HostStatusPublicResponseSchema = z.discriminatedUnion('availability', [
+  z.object({
+    ...publicArmBase,
+    availability: z.literal('available'),
+    snapshot: HostStatusPublicSnapshotSchema,
+  }),
+  z.object({ ...publicArmBase, availability: z.literal('disconnected') }),
+  z.object({ ...publicArmBase, availability: z.literal('unreachable') }),
+  z.object({ ...publicArmBase, availability: z.literal('revoked') }),
+]);
+export type HostStatusPublicResponse = z.infer<typeof HostStatusPublicResponseSchema>;
+
+/** `GET /api/hosts/{id}/status` as any signed-in viewer reads it. */
+export const HostStatusReadResponseSchema = z.union([
+  HostStatusResponseSchema,
+  HostStatusPublicResponseSchema,
+]);
+export type HostStatusReadResponse = z.infer<typeof HostStatusReadResponseSchema>;
+
 export const HostProxyConfigSchema = z.object({
   proxy_url: z.string().nullable(),
   proxy_runtimes: z.array(RuntimeKindSchema),
 });
 export type HostProxyConfig = z.infer<typeof HostProxyConfigSchema>;
 
-export const HostProxyConfigResponseSchema = z
-  .object({
-    config: HostProxyConfigSchema,
-  })
-  .strict();
+export const HostProxyConfigResponseSchema = z.object({
+  config: HostProxyConfigSchema,
+});
 export type HostProxyConfigResponse = z.infer<typeof HostProxyConfigResponseSchema>;
 
 export const HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE = 'computer_offline';
 
-export const HostProxyConfigOfflineResponseSchema = z
-  .object({
-    error: z.string(),
-    error_code: z.literal(HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE),
-  })
-  .strict();
+export const HostProxyConfigOfflineResponseSchema = z.object({
+  error: z.string(),
+  error_code: z.literal(HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE),
+});
 export type HostProxyConfigOfflineResponse = z.infer<typeof HostProxyConfigOfflineResponseSchema>;
 
 export const HostClaimOrCreateInputSchema = z
@@ -455,12 +519,22 @@ export const HostConnectTokenResolveResponseSchema = z.object({
 });
 export type HostConnectTokenResolveResponse = z.infer<typeof HostConnectTokenResolveResponseSchema>;
 
-/** `GET /api/hosts/{id}` owner-scoped host read. Unlike the bulk list, this
+/** `GET /api/hosts/{id}`. `view` names the tier; a body without it is the
+ *  privileged shape older backends returned. For the owner, unlike the bulk list, this
  *  may return a modal-scoped setup draft so the Add computer flow can observe
  *  `pending → attached → active` without exposing drafts in the sidebar. */
-export const HostGetResponseSchema = z.object({
+export const HostPrivilegedGetResponseSchema = z.object({
+  view: z.literal('privileged').default('privileged'),
   host: HostDtoSchema,
 });
+export const HostPublicGetResponseSchema = z.object({
+  view: z.literal('public'),
+  host: HostPublicDtoSchema,
+});
+export const HostGetResponseSchema = z.union([
+  HostPrivilegedGetResponseSchema,
+  HostPublicGetResponseSchema,
+]);
 export type HostGetResponse = z.infer<typeof HostGetResponseSchema>;
 
 /** `DELETE /api/hosts/{id}` user-managed computer delete. The same route covers

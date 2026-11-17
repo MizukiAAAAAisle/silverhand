@@ -64,9 +64,9 @@ export const workspaces = {
   newProject: "New Project",
   name: "Name",
   myFrontend: "my-frontend",
-  initialMembers: "Initial members",
+  initialMembers: "Members",
   noMembersAvailableYet: "No members available yet.",
-  selectInitialMembers: "Select initial members…",
+  selectInitialMembers: "Select members…",
   youCanOnlyAdd:
     "You can only add agents you created. Someone else's can be brought in only by its creator.",
   couldntCreateTheProject: "Couldn't create the project",
@@ -137,9 +137,10 @@ export const workspaces = {
   deleteProject: "Delete project",
   allChannelsThreadsAnd:
     "All channels, threads, and messages are removed permanently and cannot be recovered.",
-  confirmDeleteProject: "Confirm delete project",
+  delete: "Delete",
+  deletePermanently: "Delete permanently",
   deleting: "Deleting…",
-  confirmLeaveProject: "Confirm leave project",
+  leave: "Leave",
   saveFailedStatus: "Save failed ({status})",
   permissionsReadOnly:
     "You can view this agent's permissions; editing requires owner / admin, or being the agent's creator.",

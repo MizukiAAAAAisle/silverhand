@@ -1,15 +1,15 @@
 import { getPlatform } from "@/platform";
 import { fetchAttachmentBytes } from "@/lib/api";
-import { useEffect, useRef, useState } from "react";
-import { DocumentIcon, DownloadIcon, ViewIcon } from "@/icons";
+import { useState, type ReactNode } from "react";
+import { DocumentIcon, ViewIcon } from "@/icons";
 import type { AttachmentSnapshot } from "@silverhand/shared";
 import { resolveAttachmentLabels } from "@silverhand/shared";
 import {
-  getAttachmentBlobUrl,
-  loadAttachmentBlobUrl,
-  useAttachmentBlobToken,
-} from "@/features/attachments/attachment-blob-cache";
+  attachmentImageUrl,
+  useAttachmentImage,
+} from "@/features/attachments/use-attachment-image";
 import { Lightbox } from "./lightbox";
+import { AttachmentDownloadGlyph, AttachmentTaskGlyph } from "./attachment-task-glyph";
 import { saveAttachmentToDisk } from "../model/save-attachment";
 import { openAttachmentExternally } from "../model/open-attachment";
 import { attachmentPreviewKind } from "@/features/attachments/attachment-preview";
@@ -17,12 +17,16 @@ import { t } from "@/lib/i18n";
 
 export function AttachmentList({
   attachments,
-  alignRight,
+  lead,
   canExport = true,
   onOpenAttachment,
 }: {
   attachments: AttachmentSnapshot[];
-  alignRight: boolean;
+  /** Leads the strip as its first item, so it sits right before the first tile
+   *  on either side: an own attachment-only message's hover time. Wrapping the
+   *  strip in a box beside it instead would size the tiles against their own
+   *  width again. */
+  lead?: ReactNode;
   /** Whether the viewer may export (download / open-external) an attachment.
    *  `false` for a non-member browsing a public channel: inline
    *  PREVIEW stays, but the download / open affordances are withheld. */
@@ -36,7 +40,8 @@ export function AttachmentList({
   // reader map an agent's "Image #1" back to the actual tile (#task:1324).
   const labels = resolveAttachmentLabels(attachments);
   return (
-    <div className={"mt-2 flex flex-wrap gap-2 " + (alignRight ? "justify-end" : "justify-start")}>
+    <div data-attachment-list className="mt-2 flex flex-wrap gap-2">
+      {lead}
       {attachments.map((att, i) => (
         <AttachmentTile
           key={att.id}
@@ -67,82 +72,15 @@ export function AttachmentTile({
   const previewable =
     onOpenAttachment != null &&
     attachmentPreviewKind(attachment.content_type, attachment.filename) != null;
-  // Generation token for this attachment (#task:1769). Bumps when the creator
-  // updates the bytes in place (`attachment_changed`) or a reconnect gap forces
-  // a coarse epoch bump — either way we re-fetch the latest bytes and swap them
-  // in below without unmounting the current <img> (no loading flash).
-  const token = useAttachmentBlobToken(attachment.id);
-  // Synchronous cache hit covers both the optimistic-message render
-  // (Composer pre-populated the cache from the local File) and any
-  // later viewer who has already fetched this attachment in this
-  // session — so the swap from optimistic → real message never goes
-  // through a "loading" frame.
-  const [imageUrl, setImageUrl] = useState<string | null>(() =>
-    isImage ? (getAttachmentBlobUrl(attachment.id) ?? null) : null,
-  );
-  // The generation `imageUrl` was fetched under; a token change past this means
-  // the displayed bytes are stale and the load effect must refetch.
-  const loadedTokenRef = useRef(token);
-  const [error, setError] = useState<string | null>(null);
+  // A cache hit (the composer's local file, or an earlier fetch) shows without a
+  // loading frame; an in-place update (#task:1769) swaps the picture without
+  // unmounting it.
+  const { load, onImageError } = useAttachmentImage(attachment.id, isImage);
+  const imageUrl = attachmentImageUrl(load);
+  const decodeFailed = load.status === "failed" && load.cause === "decode";
+  const loadError = load.status === "failed" && load.cause === "fetch" ? load.message : null;
+  const [openError, setOpenError] = useState<string | null>(null);
   const [lightboxOpen, setLightboxOpen] = useState(false);
-  // Terminal "this image can't be decoded" flag. A first `onError` is treated
-  // as a stale/evicted blob url and retried ONCE (see onImgError); a second is
-  // taken as "the bytes themselves won't decode" and lands here so we stop
-  // retrying. `retriedRef` carries the once-flag across renders without
-  // triggering one. Both are GENERATION-scoped: they reset when the tile is
-  // pointed at a new attachment OR when the bytes are updated in place (#task:1769)
-  // — an undecodable intermediate revision must not permanently poison a later
-  // fixed revision.
-  const [decodeFailed, setDecodeFailed] = useState(false);
-  const retriedRef = useRef(false);
-
-  useEffect(() => {
-    // Re-allow load/retry for a new generation without dropping the visible old
-    // image (no white flash) — a successful reload swaps it in place below.
-    retriedRef.current = false;
-    setDecodeFailed(false);
-    setError(null);
-  }, [attachment.id, token]);
-
-  useEffect(() => {
-    if (!isImage || decodeFailed) return;
-    // Already showing bytes for the current generation — nothing to do.
-    if (imageUrl && loadedTokenRef.current === token) return;
-    let cancelled = false;
-    loadAttachmentBlobUrl(attachment.id)
-      .then((url) => {
-        if (!cancelled) {
-          loadedTokenRef.current = token;
-          setImageUrl(url);
-          setError(null);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) {
-          setError(err instanceof Error ? err.message : String(err));
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [attachment.id, isImage, imageUrl, decodeFailed, token]);
-
-  // Bound the image-error recovery. The FIRST error may be a stale blob url
-  // that was evicted + revoked out from under us — drop it and let the effect
-  // re-fetch a fresh one, ONCE. A SECOND error (after a known-fresh url) means
-  // the bytes are undecodable by Chromium (e.g. a `.tiff`), so we go terminal
-  // instead of looping fetch → error → fetch forever — the unbounded version
-  // repainted a broken <img> every frame and flickered the whole UI
-  // (#task:1581). A decode-failed image then degrades to the downloadable
-  // file chip below rather than a dead preview box.
-  function onImgError(): void {
-    if (retriedRef.current) {
-      setDecodeFailed(true);
-      return;
-    }
-    retriedRef.current = true;
-    setImageUrl(null);
-  }
 
   async function downloadAndOpen(): Promise<void> {
     // Non-image attachments must NOT be opened via `window.open(blob_url)` —
@@ -165,7 +103,7 @@ export function AttachmentTile({
     // (the chip has its own error slot); the Attachments panel opts into
     // toasts.
     await openAttachmentExternally(attachment, {
-      onInlineError: (msg) => setError(msg),
+      onInlineError: (msg) => setOpenError(msg),
     });
   }
 
@@ -186,12 +124,12 @@ export function AttachmentTile({
             <img
               src={imageUrl}
               alt={attachment.filename}
-              onError={onImgError}
+              onError={onImageError}
               className="block max-h-64 max-w-full cursor-zoom-in object-contain"
             />
           ) : (
             <div className="flex h-32 w-48 items-center justify-center text-xs text-text-muted">
-              {error ?? t("messages.loading")}
+              {loadError ?? t("messages.loading")}
             </div>
           )}
         </button>
@@ -219,9 +157,9 @@ export function AttachmentTile({
     // non-interactive chip. Clicking would download-and-open (an export), so
     // the whole tile is inert and the explicit Download button is omitted.
     return (
-      <div className="flex min-w-0 max-w-full flex-col items-start gap-1">
+      <div className="flex min-w-0 max-w-[min(320px,100%)] flex-col gap-1">
         <div
-          className="flex max-w-[min(320px,100%)] items-center gap-2 overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary"
+          className="flex items-center gap-2 overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating px-2 py-1.5 text-xs text-text-secondary"
           title={`${attachment.filename} (${formatBytes(attachment.size)})`}
         >
           <DocumentIcon className="size-4 shrink-0 text-text-muted" />
@@ -236,16 +174,21 @@ export function AttachmentTile({
   }
 
   return (
-    <div className="flex min-w-0 max-w-full flex-col items-start gap-1">
-      <div className="flex max-w-[min(320px,100%)] items-stretch overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating focus-outline-within">
+    // The cap sits on the tile, not the chip: on the chip the percentage is cyclic
+    // while the tile sizes itself, so the tile kept the full filename's width and
+    // the chip sat at its left, off the row's right edge on an own message.
+    <div className="flex min-w-0 max-w-[min(320px,100%)] flex-col gap-1">
+      <div className="flex items-stretch overflow-hidden rounded-(--chip-radius) border border-border-subtle bg-bg-floating focus-outline-within">
         <button
           type="button"
           disabled={!previewable && !getPlatform().files.openAttachmentExternal}
           onClick={previewable ? () => onOpenAttachment?.(attachment) : downloadAndOpen}
           className="group flex min-w-0 flex-1 items-center gap-2 px-2 py-1.5 text-xs text-text-secondary hover:text-text-primary focus:outline-none"
-          title={error ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
+          title={openError ?? `${attachment.filename} (${formatBytes(attachment.size)})`}
         >
-          <DocumentIcon className="size-4 shrink-0 text-text-muted group-hover:text-text-primary" />
+          <AttachmentTaskGlyph task="open" attachmentId={attachment.id} className="size-4">
+            <DocumentIcon className="size-4 shrink-0 text-text-muted group-hover:text-text-primary" />
+          </AttachmentTaskGlyph>
           <span className="min-w-0 truncate">{attachment.filename}</span>
           <span className="shrink-0 text-(length:--text-badge) text-text-muted group-hover:text-text-primary">
             {formatBytes(attachment.size)}
@@ -269,7 +212,7 @@ export function AttachmentTile({
           title={t("messages.download")}
           aria-label={t("messages.downloadFile", { file: attachment.filename })}
         >
-          <DownloadIcon className="size-3.5" />
+          <AttachmentDownloadGlyph attachmentId={attachment.id} />
         </button>
       </div>
       {label ? <AttachmentLabelBadge label={label} /> : null}

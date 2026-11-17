@@ -2,6 +2,11 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 //! The sole executable composition root for the Rust backend.
 
+#[cfg(test)]
+#[macro_use]
+#[path = "../../backend-sqlite/tests/support/seed_rows.rs"]
+mod seed_rows;
+
 use std::{
     env,
     error::Error,
@@ -669,9 +674,8 @@ pub struct PreparedApp {
     startup_generation: Option<String>,
     /// #2234 CP7a (test-only): a clone of the ONE runtime-credential authority the
     /// `agent_products` perimeter is wrapped with. Carried so a composition test can mint a
-    /// real bearer through `dispatch_start` against the SAME in-memory token store the mounted
-    /// perimeter authenticates against — the authority is `Arc`-backed, so the clone shares its
-    /// process-local token map. This is the only way to drive the internal self-scope routes'
+    /// real bearer through `dispatch_start` against the SAME credential store the mounted
+    /// perimeter authenticates against. This is the only way to drive the internal self-scope routes'
     /// authenticated effect through the real `prepare()` router; never read in production.
     #[cfg(test)]
     test_runtime_credentials: RuntimeCredentialAuthority<SqliteRuntimeCustodyStore>,

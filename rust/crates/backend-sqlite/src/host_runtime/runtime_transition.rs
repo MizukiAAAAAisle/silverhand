@@ -45,7 +45,10 @@ use silverhand_backend_core::{
 use sqlx::{Row, sqlite::SqliteRow};
 use thiserror::Error;
 
-use crate::foundation::host_agent_store::{SqliteHostAgentStore, decode};
+use crate::foundation::{
+    agent_lifecycle_sql::{agent_not_deleting, agent_transition_clear},
+    host_agent_store::{SqliteHostAgentStore, decode},
+};
 
 /// The pre-read `begin` decides from: enough to answer `NotFound` / `Deleting` /
 /// `InProgress` before the acquiring compare-and-set runs.
@@ -57,12 +60,15 @@ const SELECT_BEGIN_PRECHECK: &str =
 /// and `RETURNING` hands back the row the write touched so core can prove the subject.
 /// It does NOT bump `updated_at` — the runtime has not changed yet, matching the
 /// TypeScript `beginRuntimeTransition`.
-const BEGIN_TRANSITION_CAS: &str = "UPDATE agents \
+const BEGIN_TRANSITION_CAS: &str = concat!(
+    "UPDATE agents \
         SET runtime_transition_target = ?, runtime_transition_started_at = ? \
-      WHERE id = ? \
-        AND runtime_transition_target IS NULL \
-        AND deletion_started_at IS NULL \
-    RETURNING id, runtime_transition_target, runtime_transition_started_at";
+      WHERE id = ? AND ",
+    agent_transition_clear!(""),
+    " AND ",
+    agent_not_deleting!(""),
+    " RETURNING id, runtime_transition_target, runtime_transition_started_at"
+);
 
 /// Release a lock the caller owns, keyed on BOTH its target and its started-at so a
 /// reacquired row (fresh started-at) is not the caller's to release.
@@ -92,7 +98,6 @@ const SELECT_HELD_TRANSITION: &str = "SELECT id, runtime_transition_target, \
 const RECLAIM_INBOX_LEASES: &str = "UPDATE conversation_inboxes \
         SET in_flight_owner = NULL, in_flight_at = NULL \
       WHERE agent_id = ? \
-        AND delivered_at IS NULL AND failed_at IS NULL \
         AND in_flight_owner IS NOT NULL \
         AND EXISTS ( \
             SELECT 1 FROM agents \
@@ -457,21 +462,22 @@ mod tests {
     const HOST: &str =
         "INSERT INTO hosts (id, name, kind, created_at) VALUES ('h1', 'h1', 'local', 1)";
     /// Active, runtime `claude`, no lock and no tuning columns set, mtime at 1.
-    const ACTIVE_A1: &str = "INSERT INTO agents \
-         (id, name, runtime, host_id, created_by_user_id, created_at, updated_at, \
-          materialization_status, session_scope) \
-         VALUES ('a1', 'a1', 'claude', 'h1', 'u1', 1, 1, 'active', 'conversation')";
+    const ACTIVE_A1: &str = seed_agent!(id = "a1", host_id = "h1", created_by_user_id = "u1");
     /// Active but a transition to `codex` already holds the lock.
-    const TRANSITION_A1: &str = "INSERT INTO agents \
-         (id, name, runtime, host_id, created_by_user_id, created_at, updated_at, \
-          materialization_status, session_scope, \
-          runtime_transition_target, runtime_transition_started_at) \
-         VALUES ('a1', 'a1', 'claude', 'h1', 'u1', 1, 1, 'active', 'conversation', 'codex', 1)";
+    const TRANSITION_A1: &str = seed_agent!(
+        id = "a1",
+        host_id = "h1",
+        created_by_user_id = "u1",
+        runtime_transition_target = "codex",
+        runtime_transition_started_at = 1,
+    );
     /// Active but a deletion marker holds the row.
-    const DELETING_A1: &str = "INSERT INTO agents \
-         (id, name, runtime, host_id, created_by_user_id, created_at, updated_at, \
-          materialization_status, session_scope, deletion_started_at) \
-         VALUES ('a1', 'a1', 'claude', 'h1', 'u1', 1, 1, 'active', 'conversation', 7)";
+    const DELETING_A1: &str = seed_agent!(
+        id = "a1",
+        host_id = "h1",
+        created_by_user_id = "u1",
+        deletion_started_at = 7,
+    );
 
     async fn lock_columns(store: &SqliteHostAgentStore) -> (Option<String>, Option<i64>) {
         let row = sqlx::query(
@@ -724,11 +730,14 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         // Seed a row whose tuning columns are already set, to prove `complete` overwrites
         // them with NULLs rather than leaving the previous values.
-        let seeded = "INSERT INTO agents \
-             (id, name, runtime, host_id, created_by_user_id, created_at, updated_at, \
-              materialization_status, session_scope, model, reasoning_effort, fast_mode) \
-             VALUES ('a1', 'a1', 'claude', 'h1', 'u1', 1, 1, 'active', 'conversation', \
-                     'old', 'low', 1)";
+        let seeded = seed_agent!(
+            id = "a1",
+            host_id = "h1",
+            created_by_user_id = "u1",
+            model = "old",
+            reasoning_effort = "low",
+            fast_mode = 1,
+        );
         let path = seed_schema(&dir, "complete-null.db", &[USER, HOST, seeded]).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
 

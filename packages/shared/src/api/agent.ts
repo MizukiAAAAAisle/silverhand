@@ -85,6 +85,41 @@ export const AgentDtoSchema = z.object({
 });
 export type AgentDto = z.infer<typeof AgentDtoSchema>;
 
+/** The public tier of `GET /api/agents/{id}`: what any signed-in human on the
+ *  server may read. Restricted fields are absent, not null. */
+export const AgentPublicDtoSchema = AgentDtoSchema.pick({
+  id: true,
+  name: true,
+  display_name: true,
+  runtime: true,
+  model: true,
+  reasoning_effort: true,
+  fast_mode: true,
+  host_id: true,
+  host_label: true,
+  description: true,
+  created_by_user_id: true,
+  avatar_url: true,
+  created_at: true,
+});
+export type AgentPublicDto = z.infer<typeof AgentPublicDtoSchema>;
+
+/** `GET /api/agents/{id}`. `view` names the tier; a body without it is the
+ *  privileged shape older backends returned. */
+export const AgentPrivilegedGetResponseSchema = z.object({
+  view: z.literal('privileged').default('privileged'),
+  agent: AgentDtoSchema,
+});
+export const AgentPublicGetResponseSchema = z.object({
+  view: z.literal('public'),
+  agent: AgentPublicDtoSchema,
+});
+export const AgentGetResponseSchema = z.union([
+  AgentPrivilegedGetResponseSchema,
+  AgentPublicGetResponseSchema,
+]);
+export type AgentGetResponse = z.infer<typeof AgentGetResponseSchema>;
+
 export const CreateAgentInputSchema = z
   .object({
     name: ParticipantNameSchema,
@@ -295,14 +330,12 @@ export type AgentChangedEvent = z.infer<typeof AgentChangedEventSchema>;
  * segments are rejected upstream so any value here is safe to feed
  * back into the read endpoint verbatim.
  */
-export const AgentWorkspaceTreeNodeSchema = z
-  .object({
-    path: z.string().min(1),
-    kind: z.enum(['file', 'directory']),
-    size: z.number(),
-    mtime: z.number(),
-  })
-  .strict();
+export const AgentWorkspaceTreeNodeSchema = z.object({
+  path: z.string().min(1),
+  kind: z.enum(['file', 'directory']),
+  size: z.number(),
+  mtime: z.number(),
+});
 export type AgentWorkspaceTreeNode = z.infer<typeof AgentWorkspaceTreeNodeSchema>;
 
 /**
@@ -312,11 +345,9 @@ export type AgentWorkspaceTreeNode = z.infer<typeof AgentWorkspaceTreeNodeSchema
  * via the `path` segments. Hidden entries (anything starting with `.`)
  * are filtered server-side and never appear here.
  */
-export const AgentWorkspaceTreeSchema = z
-  .object({
-    nodes: z.array(AgentWorkspaceTreeNodeSchema),
-  })
-  .strict();
+export const AgentWorkspaceTreeSchema = z.object({
+  nodes: z.array(AgentWorkspaceTreeNodeSchema),
+});
 export type AgentWorkspaceTree = z.infer<typeof AgentWorkspaceTreeSchema>;
 
 /**
@@ -326,15 +357,13 @@ export type AgentWorkspaceTree = z.infer<typeof AgentWorkspaceTreeSchema>;
  * `path` is the canonical virtual path the caller asked for, echoed for
  * cache-key stability.
  */
-export const AgentWorkspaceFileReadSchema = z
-  .object({
-    path: z.string().min(1),
-    content: z.string(),
-    size: z.number(),
-    mtime: z.number(),
-    truncated: z.boolean(),
-  })
-  .strict();
+export const AgentWorkspaceFileReadSchema = z.object({
+  path: z.string().min(1),
+  content: z.string(),
+  size: z.number(),
+  mtime: z.number(),
+  truncated: z.boolean(),
+});
 export type AgentWorkspaceFileRead = z.infer<typeof AgentWorkspaceFileReadSchema>;
 
 // One placement-aware participation projection for the Agent detail surface.
@@ -495,11 +524,9 @@ export type AgentPresenceDto = z.infer<typeof AgentPresenceDtoSchema>;
 // (attachment connect / disconnect, host revoke) — never on runtime-liveness
 // changes, which drove the retired process axis, not this one.
 export const AGENT_AVAILABILITY_CHANGED_EVENT = 'agent_availability_changed';
-export const AgentAvailabilityChangedEventSchema = z
-  .object({
-    agent_id: z.string(),
-  })
-  .strict();
+export const AgentAvailabilityChangedEventSchema = z.object({
+  agent_id: z.string(),
+});
 export type AgentAvailabilityChangedEvent = z.infer<typeof AgentAvailabilityChangedEventSchema>;
 
 // Invalidation event for GET /api/agents/:id/presence (#task:2049). A pure,
@@ -530,11 +557,9 @@ export type AgentAvailabilityChangedEvent = z.infer<typeof AgentAvailabilityChan
 // transport-reachability transitions), whereas this event's whole purpose is a
 // runtime-activity edge. They are distinct axes with distinct read faces.
 export const AGENT_PRESENCE_CHANGED_EVENT = 'agent_presence_changed';
-export const AgentPresenceChangedEventSchema = z
-  .object({
-    agent_id: z.string(),
-  })
-  .strict();
+export const AgentPresenceChangedEventSchema = z.object({
+  agent_id: z.string(),
+});
 export type AgentPresenceChangedEvent = z.infer<typeof AgentPresenceChangedEventSchema>;
 
 export const DeleteAgentInputSchema = z.object({

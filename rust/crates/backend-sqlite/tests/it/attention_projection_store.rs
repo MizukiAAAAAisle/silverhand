@@ -16,7 +16,32 @@ async fn seed(path: &std::path::Path) {
         "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('u','u-projection','U',1,1),('other','other-projection','Other',1,1)",
         "INSERT INTO workspaces(id,name,name_key,created_at,updated_at) VALUES('w','W','w-projection',1,1),('hidden','Hidden','hidden-projection',1,1)",
         "INSERT INTO workspace_users(workspace_id,user_id,joined_at) VALUES('w','u',1)",
-        "INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,status,created_at,updated_at,latest_message_seq) VALUES('c-b','w','workspace','open','B','b-projection','open',2,2,1),('c-c','w','workspace','open','C','c-projection','open',1,1,0),('c-a','w','workspace','open','A','a-projection','open',1,1,1)",
+        concat!(
+            seed_channel!(
+                id = "c-b",
+                workspace_id = "w",
+                title = "B",
+                title_key = "b-projection",
+                created_at = 2,
+                updated_at = 2,
+                latest_message_seq = 1,
+            ),
+            "; ",
+            seed_channel!(
+                id = "c-c",
+                workspace_id = "w",
+                title = "C",
+                title_key = "c-projection",
+            ),
+            "; ",
+            seed_channel!(
+                id = "c-a",
+                workspace_id = "w",
+                title = "A",
+                title_key = "a-projection",
+                latest_message_seq = 1,
+            ),
+        ),
         "INSERT INTO conversation_users(conversation_id,user_id,joined_at) VALUES('c-a','u',1),('c-b','u',1),('c-c','u',1)",
         "INSERT INTO channel_attention_preferences(user_id,conversation_id,mode,updated_at) VALUES('u','c-a','mentions',1),('u','c-c','mute',1)",
         "INSERT INTO workspace_attention_preferences(user_id,workspace_id,muted,updated_at) VALUES('u','w',1,1),('u','hidden',1,1)",
@@ -245,4 +270,81 @@ async fn strict_decode_rejects_corrupt_mode_and_mute_with_source_chain() {
     let error = store.modes(&viewer, &workspace).await.unwrap_err();
     assert!(error.source().is_some());
     assert!(format!("{error:?}").contains("MalformedMute"));
+}
+
+#[tokio::test]
+async fn direct_pairs_count_like_the_dm_list_and_skip_a_deleted_counterpart() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("direct-badges.sqlite");
+    seed(&path).await;
+    let mut db = sqlx::SqliteConnection::connect(&format!("sqlite:{}", path.display()))
+        .await
+        .unwrap();
+    for sql in [
+        "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('zed','zed-projection','Zed',1,1)",
+        seed_direct_pair!(
+            id = "pair-1",
+            endpoint_a_kind = "human",
+            endpoint_a_id = "other",
+            endpoint_b_kind = "human",
+            endpoint_b_id = "u",
+            latest_message_seq = 2,
+        ),
+        seed_direct_pair!(
+            id = "pair-2",
+            endpoint_a_kind = "human",
+            endpoint_a_id = "u",
+            endpoint_b_kind = "human",
+            endpoint_b_id = "zed",
+            latest_message_seq = 1,
+        ),
+        "INSERT INTO messages(id,conversation_id,from_kind,from_user_id,content,seq,created_at,author_id,author_name,author_display_name) VALUES \
+         ('p1-1','pair-1','user','other','a',1,1,'other','other-projection','Other'),\
+         ('p1-2','pair-1','user','other','b',2,2,'other','other-projection','Other'),\
+         ('p2-1','pair-2','user','zed','c',1,1,'zed','zed-projection','Zed'),\
+         ('p2-own','pair-2','user','u','mine',2,2,'u','u-projection','U')",
+    ] {
+        sqlx::query(sql).execute(&mut db).await.unwrap();
+    }
+    let store = MessagingStore::open(&path)
+        .await
+        .unwrap()
+        .attention_projection();
+    let viewer = UserId::parse("u").unwrap();
+
+    // The viewer is endpoint B of pair-1 and endpoint A of pair-2.
+    let badges = store.badges(&viewer).await.unwrap();
+    assert_eq!(badges.direct_pairs().get(), 3);
+    assert_eq!(
+        badges.total().get(),
+        4,
+        "one workspace badge plus three DMs"
+    );
+    assert_eq!(
+        store
+            .badges(&UserId::parse("other").unwrap())
+            .await
+            .unwrap()
+            .direct_pairs()
+            .get(),
+        0,
+        "a viewer's own messages never count"
+    );
+
+    for (sql, expected) in [
+        (
+            "INSERT INTO conversation_reads(user_id,conversation_id,thread_root_id,last_read_seq,read_at) VALUES('u','pair-1',NULL,1,3)",
+            2,
+        ),
+        (
+            "UPDATE conversations SET endpoint_b_deleted_at=4 WHERE id='pair-2'",
+            1,
+        ),
+    ] {
+        sqlx::query(sql).execute(&mut db).await.unwrap();
+        let badges = store.badges(&viewer).await.unwrap();
+        assert_eq!(badges.direct_pairs().get(), expected, "{sql}");
+        assert_eq!(badges.total().get(), expected + 1, "{sql}");
+    }
+    db.close().await.unwrap();
 }

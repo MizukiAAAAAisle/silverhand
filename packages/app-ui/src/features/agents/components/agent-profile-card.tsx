@@ -4,7 +4,7 @@ import { useState, type JSX, type ReactNode } from "react";
 import { ClockIcon, ComputerIcon, LinkIcon, ProfileCardIcon, UnlinkIcon } from "@/icons";
 import "./agent-profile-hero.css";
 import dayjs from "dayjs";
-import type { AgentDto } from "@silverhand/shared";
+import type { AgentDto, AgentPublicDto } from "@silverhand/shared";
 import { AgentAvatar } from "@/components/agent-avatar";
 import { AVATAR_PX } from "@/components/avatar-scale";
 import { cn } from "@/lib/cn";
@@ -16,18 +16,21 @@ import {
 import { useUpdateAgent } from "../hooks/hooks";
 import { useAgentAvatarObjectUrl } from "../hooks/avatar-hooks";
 import { canEditAgentProfile } from "../model/permissions";
+import { isPrivilegedAgent } from "../model/agent-read";
 import { EditableAgentAvatar } from "./editable-agent-avatar";
 import { EditPencilButton } from "@/components/common/edit-pencil-button";
 import { InlineText } from "@/components/common/inline-text";
 import { rejectDisplayName } from "@/features/identity/display-name";
 import { InlineTextarea } from "./inline-textarea";
-import { RuntimeConfigEditor } from "./runtime-config-editor";
+import { ReadOnlyGrid, RuntimeConfigEditor } from "./runtime-config-editor";
 import { isBackendUnreachable, isUpdateRequired, useViewerUser } from "@/features/session/hooks";
 import { unknownComputerLabel } from "@/features/computers/model/host-display";
 import { t } from "@/lib/i18n";
+import { useNav } from "@/router";
 
 interface AgentProfileCardProps {
-  agent: AgentDto;
+  /** A public read renders read-only and drops the facts it does not carry. */
+  agent: AgentDto | AgentPublicDto;
 }
 
 export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element {
@@ -37,13 +40,15 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
   // (deny edit, mirror loading).
   const viewerForPermissions =
     viewer && (isBackendUnreachable(viewer) || isUpdateRequired(viewer)) ? undefined : viewer;
-  const canEdit = canEditAgentProfile(viewerForPermissions, agent);
+  const full = isPrivilegedAgent(agent) ? agent : null;
+  const canEdit = full !== null && canEditAgentProfile(viewerForPermissions, full);
   const update = useUpdateAgent(agent.id);
   const avatarObjectUrl = useAgentAvatarObjectUrl(agent.avatar_url);
   // Server-resolved label, not a local owned-hosts lookup: `GET /api/hosts` is
   // owner-scoped, so a non-owner viewer's lookup would miss and collapse to
   // "Unknown computer". `host_label` is null only when the host is truly gone.
   const computerName = agent.host_label ?? unknownComputerLabel();
+  const nav = useNav();
   const { profileRef, compactHero } = useProfileHeroSize();
   const avatarSize = compactHero ? AVATAR_PX.profileCompact : AVATAR_PX.profile;
 
@@ -53,8 +58,6 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
 
   return (
     <div ref={profileRef} data-profile-layout className="mx-auto flex flex-col gap-6">
-      {!canEdit ? <ReadOnlyNotice /> : null}
-
       <section
         aria-label={t("agents.agentProfile")}
         data-compact={compactHero}
@@ -153,24 +156,36 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
 
       <ProfileFactBand>
         <ProfileFact icon={<ComputerIcon className="size-3.5" />} label={t("agents.computer")}>
-          <span className="font-medium text-text-primary">{computerName}</span>
+          {agent.host_label ? (
+            <button
+              type="button"
+              onClick={() => nav.toComputer(agent.host_id)}
+              className="font-medium text-text-primary underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+            >
+              {computerName}
+            </button>
+          ) : (
+            <span className="font-medium text-text-primary">{computerName}</span>
+          )}
         </ProfileFact>
-        <ProfileFact
-          icon={
-            agent.session_scope === "agent" ? (
-              <LinkIcon className="size-3.5" />
-            ) : (
-              <UnlinkIcon className="size-3.5" />
-            )
-          }
-          label={t("agents.session")}
-        >
-          <span className="font-medium text-text-primary">
-            {agent.session_scope === "agent"
-              ? t("agents.acrossConversations")
-              : t("agents.perConversation")}
-          </span>
-        </ProfileFact>
+        {full ? (
+          <ProfileFact
+            icon={
+              full.session_scope === "agent" ? (
+                <LinkIcon className="size-3.5" />
+              ) : (
+                <UnlinkIcon className="size-3.5" />
+              )
+            }
+            label={t("agents.session")}
+          >
+            <span className="font-medium text-text-primary">
+              {full.session_scope === "agent"
+                ? t("agents.acrossConversations")
+                : t("agents.perConversation")}
+            </span>
+          </ProfileFact>
+        ) : null}
         <ProfileFact icon={<ClockIcon className="size-3.5" />} label={t("agents.created")}>
           <span
             className="font-medium text-text-primary"
@@ -184,7 +199,7 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
         </ProfileFact>
       </ProfileFactBand>
 
-      <ProfileMessageActivity subject={{ kind: "agent", id: agent.id }} />
+      {full ? <ProfileMessageActivity subject={{ kind: "agent", id: agent.id }} /> : null}
 
       <ProfileSection
         title={t("agents.runtimeConfiguration")}
@@ -198,25 +213,21 @@ export function AgentProfileCard({ agent }: AgentProfileCardProps): JSX.Element 
           ) : null
         }
       >
-        <RuntimeConfigEditor
-          agent={agent}
-          editing={runtimeEditing}
-          onExitEdit={() => setRuntimeEditing(false)}
-        />
+        {full ? (
+          <RuntimeConfigEditor
+            agent={full}
+            editing={runtimeEditing}
+            onExitEdit={() => setRuntimeEditing(false)}
+          />
+        ) : (
+          <ReadOnlyGrid agent={agent} />
+        )}
       </ProfileSection>
 
       {update.isError && canEdit ? (
         <div className="text-xs text-error">{String(update.error)}</div>
       ) : null}
     </div>
-  );
-}
-
-function ReadOnlyNotice(): JSX.Element {
-  return (
-    <p role="note" className="text-xs text-text-muted" data-testid="agent-profile-readonly-notice">
-      {t("agents.onlyTheCreatorCan")}
-    </p>
   );
 }
 

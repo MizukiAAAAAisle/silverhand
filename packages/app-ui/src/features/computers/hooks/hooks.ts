@@ -11,6 +11,7 @@ import {
   HostDisconnectResponseSchema,
   HostDtoSchema,
   HostGetResponseSchema,
+  HostPrivilegedGetResponseSchema,
   HostListResponseSchema,
   HostProxyConfigOfflineResponseSchema,
   HostProxyConfigResponseSchema,
@@ -18,6 +19,7 @@ import {
   HostResourcesResponseSchema,
   HostRevokeResponseSchema,
   HostRotateTokenUserManagedResponseSchema,
+  HostStatusReadResponseSchema,
   HostStatusResponseSchema,
   HOST_PROXY_CONFIG_OFFLINE_ERROR_CODE,
   RuntimeCatalogResponseSchema,
@@ -30,8 +32,10 @@ import {
   type HostResourcesResponse,
   type HostDisconnectResponse,
   type HostDto,
+  type HostGetResponse,
   type HostListResponse,
   type HostProxyConfig,
+  type HostStatusReadResponse,
   type HostStatusResponse,
   type RuntimeCatalogResponse,
   type UpdateHostInput,
@@ -286,10 +290,50 @@ export function useHostByIdQuery(
     queryKey: hostByIdKey(hostId ?? "__none__"),
     queryFn: async (): Promise<HostDto> => {
       const raw = await api<unknown>(apiPaths.host(hostId!));
-      return HostGetResponseSchema.parse(raw).host;
+      return HostPrivilegedGetResponseSchema.parse(raw).host;
     },
     enabled: (options?.enabled ?? true) && Boolean(hostId),
     refetchInterval: options?.refetchInterval ?? false,
+  });
+}
+
+/**
+ * A computer by id at the tier the viewer reads it: the owner gets the full
+ * record (`view: "privileged"`), any other signed-in human the public
+ * identity. Public reads receive no realtime frames, so they refresh on mount
+ * and on window focus.
+ */
+export function useHostReadQuery(
+  hostId: string | null | undefined,
+  options?: { enabled?: boolean },
+) {
+  return useQuery({
+    queryKey: [...hostByIdKey(hostId ?? "__none__"), "read"] as const,
+    queryFn: async (): Promise<HostGetResponse> => {
+      const raw = await api<unknown>(apiPaths.host(hostId!));
+      return HostGetResponseSchema.parse(raw);
+    },
+    enabled: (options?.enabled ?? true) && Boolean(hostId),
+    refetchOnMount: (query) => (query.state.data?.view === "public" ? "always" : true),
+    refetchOnWindowFocus: (query) => query.state.data?.view === "public",
+  });
+}
+
+/**
+ * Status of a computer the viewer does not own, read at whichever tier the
+ * backend grants. Kept apart from {@link hostStatusKey}, whose readers (rail
+ * dots, pickers) assume the owner's shape and event-driven freshness; this
+ * one has no realtime frames, so it refreshes on mount and on window focus.
+ */
+export function useHostStatusReadQuery(hostId: string) {
+  return useQuery({
+    queryKey: [...hostStatusKey(hostId), "read"] as const,
+    queryFn: async (): Promise<HostStatusReadResponse> => {
+      const raw = await api<unknown>(apiPaths.hostStatus(hostId));
+      return HostStatusReadResponseSchema.parse(raw);
+    },
+    refetchOnMount: "always",
+    refetchOnWindowFocus: true,
   });
 }
 
@@ -344,6 +388,39 @@ export function useHostStatusQuery(
   return useQuery<HostStatusResponse>({
     ...hostStatusQueryOptions(hostId ?? "__none__"),
     enabled: (options?.enabled ?? true) && Boolean(hostId),
+  });
+}
+
+/**
+ * Live re-probe for the computer detail page: asks the backend to sample the
+ * connected daemon now and writes the answer into the shared status key, so
+ * every reader sees it. Only the detail page calls this (on open and on
+ * Refresh) — the shared GET stays a zero-RPC cache read because sidebar dots
+ * read every computer's status. A backend without the refresh route falls
+ * back to re-reading the cache.
+ */
+export function useRefreshHostStatus(hostId: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: async (): Promise<HostStatusResponse | null> => {
+      try {
+        const raw = await api<unknown>(`${apiPaths.hostStatus(hostId)}/refresh`, {
+          method: "POST",
+        });
+        return HostStatusResponseSchema.parse(raw);
+      } catch (err) {
+        if (err instanceof ApiError && (err.status === 404 || err.status === 405)) {
+          await qc.invalidateQueries({ queryKey: hostStatusKey(hostId) });
+          return null;
+        }
+        throw err;
+      }
+    },
+    onSuccess: (data) => {
+      if (data) {
+        qc.setQueryData(hostStatusKey(hostId), data);
+      }
+    },
   });
 }
 

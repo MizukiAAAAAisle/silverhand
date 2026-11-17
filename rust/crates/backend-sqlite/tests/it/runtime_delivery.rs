@@ -8,7 +8,8 @@ use silverhand_backend_core::{
     foundation::persistence::PersistenceFailure,
     host_runtime::agent_presence,
     host_runtime::runtime_credential::{
-        ClaimRuntimeCustody, RuntimeCustodyPort, RuntimeEventTime, RuntimeScope,
+        ClaimRuntimeCustody, RuntimeCredentialHash, RuntimeCustodyPort, RuntimeEventTime,
+        RuntimeScope,
     },
     host_runtime::runtime_event::{
         CommitRuntimeConsumed, CommitRuntimeExit, CommitRuntimeSessionInit, DaemonEventDurablePort,
@@ -93,13 +94,14 @@ async fn seed(connection: &mut SqliteConnection) {
     .execute(&mut *connection)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO agents (
-            id, name, runtime, host_id, created_at, updated_at,
-            display_name, created_by_user_id, session_scope
-         ) VALUES (?, 'agent-delivery', 'codex', 'host-1', 1, 1,
-             'Delivery Agent', 'user-1', 'conversation')",
-    )
+    sqlx::query(seed_agent!(
+        id = ?,
+        name = "agent-delivery",
+        runtime = "codex",
+        host_id = "host-1",
+        display_name = "Delivery Agent",
+        created_by_user_id = "user-1",
+    ))
     .bind(AGENT)
     .execute(&mut *connection)
     .await
@@ -120,13 +122,12 @@ async fn seed(connection: &mut SqliteConnection) {
     .execute(&mut *connection)
     .await
     .unwrap();
-    sqlx::query(
-        "INSERT INTO conversations (
-            id, workspace_id, placement_kind, roster_policy, title, title_key,
-            status, created_at, updated_at
-         ) VALUES (?, 'workspace-1', 'workspace', 'open', 'Conversation One',
-             'conversation one', 'active', 1, 1)",
-    )
+    sqlx::query(seed_channel!(
+        id = ?,
+        workspace_id = "workspace-1",
+        title = "Conversation One",
+        title_key = "conversation one",
+    ))
     .bind(CONVERSATION)
     .execute(&mut *connection)
     .await
@@ -189,6 +190,7 @@ async fn claim_runtime(
         .claim_or_current(ClaimRuntimeCustody::new(
             scope(),
             DaemonInstanceId::parse(daemon).unwrap(),
+            RuntimeCredentialHash::of_plaintext("test-bearer-0"),
             RuntimeEventTime::from_unix_millis(10),
         ))
         .await
@@ -298,14 +300,14 @@ async fn direct_pair_and_thread_coordinates_are_projected_from_persisted_placeme
         .execute(&mut db)
         .await
         .unwrap();
-    sqlx::query(
-        "INSERT INTO conversations (
-            id, workspace_id, placement_kind, roster_policy, title, title_key,
-            status, created_at, updated_at, endpoint_a_kind, endpoint_a_id,
-            endpoint_b_kind, endpoint_b_id
-         ) VALUES (?, NULL, 'direct_pair', 'fixed', 'Direct Pair', NULL,
-             'active', 1, 1, 'agent', ?, 'human', 'user-1')",
-    )
+    sqlx::query(seed_direct_pair!(
+        id = ?,
+        title = "Direct Pair",
+        endpoint_a_kind = "agent",
+        endpoint_a_id = ?,
+        endpoint_b_kind = "human",
+        endpoint_b_id = "user-1",
+    ))
     .bind(CONVERSATION)
     .bind(AGENT)
     .execute(&mut db)
@@ -910,19 +912,44 @@ async fn agent_slot_status_targets_every_placement_participation_and_only_origin
     let fixture = fixture().await;
     let mut db = open(&fixture.path).await;
     sqlx::raw_sql(
-        "INSERT INTO agents (id, name, runtime, host_id, created_at, updated_at, display_name, created_by_user_id, session_scope)
-         VALUES ('agent-aggregate', 'agent-aggregate', 'codex', 'host-1', 1, 1, 'Aggregate Agent', 'user-1', 'agent');
-         INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('workspace-1', 'agent-aggregate', 1);
-         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0001', 'agent-aggregate', 1);
-         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at)
-         VALUES ('conversation0002', 'workspace-1', 'workspace', 'fixed', 'Second', 'second', 'active', 1, 1),
-                ('conversation0003', 'workspace-1', 'workspace', 'open', 'Not Seated', 'not seated', 'active', 1, 1);
-         INSERT INTO conversation_agents (conversation_id, agent_id, joined_at)
-         VALUES ('conversation0002', 'agent-aggregate', 1);
-         INSERT INTO conversations (id, workspace_id, placement_kind, roster_policy, title, title_key, status, created_at, updated_at,
-                                    endpoint_a_kind, endpoint_a_id, endpoint_b_kind, endpoint_b_id)
-         VALUES ('conversation0004', NULL, 'direct_pair', 'fixed', 'DM', NULL, 'active', 1, 1,
-                 'agent', 'agent-aggregate', 'human', 'user-1');",
+        concat!(
+            seed_agent!(
+                id = "agent-aggregate",
+                runtime = "codex",
+                host_id = "host-1",
+                display_name = "Aggregate Agent",
+                created_by_user_id = "user-1",
+                session_scope = "agent",
+            ),
+            "; ",
+            "INSERT INTO workspace_members (workspace_id, agent_id, joined_at) VALUES ('workspace-1', 'agent-aggregate', 1); ",
+            "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0001', 'agent-aggregate', 1); ",
+            seed_channel!(
+                id = "conversation0002",
+                workspace_id = "workspace-1",
+                roster_policy = "fixed",
+                title = "Second",
+                title_key = "second",
+            ),
+            "; ",
+            seed_channel!(
+                id = "conversation0003",
+                workspace_id = "workspace-1",
+                title = "Not Seated",
+                title_key = "not seated",
+            ),
+            "; ",
+            "INSERT INTO conversation_agents (conversation_id, agent_id, joined_at) VALUES ('conversation0002', 'agent-aggregate', 1); ",
+            seed_direct_pair!(
+                id = "conversation0004",
+                title = "DM",
+                endpoint_a_kind = "agent",
+                endpoint_a_id = "agent-aggregate",
+                endpoint_b_kind = "human",
+                endpoint_b_id = "user-1",
+            ),
+            "; ",
+        ),
     )
     .execute(&mut db)
     .await
@@ -935,6 +962,7 @@ async fn agent_slot_status_targets_every_placement_participation_and_only_origin
         .claim_or_current(ClaimRuntimeCustody::new(
             scope,
             DaemonInstanceId::parse("daemon-agent-slot").unwrap(),
+            RuntimeCredentialHash::of_plaintext("test-bearer-1"),
             RuntimeEventTime::from_unix_millis(10),
         ))
         .await
@@ -1126,7 +1154,8 @@ async fn exit_finalization_status_activity_and_lease_cleanup_are_one_root_transa
              (SELECT COUNT(in_flight_owner) FROM conversation_inboxes) AS leased,
              (SELECT COUNT(*) FROM conversation_events WHERE kind = 'text') AS activities,
              (SELECT COUNT(*) FROM agent_runtime_events
-               WHERE event_kind = 'generation_finalized') AS finalized",
+               WHERE event_kind = 'generation_finalized') AS finalized,
+             (SELECT COUNT(*) FROM agent_runtime_credentials) AS credentials",
     )
     .bind(CONVERSATION)
     .bind(AGENT)
@@ -1144,6 +1173,57 @@ async fn exit_finalization_status_activity_and_lease_cleanup_are_one_root_transa
     assert_eq!(row.get::<i64, _>("leased"), 0);
     assert_eq!(row.get::<i64, _>("activities"), 1);
     assert_eq!(row.get::<i64, _>("finalized"), 1);
+    assert_eq!(row.get::<i64, _>("credentials"), 0);
+}
+
+#[tokio::test]
+async fn presence_audience_includes_the_human_endpoint_of_a_direct_pair() {
+    let fixture = fixture().await;
+    let mut connection = open(&fixture.path).await;
+    sqlx::raw_sql(
+        concat!(
+            "INSERT INTO users (id, name, display_name, created_at, updated_at) VALUES ('user-2', 'user-2', 'User Two', 1, 1); ",
+            seed_direct_pair!(
+                id = "pair-1",
+                endpoint_a_kind = "agent",
+                endpoint_a_id = "agent-delivery",
+                endpoint_b_kind = "human",
+                endpoint_b_id = "user-2",
+            ),
+            "; ",
+        ),
+    )
+    .execute(&mut connection)
+    .await
+    .unwrap();
+    connection.close().await.unwrap();
+    let principal = claim_runtime(&fixture, "daemon-presence").await;
+    let recorded = fixture
+        .delivery
+        .record_activity(
+            RuntimeEventAdmission::new("host-1".into(), principal),
+            RuntimeActivityFact::new(
+                ConversationId::parse(CONVERSATION).unwrap(),
+                AgentId::parse(AGENT).unwrap(),
+                RuntimeActivityKind::Text,
+                RuntimeActivityPayload::Text {
+                    text: "presence".into(),
+                },
+                RuntimeEventTime::from_unix_millis(1_000),
+            ),
+            RuntimeEventTime::from_unix_millis(1_000),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        recorded
+            .presence_viewers()
+            .iter()
+            .map(|viewer| viewer.as_str())
+            .collect::<Vec<_>>(),
+        ["user-1", "user-2"]
+    );
 }
 
 #[tokio::test]
@@ -1438,13 +1518,13 @@ async fn a_stored_runtime_outside_the_closed_set_fails_both_decode_sites() {
     );
 
     let mut db = open(&fixture.path).await;
-    sqlx::query(
-        "INSERT INTO agents (
-            id, name, runtime, host_id, created_at, updated_at,
-            display_name, created_by_user_id, session_scope
-         ) VALUES ('agent-peer', 'agent-peer', 'aider', 'host-1', 1, 1,
-             'Peer Agent', 'user-1', 'conversation')",
-    )
+    sqlx::query(seed_agent!(
+        id = "agent-peer",
+        runtime = "aider",
+        host_id = "host-1",
+        display_name = "Peer Agent",
+        created_by_user_id = "user-1",
+    ))
     .execute(&mut db)
     .await
     .unwrap();

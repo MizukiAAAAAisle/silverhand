@@ -9,6 +9,9 @@ interface NativeCopy {
   saveImage: string;
   pngImage: string;
   saveAttachment: string;
+  openApp: string;
+  quit: string;
+  localServer: string;
 }
 
 const COPY: Record<NativeLocale, NativeCopy> = {
@@ -21,6 +24,9 @@ const COPY: Record<NativeLocale, NativeCopy> = {
     saveImage: "Save image",
     pngImage: "PNG Image",
     saveAttachment: "Save attachment",
+    openApp: "Open Silverhand",
+    quit: "Quit Silverhand",
+    localServer: "Embedded",
   },
   zh: {
     checkForUpdates: "检查更新",
@@ -31,6 +37,9 @@ const COPY: Record<NativeLocale, NativeCopy> = {
     saveImage: "保存图片",
     pngImage: "PNG 图片",
     saveAttachment: "保存附件",
+    openApp: "打开 Silverhand",
+    quit: "退出 Silverhand",
+    localServer: "Embedded",
   },
 };
 

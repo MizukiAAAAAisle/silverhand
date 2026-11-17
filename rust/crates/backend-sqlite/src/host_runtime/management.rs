@@ -24,7 +24,7 @@ const SELECT_COMPUTER: &str = "SELECT id, name, kind, created_at, user_id, insta
      FROM hosts WHERE id = ?";
 
 const SELECT_STATUS_AGENTS: &str = "SELECT id, host_id, name, display_name, runtime, \
-     avatar_storage_key, updated_at, materialization_status, created_at \
+     model, reasoning_effort, fast_mode, avatar_storage_key, updated_at, materialization_status, created_at \
      FROM agents WHERE host_id = ? ORDER BY created_at ASC";
 
 #[derive(Debug, Error)]
@@ -188,6 +188,11 @@ fn decode_status_agent(row: &sqlx::sqlite::SqliteRow) -> Result<HostStatusAgentF
         name: row.try_get("name")?,
         display_name: row.try_get("display_name")?,
         runtime,
+        model: row.try_get("model")?,
+        reasoning_effort: row.try_get("reasoning_effort")?,
+        fast_mode: row
+            .try_get::<Option<i64>, _>("fast_mode")?
+            .map(|value| value != 0),
         avatar_storage_key: row.try_get("avatar_storage_key")?,
         updated_at: row.try_get("updated_at")?,
         materialization_status,
@@ -199,7 +204,7 @@ mod tests {
     use silverhand_backend_core::foundation::identity::UserId;
     use silverhand_backend_core::host_runtime::{
         computer::ComputerDisplayLabel,
-        status::{HostStatusStoredReadModel, visible_host_status},
+        status::{HostStatusStoredReadModel, readable_host_status},
         update::{
             UpdateComputer, UpdateComputerCommand, UpdateComputerInput, UpdateComputerOutcome,
         },
@@ -221,14 +226,21 @@ mod tests {
         let mut db = SqliteConnection::connect_with(&options).await.unwrap();
         db.execute(sqlx::raw_sql(CURRENT_SCHEMA)).await.unwrap();
         db.execute(sqlx::raw_sql(
-            "INSERT INTO users (id,name,display_name,created_at,updated_at) \
-             VALUES ('owner','owner','Owner',1,1); \
-             INSERT INTO hosts \
-             (id,name,kind,user_id,created_at,activated_at,finalized_at,provisioning_source) \
-             VALUES ('host-1','stable','remote','owner',1,2,NULL,'user_invite'); \
-             INSERT INTO agents \
-             (id,name,display_name,runtime,host_id,created_by_user_id,materialization_status,created_at,updated_at) \
-             VALUES ('agent-1','helper','Helper','codex','host-1','owner','active',3,4);",
+            concat!(
+                "INSERT INTO users (id,name,display_name,created_at,updated_at) VALUES ('owner','owner','Owner',1,1); ",
+                "INSERT INTO hosts (id,name,kind,user_id,created_at,activated_at,finalized_at,provisioning_source) VALUES ('host-1','stable','remote','owner',1,2,NULL,'user_invite'); ",
+                seed_agent!(
+                    id = "agent-1",
+                    name = "helper",
+                    display_name = "Helper",
+                    runtime = "codex",
+                    host_id = "host-1",
+                    created_by_user_id = "owner",
+                    created_at = 3,
+                    updated_at = 4,
+                ),
+                "; ",
+            ),
         ))
         .await
         .unwrap();
@@ -263,13 +275,12 @@ mod tests {
         let (_directory, store) = fixture().await;
         let computer = HostId::parse("host-1").unwrap();
         let facts = store.read_host_status(&computer).await.unwrap().unwrap();
-        let visible =
-            visible_host_status(&UserId::parse("owner").unwrap(), &computer, Some(&facts))
-                .unwrap()
-                .unwrap();
-        assert_eq!(visible.computer().name, "stable");
-        assert_eq!(visible.agents().len(), 1);
-        assert_eq!(visible.agents()[0].id.as_str(), "agent-1");
-        assert_eq!(visible.agents()[0].runtime, RuntimeKind::Codex);
+        let read = readable_host_status(&UserId::parse("owner").unwrap(), &computer, Some(&facts))
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.computer.name, "stable");
+        assert_eq!(read.agents.len(), 1);
+        assert_eq!(read.agents[0].id.as_str(), "agent-1");
+        assert_eq!(read.agents[0].runtime, RuntimeKind::Codex);
     }
 }

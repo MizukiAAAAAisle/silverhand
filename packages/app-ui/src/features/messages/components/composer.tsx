@@ -99,7 +99,9 @@ export function Composer({
   const [active, setActive] = useState(0);
   // Escape hides the picker for the trigger at this position.
   const [dismissedPos, setDismissedPos] = useState<number | null>(null);
-  const [previewing, setPreviewing] = useState<{ url: string; alt: string } | null>(null);
+  const [previewing, setPreviewing] = useState<{ url: string; alt: string; file?: File } | null>(
+    null,
+  );
   const ref = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -173,6 +175,9 @@ export function Composer({
     onPick: insertPick,
     onTrigger: insertTrigger,
     onFiles: (files) => composer.addFiles(files),
+    onReserveFiles: (entries) => composer.reservePending(entries),
+    onFillFile: (key, file) => composer.fillPending(key, file),
+    onFailFile: (key) => composer.failPending(key),
   });
 
   useEffect(() => {
@@ -387,7 +392,7 @@ export function Composer({
                   }
                   onPreview={
                     p.previewUrl
-                      ? () => setPreviewing({ url: p.previewUrl!, alt: p.filename })
+                      ? () => setPreviewing({ url: p.previewUrl!, alt: p.filename, file: p.file })
                       : undefined
                   }
                 />
@@ -419,6 +424,7 @@ export function Composer({
       }}
       src={previewing?.url ?? ""}
       alt={previewing?.alt ?? ""}
+      file={previewing?.file}
     />
   );
 

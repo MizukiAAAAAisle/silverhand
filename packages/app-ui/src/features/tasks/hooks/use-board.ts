@@ -1,10 +1,11 @@
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useQuery,
   useQueryClient,
   type InfiniteData,
 } from "@tanstack/react-query";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   type TaskBoardColumnDto,
   type TaskBoardCountsDto,
@@ -98,6 +99,27 @@ export type BoardColumns = Readonly<Record<TaskStatus, BoardColumnRead>>;
 
 const EMPTY_ITEMS: TaskSummaryDto[] = [];
 
+// A filter change keeps the previous answer on screen (`keepPreviousData`) so a
+// fast response swaps in without a skeleton frame. Past this delay the old
+// answer would read as the new filter's result, so the surface drops to its
+// loading state instead.
+const PLACEHOLDER_GRACE_MS = 300;
+
+function usePlaceholderOverdue(isPlaceholder: boolean): boolean {
+  const [overdue, setOverdue] = useState(false);
+
+  useEffect(() => {
+    if (!isPlaceholder) {
+      setOverdue(false);
+      return;
+    }
+    const timer = setTimeout(() => setOverdue(true), PLACEHOLDER_GRACE_MS);
+    return () => clearTimeout(timer);
+  }, [isPlaceholder]);
+
+  return isPlaceholder && overdue;
+}
+
 function useBoardColumn(
   status: TaskStatus,
   filterKey: string,
@@ -114,6 +136,7 @@ function useBoardColumn(
   >({
     queryKey: boardColumnKey(status, filterKey),
     enabled,
+    placeholderData: keepPreviousData,
     initialPageParam: null,
     queryFn: ({ pageParam, signal }) =>
       api<TaskBoardColumnDto>(boardColumnPath(status, boardFilterParams(filters), pageParam), {
@@ -123,7 +146,7 @@ function useBoardColumn(
   });
 
   const loadedPages = query.data?.pages.length ?? 0;
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = query;
+  const { hasNextPage, isFetchingNextPage, fetchNextPage, isPlaceholderData } = query;
 
   // The window asks, the query answers. Page N+1 is fetched only because some
   // surface wants to render it — there is no prefetch-ahead and no polling, so
@@ -132,18 +155,30 @@ function useBoardColumn(
     if (!enabled) return;
     // No first page yet: it is already in flight (or the query is off). Asking
     // for a next page here would fetch the same window twice.
-    if (loadedPages === 0) return;
+    // Placeholder pages belong to the previous filter; paging from them would
+    // race the new key's first read.
+    if (loadedPages === 0 || isPlaceholderData) return;
     if (loadedPages >= wantedPages) return;
     if (!hasNextPage || isFetchingNextPage) return;
     void fetchNextPage();
-  }, [enabled, loadedPages, wantedPages, hasNextPage, isFetchingNextPage, fetchNextPage]);
+  }, [
+    enabled,
+    loadedPages,
+    isPlaceholderData,
+    wantedPages,
+    hasNextPage,
+    isFetchingNextPage,
+    fetchNextPage,
+  ]);
 
+  const overdue = usePlaceholderOverdue(isPlaceholderData);
   const items = useMemo(
-    () => query.data?.pages.flatMap((p) => p.items) ?? EMPTY_ITEMS,
-    [query.data],
+    () => (overdue ? EMPTY_ITEMS : (query.data?.pages.flatMap((p) => p.items) ?? EMPTY_ITEMS)),
+    [overdue, query.data],
   );
 
-  const { isLoading, isError, isFetching, dataUpdatedAt, errorUpdateCount, refetch } = query;
+  const { isError, isFetching, dataUpdatedAt, errorUpdateCount, refetch } = query;
+  const isLoading = query.isLoading || overdue;
 
   return useMemo(
     () => ({
@@ -266,13 +301,16 @@ export function useBoardCounts(
   const query = useQuery({
     queryKey: boardCountsKey(boardFilterKey(filters)),
     enabled,
+    placeholderData: keepPreviousData,
     queryFn: ({ signal }) =>
       api<TaskBoardCountsDto>(boardCountsPath(boardFilterParams(filters)), {
         signal,
       }),
     select: (dto) => dto.counts as BoardCounts,
   });
-  const { data, isError } = query;
+  const overdue = usePlaceholderOverdue(query.isPlaceholderData);
+  const data = overdue ? undefined : query.data;
+  const { isError } = query;
   return useMemo(() => boardAuthority({ data, isError }), [data, isError]);
 }
 
@@ -304,6 +342,9 @@ export function useBoardFacets(
   const query = useQuery({
     queryKey: boardFacetsKey(container),
     enabled,
+    // A container switch keeps the old avatars until the new set lands, so the
+    // toolbar row does not collapse and reflow.
+    placeholderData: keepPreviousData,
     queryFn: ({ signal }) => api<TaskBoardFacetsDto>(boardFacetsPath(container), { signal }),
     select: (dto): BoardFacets => {
       const toOptions = (people: TaskBoardFacetsDto["assignees"]): PersonOption[] =>

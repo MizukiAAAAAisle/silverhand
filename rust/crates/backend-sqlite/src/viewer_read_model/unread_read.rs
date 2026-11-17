@@ -18,11 +18,13 @@
 //! referenced as a scalar subquery `(SELECT viewer FROM p)`. The predicate text is
 //! otherwise unchanged, so the set it selects is the same set.
 
+use crate::foundation::conversation_lifecycle_sql::conversation_open;
 use std::{collections::HashMap, path::Path, time::Duration};
 
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
-        MessageId, ThreadRootId,
+        CreatedMessage, MessageId, ParticipantHandle, ThreadRootId,
+        alert::{AlertAudience, AlertPlace, AlertRecipient, AlertStanding, MessageAlertAudience},
         unread::{
             ConversationHumanAudience, LatestUnread, UnreadAudience, UnreadReadModel, ViewerUnread,
         },
@@ -63,7 +65,9 @@ macro_rules! unread_guards {
     () => {
         concat!(
             "NOT EXISTS (SELECT 1 FROM conversations arch WHERE arch.id = m.conversation_id AND \
-             arch.archived_at IS NOT NULL) AND ",
+             ",
+            $crate::foundation::conversation_lifecycle_sql::conversation_archived!("arch."),
+            ") AND ",
             $crate::viewer_read_model::unread_read::message_unread_guards!()
         )
     };
@@ -192,7 +196,9 @@ macro_rules! badge_directed_term {
              c.id = n.conversation_id JOIN conversation_users cu ON cu.conversation_id = c.id AND \
              cu.user_id = (SELECT viewer FROM p) WHERE n.user_id = (SELECT viewer FROM p) AND ",
             effective_directed_mention!(),
-            " AND (c.id IS NOT NULL AND c.archived_at IS NULL) AND NOT ",
+            " AND (c.id IS NOT NULL AND ",
+            $crate::foundation::conversation_lifecycle_sql::conversation_open!("c."),
+            ") AND NOT ",
             loud_positional!(),
             " AND c.workspace_id = (SELECT ws FROM p)"
         )
@@ -254,7 +260,9 @@ const WORKSPACE_UNREAD_AND_BADGE: &str = concat!(
      conversation_users cu ON cu.conversation_id = c.id AND cu.user_id = (SELECT viewer FROM p) \
      JOIN messages m ON m.conversation_id = c.id AND ",
     rollup_unread!(live_conversation),
-    " WHERE c.workspace_id = (SELECT ws FROM p) AND c.archived_at IS NULL) counts"
+    " WHERE c.workspace_id = (SELECT ws FROM p) AND ",
+    conversation_open!("c."),
+    ") counts"
 );
 
 /// The single most-recent unread message for the viewer in one conversation, or no row.
@@ -275,7 +283,9 @@ const BADGE_COUNTS_BY_WORKSPACE: &str = concat!(
      conversation_users cu ON cu.conversation_id=c.id AND cu.user_id=(SELECT viewer FROM p) \
      JOIN messages m ON m.conversation_id=c.id AND ",
     rollup_unread!(live_conversation),
-    " WHERE c.archived_at IS NULL AND ",
+    " WHERE ",
+    conversation_open!("c."),
+    " AND ",
     loud_positional!(),
     " GROUP BY c.workspace_id UNION ALL SELECT c.workspace_id AS workspace_id, ",
     directed_claim_count!(),
@@ -283,9 +293,42 @@ const BADGE_COUNTS_BY_WORKSPACE: &str = concat!(
      conversation_users cu ON cu.conversation_id=c.id AND cu.user_id=(SELECT viewer FROM p) WHERE \
      n.user_id=(SELECT viewer FROM p) AND ",
     effective_directed_mention!(),
-    " AND (c.id IS NOT NULL AND c.archived_at IS NULL) AND NOT ",
+    " AND (c.id IS NOT NULL AND ",
+    conversation_open!("c."),
+    ") AND NOT ",
     loud_positional!(),
     " GROUP BY c.workspace_id) GROUP BY workspace_id ORDER BY workspace_id"
+);
+
+/// Direct-pair endpoint `$s` is a live principal: not tombstoned and still present.
+macro_rules! direct_endpoint_alive {
+    ($s:literal) => {
+        concat!(
+            "(c.endpoint_",
+            $s,
+            "_deleted_at IS NULL AND CASE c.endpoint_",
+            $s,
+            "_kind WHEN 'agent' THEN EXISTS (SELECT 1 FROM agents a WHERE a.id = c.endpoint_",
+            $s,
+            "_id) WHEN 'human' THEN EXISTS (SELECT 1 FROM users u WHERE u.id = c.endpoint_",
+            $s,
+            "_id) ELSE 0 END)"
+        )
+    };
+}
+
+/// The badge term for direct pairs. A pair is always loud, so it contributes its whole
+/// unread; a pair whose counterpart is deleted is hidden from the DM list and is skipped.
+const DIRECT_PAIR_BADGE_COUNT: &str = concat!(
+    "WITH p(viewer) AS (SELECT ?) SELECT COUNT(m.id) AS c FROM conversations c JOIN messages m \
+     ON m.conversation_id = c.id AND ",
+    rollup_unread!(),
+    " WHERE c.placement_kind = 'direct_pair' AND ((c.endpoint_a_kind = 'human' AND \
+     c.endpoint_a_id = (SELECT viewer FROM p) AND ",
+    direct_endpoint_alive!("b"),
+    ") OR (c.endpoint_b_kind = 'human' AND c.endpoint_b_id = (SELECT viewer FROM p) AND ",
+    direct_endpoint_alive!("a"),
+    "))"
 );
 
 /// The conversation's live human participants.
@@ -411,6 +454,33 @@ pub(crate) async fn attention_badge_counts(
             }
         }
         Ok(counts)
+    }
+    .await;
+    observation.finish(&result);
+    result
+}
+
+/// The direct-pair term of the badge roll-up, evaluated inside the caller's transaction.
+#[tracing::instrument(
+    target = "silverhand::diagnostics",
+    name = "db.direct_pair_badge_count",
+    skip_all,
+    fields(
+        elapsed_ms = tracing::field::Empty,
+        outcome = tracing::field::Empty,
+        operation_finished = tracing::field::Empty,
+    )
+)]
+pub(crate) async fn direct_pair_badge_count(
+    tx: &mut Transaction<'_, Sqlite>,
+    viewer: &UserId,
+) -> Result<i64, UnreadReadModelError> {
+    let observation = silverhand_backend_observability::Operation::current();
+    let result = async {
+        Ok(sqlx::query_scalar(DIRECT_PAIR_BADGE_COUNT)
+            .bind(viewer.as_str())
+            .fetch_one(&mut **tx)
+            .await?)
     }
     .await;
     observation.finish(&result);
@@ -610,6 +680,93 @@ impl ConversationHumanAudience for SqliteUnreadReadModel {
             let viewers = participants(&mut tx, conversation).await?;
             tx.commit().await?;
             Ok::<_, UnreadReadModelError>(viewers)
+        }
+        .await
+        .map_err(PersistenceFailure::from_source)
+    }
+}
+
+/// The conversation an alert points into.
+const SELECT_ALERT_PLACE: &str =
+    "SELECT workspace_id, roster_policy, title FROM conversations WHERE id = ?";
+
+/// Each live human participant with what the alert decision reads: their handle, the
+/// effective channel level under workspace mute, and whether they follow the thread.
+const ALERT_RECIPIENTS: &str = concat!(
+    "WITH p(conv, root, cdm) AS (SELECT ?, ?, ?) SELECT u.id AS user_id, u.name AS name, \
+     (COALESCE((SELECT cap.mode FROM channel_attention_preferences cap WHERE cap.user_id = u.id \
+     AND cap.conversation_id = c.id), (SELECT cdm FROM p)) = 'all' AND NOT EXISTS (SELECT 1 FROM \
+     workspace_attention_preferences wap WHERE wap.user_id = u.id AND wap.workspace_id = \
+     c.workspace_id AND wap.muted = 1)) AS ambient, EXISTS (SELECT 1 FROM thread_followers tf \
+     WHERE tf.thread_root_id = (SELECT root FROM p) AND tf.principal_kind = 'human' AND \
+     tf.principal_id = u.id) AS follows_thread FROM (",
+    participant_user_ids!(),
+    ") src JOIN users u ON u.id = src.user_id JOIN conversations c ON c.id = (SELECT conv FROM p) \
+     ORDER BY u.id"
+);
+
+impl MessageAlertAudience for SqliteUnreadReadModel {
+    async fn alert_audience(
+        &self,
+        conversation: &ConversationId,
+        message: &CreatedMessage,
+    ) -> Result<Option<AlertAudience>, PersistenceFailure> {
+        async {
+            let mut tx =
+                crate::foundation::statement_metrics::begin(&self.pool, Some(DEFERRED_READ_BEGIN))
+                    .await?;
+            let Some(place) = sqlx::query(SELECT_ALERT_PLACE)
+                .bind(conversation.as_str())
+                .fetch_optional(&mut *tx)
+                .await?
+            else {
+                return Ok::<_, UnreadReadModelError>(None);
+            };
+            let direct = place.try_get::<String, _>("roster_policy")? == "fixed";
+            let workspace = place
+                .try_get::<Option<String>, _>("workspace_id")?
+                .map(WorkspaceId::parse)
+                .transpose()
+                .map_err(|_| {
+                    UnreadReadModelError::MalformedIdentity("conversations.workspace_id")
+                })?;
+            let rows = sqlx::query(ALERT_RECIPIENTS)
+                .bind(conversation.as_str())
+                .bind(message.thread_root_id.as_ref().map(ThreadRootId::as_str))
+                .bind(CHANNEL_DEFAULT_MODE)
+                .fetch_all(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            let recipients = rows
+                .into_iter()
+                .map(|row| {
+                    Ok(AlertRecipient {
+                        viewer: UserId::parse(row.try_get::<String, _>("user_id")?)
+                            .map_err(|_| UnreadReadModelError::MalformedIdentity("users.id"))?,
+                        handle: ParticipantHandle::parse(row.try_get::<String, _>("name")?)
+                            .map_err(|_| UnreadReadModelError::MalformedIdentity("users.name"))?,
+                        standing: if direct {
+                            AlertStanding::Direct
+                        } else {
+                            AlertStanding::Channel {
+                                ambient: row.try_get("ambient")?,
+                                follows_thread: row.try_get("follows_thread")?,
+                            }
+                        },
+                    })
+                })
+                .collect::<Result<Vec<_>, UnreadReadModelError>>()?;
+            Ok(Some(AlertAudience {
+                place: AlertPlace {
+                    workspace,
+                    channel_title: if direct {
+                        None
+                    } else {
+                        Some(place.try_get("title")?)
+                    },
+                },
+                recipients,
+            }))
         }
         .await
         .map_err(PersistenceFailure::from_source)

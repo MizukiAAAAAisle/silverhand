@@ -475,9 +475,8 @@ const INSERT_HOME_WORKSPACE: &str = "INSERT INTO workspaces \
 /// the conversation insert.
 const INSERT_DM_CHANNEL: &str = "INSERT INTO conversations \
         (id, workspace_id, placement_kind, roster_policy, title, title_key, \
-         status, spawned_by_agent_id, closed_at, close_summary, created_at, updated_at, \
-         visibility) \
-     VALUES (?, ?, 'workspace', 'fixed', ?, ?, 'idle', NULL, NULL, NULL, ?, ?, 'private')";
+         spawned_by_agent_id, created_at, updated_at, visibility) \
+     VALUES (?, ?, 'workspace', 'fixed', ?, ?, NULL, ?, ?, 'private')";
 
 /// The agent's membership of its home DM.
 const INSERT_CONVERSATION_AGENT: &str = "INSERT INTO conversation_agents \
@@ -498,7 +497,7 @@ const READ_HOME_WORKSPACE_BACK: &str = "SELECT id, name, name_key, description, 
      owner_user_id, archived_at, created_at, updated_at FROM workspaces WHERE id = ?";
 /// Every column the writer touched on the home-DM row.
 const READ_DM_CHANNEL_BACK: &str = "SELECT id, workspace_id, placement_kind, roster_policy, \
-     title, title_key, status, visibility, spawned_by_agent_id, closed_at, close_summary, \
+     title, title_key, visibility, spawned_by_agent_id, \
      created_at, updated_at FROM conversations WHERE id = ?";
 /// The three roster edges, read back by their composite keys, each with its join clock.
 const READ_CONVERSATION_AGENT_BACK: &str = "SELECT conversation_id, agent_id, joined_at \
@@ -538,11 +537,8 @@ fn raw_onboarding_dm_row(row: &SqliteRow) -> Result<RawOnboardingDmRow, sqlx::Er
         roster_policy: row.try_get::<String, _>("roster_policy")?,
         title: row.try_get::<String, _>("title")?,
         title_key: row.try_get::<Option<String>, _>("title_key")?,
-        status: row.try_get::<String, _>("status")?,
         visibility: row.try_get::<String, _>("visibility")?,
         spawned_by_agent_id: row.try_get::<Option<String>, _>("spawned_by_agent_id")?,
-        closed_at: row.try_get::<Option<i64>, _>("closed_at")?,
-        close_summary: row.try_get::<Option<String>, _>("close_summary")?,
         created_at: row.try_get::<i64, _>("created_at")?,
         updated_at: row.try_get::<i64, _>("updated_at")?,
     })
@@ -962,11 +958,20 @@ mod tests {
             None => "NULL".to_string(),
         };
         format!(
-            "INSERT INTO agents \
-             (id, name, display_name, runtime, host_id, created_by_user_id, created_at, \
-              updated_at, materialization_status, session_scope, idempotency_key) \
-             VALUES ('{id}', '{id}', '{id}', 'claude', 'h1', 'u1', {created_at}, {created_at}, \
-                     '{status}', 'conversation', {key})"
+            seed_agent!(
+                id = "{id}",
+                display_name = "{id}",
+                host_id = "h1",
+                created_by_user_id = "u1",
+                created_at = ["{created_at}"],
+                updated_at = ["{created_at}"],
+                materialization_status = "{status}",
+                idempotency_key = ["{key}"],
+            ),
+            id = id,
+            created_at = created_at,
+            status = status,
+            key = key
         )
     }
 
@@ -1175,13 +1180,17 @@ mod tests {
         let mut seed = base_seed();
         // A failed row carrying a stale failure stamp, to prove reopen clears it.
         seed.push(
-            "INSERT INTO agents \
-             (id, name, display_name, runtime, host_id, created_by_user_id, created_at, \
-              updated_at, materialization_status, session_scope, idempotency_key, \
-              materialization_failed_code, materialization_failed_at) \
-             VALUES ('a1', 'a1', 'a1', 'claude', 'h1', 'u1', 1, 1, 'failed', 'conversation', \
-                     'idem-1', 'stale', 9)"
-                .to_string(),
+            seed_agent!(
+                id = "a1",
+                display_name = "a1",
+                host_id = "h1",
+                created_by_user_id = "u1",
+                materialization_status = "failed",
+                idempotency_key = "idem-1",
+                materialization_failed_code = "stale",
+                materialization_failed_at = 9,
+            )
+            .to_string(),
         );
         let path = seed_schema(&dir, "reopen.db", &seed).await;
         let store = SqliteHostAgentStore::open(&path).await.unwrap();
@@ -1305,21 +1314,33 @@ mod tests {
     /// `created_at`.
     fn seed_scoped_agent(id: &str, status: &str, scope: &str, created_at: i64) -> String {
         format!(
-            "INSERT INTO agents \
-             (id, name, display_name, runtime, host_id, created_by_user_id, created_at, \
-              updated_at, materialization_status, session_scope) \
-             VALUES ('{id}', '{id}', '{id}', 'claude', 'h1', 'u1', {created_at}, {created_at}, \
-                     '{status}', '{scope}')"
+            seed_agent!(
+                id = "{id}",
+                display_name = "{id}",
+                host_id = "h1",
+                created_by_user_id = "u1",
+                created_at = ["{created_at}"],
+                updated_at = ["{created_at}"],
+                materialization_status = "{status}",
+                session_scope = "{scope}",
+            ),
+            id = id,
+            created_at = created_at,
+            status = status,
+            scope = scope
         )
     }
 
     /// A direct line between the very same participants provisioning would open (agent `a1`
     /// and its creator `u1`), so get-or-create resolves it rather than minting the candidate.
-    const EXISTING_PAIR: &str = "INSERT INTO conversations \
-         (id, placement_kind, roster_policy, title, status, endpoint_a_kind, endpoint_a_id, \
-          endpoint_b_kind, endpoint_b_id, created_at, updated_at) \
-         VALUES ('existing-pair', 'direct_pair', 'fixed', 'DM', 'open', 'agent', 'a1', 'human', \
-                 'u1', 1, 1)";
+    const EXISTING_PAIR: &str = seed_direct_pair!(
+        id = "existing-pair",
+        title = "DM",
+        endpoint_a_kind = "agent",
+        endpoint_a_id = "a1",
+        endpoint_b_kind = "human",
+        endpoint_b_id = "u1",
+    );
 
     /// A message already holding the id the onboarding write will mint, so the dependent insert
     /// collides on the primary key only after the flip has won.
@@ -1600,11 +1621,15 @@ mod tests {
         {
             let mut seed = base_seed();
             seed.push(
-                "INSERT INTO agents \
-                 (id, name, display_name, runtime, host_id, created_by_user_id, created_at, \
-                  updated_at, materialization_status, session_scope) \
-                 VALUES ('a1', 'a1', 'a1', 'claude', 'h1', 'u1', 1, 200, 'active', 'agent')"
-                    .to_string(),
+                seed_agent!(
+                    id = "a1",
+                    display_name = "a1",
+                    host_id = "h1",
+                    created_by_user_id = "u1",
+                    updated_at = 200,
+                    session_scope = "agent",
+                )
+                .to_string(),
             );
             let path = seed_schema(&dir, "compensate-active-winner.db", &seed).await;
             let store = SqliteHostAgentStore::open(&path).await.unwrap();
@@ -1635,13 +1660,18 @@ mod tests {
         {
             let mut seed = base_seed();
             seed.push(
-                "INSERT INTO agents \
-                 (id, name, display_name, runtime, host_id, created_by_user_id, created_at, \
-                  updated_at, materialization_status, session_scope, \
-                  materialization_failed_code, materialization_failed_at) \
-                 VALUES ('a1', 'a1', 'a1', 'claude', 'h1', 'u1', 1, 250, 'failed', 'agent', \
-                         'some_other_code', 250)"
-                    .to_string(),
+                seed_agent!(
+                    id = "a1",
+                    display_name = "a1",
+                    host_id = "h1",
+                    created_by_user_id = "u1",
+                    updated_at = 250,
+                    materialization_status = "failed",
+                    session_scope = "agent",
+                    materialization_failed_code = "some_other_code",
+                    materialization_failed_at = 250,
+                )
+                .to_string(),
             );
             let path = seed_schema(&dir, "compensate-failed-winner.db", &seed).await;
             let store = SqliteHostAgentStore::open(&path).await.unwrap();
@@ -1744,17 +1774,16 @@ mod tests {
 
         // The home DM: a fixed-roster, private workspace channel carrying the canonical title
         // and folded key, riding the activation clock.
-        let (ws_id, placement, roster, title, title_key, dm_status, visibility, dm_created): (
+        let (ws_id, placement, roster, title, title_key, visibility, dm_created): (
             Option<String>,
             String,
             String,
             String,
             Option<String>,
-            String,
             String,
             i64,
         ) = sqlx::query_as(
-            "SELECT workspace_id, placement_kind, roster_policy, title, title_key, status, \
+            "SELECT workspace_id, placement_kind, roster_policy, title, title_key, \
                     visibility, created_at FROM conversations WHERE id = 'dm-onboard'",
         )
         .fetch_one(store.pool())
@@ -1765,7 +1794,6 @@ mod tests {
         assert_eq!(roster, "fixed");
         assert_eq!(title, ONBOARDING_DM_TITLE);
         assert_eq!(title_key.as_deref(), Some(ONBOARDING_DM_TITLE_KEY));
-        assert_eq!(dm_status, "idle");
         assert_eq!(visibility, "private");
         assert_eq!(dm_created, 99);
 

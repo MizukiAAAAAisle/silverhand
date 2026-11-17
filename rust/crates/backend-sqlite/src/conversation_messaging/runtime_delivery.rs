@@ -1,7 +1,9 @@
 //! SQLite runtime dispatch projection and durable inbox leases.
 
+use crate::foundation::conversation_lifecycle_sql::conversation_open;
 use std::{collections::HashSet, path::Path, time::Duration};
 
+use crate::foundation::agent_lifecycle_sql::{agent_materialized, agent_transition_clear};
 use serde::Serialize;
 use silverhand_backend_core::{
     conversation_messaging::messaging::{
@@ -48,9 +50,11 @@ pub(crate) async fn conversation_allows_delivery(
     connection: &mut SqliteConnection,
     conversation: &ConversationId,
 ) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ? AND archived_at IS NULL)",
-    )
+    sqlx::query_scalar(concat!(
+        "SELECT EXISTS(SELECT 1 FROM conversations WHERE id = ? AND ",
+        conversation_open!(""),
+        ")",
+    ))
     .bind(conversation.as_str())
     .fetch_one(connection)
     .await
@@ -158,9 +162,7 @@ impl SqliteRuntimeDeliveryStore {
             "UPDATE conversation_inboxes
                 SET in_flight_owner = NULL, in_flight_at = NULL
               WHERE conversation_id = ? AND agent_id = ?
-                AND delivered_at IS NULL AND failed_at IS NULL
-                AND in_flight_owner IS NOT NULL
-                AND in_flight_at IS NOT NULL AND in_flight_at <= ?",
+                AND in_flight_owner IS NOT NULL AND in_flight_at <= ?",
         )
         .bind(conversation.as_str())
         .bind(principal.agent().as_str())
@@ -292,19 +294,16 @@ impl SqliteRuntimeDeliveryStore {
             return Ok(ClaimPendingInbox::Empty);
         }
         for delivery in &deliveries {
-            let changed = sqlx::query(
+            let changed = sqlx::query(concat!(
                 "UPDATE conversation_inboxes
                     SET in_flight_owner = ?, in_flight_at = ?
                   WHERE id = ? AND conversation_id = ? AND agent_id = ?
                     AND delivered_at IS NULL AND failed_at IS NULL
                     AND in_flight_owner IS NULL
-                    AND EXISTS (
-                        SELECT 1 FROM agents
-                         WHERE id = ?
-                           AND runtime_transition_target IS NULL
-                           AND runtime_transition_started_at IS NULL
-                    )",
-            )
+                    AND EXISTS (SELECT 1 FROM agents WHERE id = ? AND ",
+                agent_transition_clear!(""),
+                ")",
+            ))
             .bind(owner.as_str())
             .bind(now_ms)
             .bind(delivery.id().as_i64())
@@ -401,21 +400,18 @@ impl SqliteRuntimeDeliveryStore {
                 Settlement::Consumed => (
                     "UPDATE conversation_inboxes SET delivered_at = ?, in_flight_owner = NULL,
                             in_flight_at = NULL
-                      WHERE id = ? AND in_flight_owner = ? AND delivered_at IS NULL
-                        AND failed_at IS NULL",
+                      WHERE id = ? AND in_flight_owner = ?",
                     None,
                 ),
                 Settlement::Failed(RuntimeDeliveryFailureReason::DriverRefused) => (
                     "UPDATE conversation_inboxes SET failed_at = ?, failed_reason = ?,
                             in_flight_owner = NULL, in_flight_at = NULL
-                      WHERE id = ? AND in_flight_owner = ? AND delivered_at IS NULL
-                        AND failed_at IS NULL",
+                      WHERE id = ? AND in_flight_owner = ?",
                     Some("driver_refused"),
                 ),
                 Settlement::Failed(_) => (
                     "UPDATE conversation_inboxes SET in_flight_owner = NULL, in_flight_at = NULL
-                      WHERE id = ? AND in_flight_owner = ? AND delivered_at IS NULL
-                        AND failed_at IS NULL",
+                      WHERE id = ? AND in_flight_owner = ?",
                     None,
                 ),
             };
@@ -1042,7 +1038,7 @@ impl RuntimeInboxCustodyPort for SqliteRuntimeDeliveryStore {
         let changed = sqlx::query(
             "UPDATE conversation_inboxes
                 SET in_flight_owner = NULL, in_flight_at = NULL
-              WHERE in_flight_owner = ? AND delivered_at IS NULL AND failed_at IS NULL",
+              WHERE in_flight_owner = ?",
         )
         .bind(owner.as_str())
         .execute(&self.pool)
@@ -1229,6 +1225,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
         if changed != 1 {
             return Err(PersistenceFailure::from_source(RuntimeExitInvariant));
         }
+        crate::host_runtime::runtime_credential::revoke_slot_credentials(&mut tx, slot_id).await?;
         insert_runtime_projection_event(
             &mut tx,
             slot_id,
@@ -1244,8 +1241,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
                 "UPDATE conversation_inboxes
                         SET in_flight_owner = NULL, in_flight_at = NULL
                       WHERE conversation_id = ? AND agent_id = ?
-                        AND in_flight_owner IS NOT NULL
-                        AND delivered_at IS NULL AND failed_at IS NULL",
+                        AND in_flight_owner IS NOT NULL",
             )
             .bind(source.as_str())
             .bind(agent.as_str())
@@ -1256,8 +1252,7 @@ impl DaemonEventDurablePort for SqliteRuntimeDeliveryStore {
             RuntimePrincipal::AgentSlot { agent, .. } => sqlx::query(
                 "UPDATE conversation_inboxes
                         SET in_flight_owner = NULL, in_flight_at = NULL
-                      WHERE agent_id = ? AND in_flight_owner IS NOT NULL
-                        AND delivered_at IS NULL AND failed_at IS NULL",
+                      WHERE agent_id = ? AND in_flight_owner IS NOT NULL",
             )
             .bind(agent.as_str())
             .execute(&mut *tx)
@@ -1817,11 +1812,13 @@ async fn stamp_agent_presence(
     if was_online {
         return Ok(Vec::new());
     }
-    let rows = sqlx::query(
+    let rows = sqlx::query(concat!(
         "SELECT viewer_id FROM (
              SELECT created_by_user_id AS viewer_id
                FROM agents
-              WHERE id = ? AND materialization_status = 'active'
+              WHERE id = ? AND ",
+        agent_materialized!(""),
+        "
                 AND created_by_user_id IS NOT NULL
              UNION
              SELECT CASE
@@ -1832,7 +1829,6 @@ async fn stamp_agent_presence(
                     END AS viewer_id
                FROM conversations
               WHERE placement_kind = 'direct_pair'
-                AND status = 'active'
                 AND ((endpoint_a_kind = 'agent' AND endpoint_a_id = ?
                       AND endpoint_b_kind = 'human')
                   OR (endpoint_b_kind = 'agent' AND endpoint_b_id = ?
@@ -1842,9 +1838,11 @@ async fn stamp_agent_presence(
                FROM workspace_members wm
                JOIN workspace_users wu ON wu.workspace_id = wm.workspace_id
                JOIN agents a ON a.id = wm.agent_id
-              WHERE wm.agent_id = ? AND a.materialization_status = 'active'
+              WHERE wm.agent_id = ? AND ",
+        agent_materialized!("a."),
+        "
          ) WHERE viewer_id IS NOT NULL ORDER BY viewer_id",
-    )
+    ))
     .bind(agent.as_str())
     .bind(agent.as_str())
     .bind(agent.as_str())
@@ -2919,27 +2917,55 @@ mod runtime_control_seat_tests {
         let path = directory.path().join("runtime-control-seat.sqlite");
         let mut db = crate::current_schema::create_current_schema(&path).await;
         db.execute(sqlx::raw_sql(
-            "INSERT INTO users(id,name,display_name,created_at,updated_at) \
-                 VALUES('user-1','owner','Owner',0,0); \
-             INSERT INTO hosts(id,name,kind,created_at) VALUES('host-1','Host','local',0); \
-             INSERT INTO agents(id,name,runtime,host_id,created_at,updated_at,display_name,\
-                 created_by_user_id,materialization_status,session_scope) VALUES \
-                 ('agent-conv','conv-agent','codex','host-1',0,0,'Conv','user-1','active','conversation'), \
-                 ('agent-seat','seat-agent','codex','host-1',0,0,'Seat','user-1','active','agent'); \
-             INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) \
-                 VALUES('workspace-1','Space','space','user-1',0,0); \
-             INSERT INTO conversations(id,workspace_id,placement_kind,roster_policy,title,title_key,\
-                 status,visibility,created_at,updated_at,latest_message_seq) VALUES \
-                 ('conversation-1','workspace-1','workspace','open','General','general','open','private',0,0,0), \
-                 ('conversation-2','workspace-1','workspace','open','Other','other','open','private',0,0,0); \
-             INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) \
-                 VALUES('conversation-1','agent-conv',0),('conversation-1','agent-seat',0); \
-             UPDATE agent_runtime_slots SET generation=1,claimed_by_daemon_instance_id='daemon-1',\
-                 observed_status='active',cli_session_id='session-conv' \
-               WHERE agent_id='agent-conv' AND conversation_id='conversation-1'; \
-             UPDATE agent_runtime_slots SET generation=1,claimed_by_daemon_instance_id='daemon-1',\
-                 observed_status='starting',cli_session_id='session-seat' \
-               WHERE agent_id='agent-seat' AND conversation_id IS NULL;",
+            concat!(
+                "INSERT INTO users(id,name,display_name,created_at,updated_at) VALUES('user-1','owner','Owner',0,0); ",
+                "INSERT INTO hosts(id,name,kind,created_at) VALUES('host-1','Host','local',0); ",
+                seed_agent!(
+                    id = "agent-conv",
+                    name = "conv-agent",
+                    runtime = "codex",
+                    host_id = "host-1",
+                    created_at = 0,
+                    updated_at = 0,
+                    display_name = "Conv",
+                    created_by_user_id = "user-1",
+                ),
+                "; ",
+                seed_agent!(
+                    id = "agent-seat",
+                    name = "seat-agent",
+                    runtime = "codex",
+                    host_id = "host-1",
+                    created_at = 0,
+                    updated_at = 0,
+                    display_name = "Seat",
+                    created_by_user_id = "user-1",
+                    session_scope = "agent",
+                ),
+                "; ",
+                "INSERT INTO workspaces(id,name,name_key,owner_user_id,created_at,updated_at) VALUES('workspace-1','Space','space','user-1',0,0); ",
+                seed_channel!(
+                    id = "conversation-1",
+                    workspace_id = "workspace-1",
+                    title = "General",
+                    title_key = "general",
+                    created_at = 0,
+                    updated_at = 0,
+                ),
+                "; ",
+                seed_channel!(
+                    id = "conversation-2",
+                    workspace_id = "workspace-1",
+                    title = "Other",
+                    title_key = "other",
+                    created_at = 0,
+                    updated_at = 0,
+                ),
+                "; ",
+                "INSERT INTO conversation_agents(conversation_id,agent_id,joined_at) VALUES('conversation-1','agent-conv',0),('conversation-1','agent-seat',0); ",
+                "UPDATE agent_runtime_slots SET generation=1,claimed_by_daemon_instance_id='daemon-1',observed_status='active',cli_session_id='session-conv' WHERE agent_id='agent-conv' AND conversation_id='conversation-1'; ",
+                "UPDATE agent_runtime_slots SET generation=1,claimed_by_daemon_instance_id='daemon-1',observed_status='starting',cli_session_id='session-seat' WHERE agent_id='agent-seat' AND conversation_id IS NULL; ",
+            ),
         ))
         .await
         .unwrap();

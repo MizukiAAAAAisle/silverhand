@@ -1,4 +1,3 @@
-import { usePageLive } from "@/navigation/page-stack";
 import { useCompactLayout } from "@/navigation/layout";
 import { MobileNavigationSlot } from "@/components/layout/mobile-header-slot";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -16,7 +15,6 @@ import { Composer } from "@/features/messages/components/composer";
 import { SelectionQuoteToolbar } from "@/features/messages/components/selection-quote-toolbar";
 import { ChannelJoinBar } from "@/features/messages/components/channel-join-bar";
 import { QuotedMessagePreview } from "@/features/messages/components/quoted-message-preview";
-import { findThreadAnchor, readAnchorMessageId } from "@/features/messages/model/thread-anchor";
 import { openAttachmentExternally } from "@/features/messages/model/open-attachment";
 import {
   attachmentPreviewKind,
@@ -31,18 +29,11 @@ import { useAgentAvatarObjectUrls } from "@/features/agents/hooks/avatar-hooks";
 import {
   useChannelAgents,
   useChannelAgentRuntime,
-  useChannelMessages,
   useConversationUnread,
-  useMarkMessageChannelRead,
 } from "@/features/channels/hooks";
+import { useChannelMessageWindow } from "../use-channel-message-window";
 import { useChannelMembership } from "@/features/channels/use-channel-membership";
 import { useJoinChannel } from "@/features/workspaces/hooks";
-import { lastCommittedSeq } from "@/features/channels/pending-message";
-import {
-  nextTailReadMark,
-  observeVisibleTail,
-  type TailReadMark,
-} from "@/features/conversation-shell/model/channel-read";
 import type { WorkspaceChannelReference } from "@/features/messages/components/conversation-ref";
 import { MemberStrip } from "./channel-view/member-strip";
 import { MessageList } from "./channel-view/message-list";
@@ -85,7 +76,9 @@ import { ChannelTasksTab } from "./channel-view/channel-tasks-tab";
 import { ChannelAttachmentTab } from "./channel-view/channel-attachment-tab";
 import { ConversationPanelTab } from "./channel-view/conversation-panel-tab";
 import { useConversationTabs } from "@/features/conversations/use-conversation-tabs";
+import { useTabCycleShortcut } from "@/features/app-shell/keyboard-shortcuts";
 import {
+  adjacentTabKey,
   isRemovable,
   tabKey,
   type PanelTabKind,
@@ -343,20 +336,6 @@ function ActiveChannelView({
   openAttachmentRequest,
   onAttachmentRequestConsumed,
 }: ChannelViewProps & { conversation: ConversationPaneDescriptor }): JSX.Element {
-  const {
-    data: messages = [],
-    isLoading,
-    hasPreviousPage,
-    isFetchingPreviousPage,
-    fetchPreviousPage,
-    isAtTail,
-    hasNewerLiveGap,
-    resetToLatest,
-    replyCountsByRoot,
-    replySummariesByRoot,
-    replyPreviewsByRoot,
-  } = useChannelMessages(conversation.id);
-
   // Per-viewer membership gate. A PUBLIC channel is readable by a
   // workspace user who has not joined it: they browse (message history + thread
   // content + inline attachment preview) with a Join affordance in place of the
@@ -543,51 +522,6 @@ function ActiveChannelView({
   // empty list). A false-by-default (missing key) reads as "no attention".
   const hasFollowedThreadUnread = conversationUnread?.followed_thread_unread ?? false;
 
-  // Advance the message read cursor as the visible mainline tail advances
-  // (#task:1255 P1c). ChannelView is rendered only when the channel is visible,
-  // but read advancement is VISIBILITY-driven, not frame-ARRIVAL-driven
-  // (#task:1244 / #task:1251 read-inert axis) — so we mark read off the mainline
-  // CACHE, not an `onWsFrame` handler (the hook is now a
-  // pure reader; gate-(b)). We mark only when the window is genuinely at the
-  // tail (`isAtTail && !hasNewerLiveGap`) and the newest mainline row actually
-  // advanced. By construction `useChannelMessages` keeps reply-only rows OUT of
-  // `messages` (they bump a badge, not the list) and does NOT append while the
-  // window is off-tail (it sets the gap instead) — so scrolled-in-history and
-  // reply-only frames never mark the mainline read. This is a deliberate read
-  // tightening over the old "any message frame → markRead" (which marked on
-  // arrival even off-tail / reply-only): see the dogfood handoff note.
-  const markRead = useMarkMessageChannelRead();
-  const live = usePageLive();
-  // Gate off the newest COMMITTED row — a pending optimistic tail has no
-  // MessageSeq, and mark-read must advance on a real ordinal (§3.3/§3.5).
-  const tailSeq = lastCommittedSeq(messages);
-  const lastMarkedRef = useRef<TailReadMark | null>(null);
-
-  useEffect(() => {
-    // Mark-read is a member effect: a non-member browsing a public channel must
-    // never advance a read cursor / write read-state (gate.allowMemberEffects).
-    // This is a BEHAVIOR gate, not a hidden control — the auto-effect itself is
-    // suppressed, not merely a button.
-    if (!gate.allowMemberEffects || !live) return;
-    const next = nextTailReadMark(
-      lastMarkedRef.current,
-      conversation.id,
-      tailSeq,
-      isAtTail,
-      hasNewerLiveGap,
-    );
-    if (!next) return;
-    return observeVisibleTail(
-      next,
-      (mark) => markRead.mutateAsync({ id: mark.channelId, snapshotSeq: mark.seq }),
-      (mark) => {
-        lastMarkedRef.current = mark;
-      },
-    );
-    // mutateAsync is stable; cleanup cancels recovery if this tail is no longer visible.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversation.id, tailSeq, isAtTail, hasNewerLiveGap, gate.allowMemberEffects, live]);
-
   const { data: agents = [] } = useAgents();
   // Single batch fetch for every agent avatar in this channel — threaded
   // down to MemberStrip and MessageList (→ MessageItem authors) so the
@@ -634,41 +568,17 @@ function ActiveChannelView({
   // Thread children carry a single thread_anchor system message — the
   // header surfaces it as "Thread — #parent" + jump-back. The row
   // itself is filtered out of the message list below.
-  const anchor = useMemo(() => findThreadAnchor(messages), [messages]);
-  const anchorMessageId = anchor ? readAnchorMessageId(anchor.metadata) : null;
+  const messageWindow = useChannelMessageWindow({
+    conversationId: conversation.id,
+    jumpTarget,
+    jumpPrimePending,
+    onJumped,
+    onThreadAnchorResolved,
+    markReadEnabled: gate.allowMemberEffects,
+  });
+  const { anchor, anchorMessageId, visibleMessages, effectiveJumpMessageId } = messageWindow;
   const showThreadHeader = !!onCloseChild && !!anchor;
 
-  // Tell the parent pane which original message this thread is anchored
-  // to so it can highlight that row. Re-fires on anchor/id change;
-  // cleanup clears the highlight when this view unmounts.
-  useEffect(() => {
-    if (!onThreadAnchorResolved) return;
-    onThreadAnchorResolved(anchorMessageId);
-    return () => onThreadAnchorResolved(null);
-  }, [onThreadAnchorResolved, anchorMessageId]);
-
-  const visibleMessages = useMemo(
-    () => (anchor ? messages.filter((m) => m.id !== anchor.id) : messages),
-    [messages, anchor],
-  );
-  const loadEarlierMessages = useCallback(() => {
-    if (!hasPreviousPage || isFetchingPreviousPage) return;
-    // Scroll and startReached can arrive before React commits the fetching
-    // flag. Let the query deduplicate them rather than cancel/restart the page.
-    void fetchPreviousPage({ cancelRefetch: false });
-  }, [fetchPreviousPage, hasPreviousPage, isFetchingPreviousPage]);
-
-  // Resolve the prop-driven jump target — fires when the global Saved
-  // view or the Tasks panel hands us a `{channelId, messageId}` for a
-  // message inside this channel. Cleared by `onJumped` once the
-  // message-list scroll completes.
-  const effectiveJumpMessageId =
-    jumpTarget && jumpTarget.channelId === conversation.id ? jumpTarget.messageId : null;
-  const handleMessageJumped = useCallback(() => {
-    if (jumpTarget && jumpTarget.channelId === conversation.id) {
-      onJumped?.();
-    }
-  }, [conversation.id, jumpTarget, onJumped]);
   // A message jump's destination is the chat stream, so any jump landing in THIS
   // conversation brings Chat to the front. Without it the scroll/highlight
   // happens under whatever tab is in front (an opaque overlay) and the viewer
@@ -719,7 +629,7 @@ function ActiveChannelView({
   // an "ensure the match is visible" op, NOT "reopen a message window" (Cindy):
   //   • match already in the LOADED window (data, not DOM — a virtualized row
   //     can be loaded-but-unmounted) → MessageList scrolls to it locally via
-  //     `searchActiveMessageId` (no prime, no Virtuoso remount → no white flash).
+  //     `searchActiveMessageId` (no prime, no list remount → no white flash).
   //   • match off the loaded window → App's jump/prime path materialises it.
   // Offered only when the pane supports being jumped into (`onJumpToMessage`
   // present) — secondary `?side` panes don't, so they show no find affordance.
@@ -776,6 +686,10 @@ function ActiveChannelView({
   const nativeBarAvailable = useNativeBarPlatform();
   const nativeTitle = showThreadHeader ? (parentTitle ?? conversation.title) : conversation.title;
   const counterpart = paneMode.kind === "direct_message" ? paneMode.counterpart : null;
+  const exportHeader = useMemo(
+    () => ({ title: conversation.title, counterpart }),
+    [conversation.title, counterpart],
+  );
   const nativeTitleIcon = useHeaderIdentityIcon(paneCaps.headerIdentity, counterpart);
   // A pair's title opens its counterpart, as the web header's face does.
   const openCounterpart =
@@ -957,6 +871,9 @@ function ActiveChannelView({
     },
   });
   const nativeHeader = native.active;
+  useTabCycleShortcut(findRootRef, viewTabsShown && !nativeHeader, (step) =>
+    tabController.setActive(adjacentTabKey(tabController.tabs, tabController.activeKey, step)),
+  );
 
   return (
     <TaskRefContextProvider value={taskRefContext}>
@@ -1239,7 +1156,7 @@ function ActiveChannelView({
           the message list. Anchored just below the h-12 header (`top-12`, or
           below the header + tab strip when it shows) and taken out of flow
           (`absolute`) so opening / closing / typing NEVER changes the scroll
-          container's height → no Virtuoso reflow / flicker (shiki: 搜索框不应挤压
+          container's height → no list reflow / flicker (shiki: 搜索框不应挤压
           对话流、不应触发重渲染). It only drives the search controller + this
           overlay; the message window is untouched until the user navigates to a
           match (ensure-visible below). */}
@@ -1285,15 +1202,12 @@ function ActiveChannelView({
               <MessageList
                 channelId={conversation.id}
                 workspaceId={conversation.workspace_id}
-                messages={visibleMessages}
+                exportHeader={exportHeader}
+                {...messageWindow.listProps}
                 canReact={!closed && !isArchived && gate.allowMutations}
                 canSave={gate.allowMutations}
                 canParticipate={gate.allowMemberEffects}
                 canMutateLinkedTask={!closed && !isArchived && gate.allowMutations}
-                isLoading={isLoading}
-                hasMoreBefore={!!hasPreviousPage}
-                isFetchingEarlier={isFetchingPreviousPage}
-                onLoadEarlier={loadEarlierMessages}
                 agentAvatarUrls={agentAvatarUrls}
                 leadingSlot={
                   anchor ? (
@@ -1308,25 +1222,10 @@ function ActiveChannelView({
                   ) : null
                 }
                 highlightedMessageId={highlightedMessageId ?? null}
-                jumpToMessageId={effectiveJumpMessageId}
-                jumpAttemptId={jumpTarget?.channelId === conversation.id ? jumpTarget.attemptId : undefined}
-                jumpPrimePending={
-                  // Only pass `true` when this pane's prop-driven jump
-                  // (the App-orchestrated saved/task jump) is the one
-                  // App is currently priming. activity-strip jumps stay
-                  // local — those messages are by construction recent
-                  // and already in cache, so they never go through the
-                  // prime path.
-                  jumpPrimePending && !!jumpTarget && jumpTarget.channelId === conversation.id
+                jumpAttemptId={
+                  jumpTarget?.channelId === conversation.id ? jumpTarget.attemptId : undefined
                 }
-                onJumped={handleMessageJumped}
-                isAtTail={isAtTail}
-                hasNewerLiveGap={hasNewerLiveGap}
-                onResetToLatest={resetToLatest}
                 onOpenThread={onOpenThread}
-                replyCountsByRoot={replyCountsByRoot}
-                replySummariesByRoot={replySummariesByRoot}
-                replyPreviewsByRoot={replyPreviewsByRoot}
                 threadUnreadByRoot={threadUnreadByRoot}
                 conversationRefsById={conversationRefsById}
                 onOpenConversationRef={onOpenConversationRef}
@@ -1372,7 +1271,7 @@ function ActiveChannelView({
 
             {/* Tasks tab — an opaque overlay over the chat column (message list +
             composer) rather than a mount swap, so Chat stays mounted and its
-            Virtuoso scroll survives a tab round-trip. Rendered only while the
+            scroll position survives a tab round-trip. Rendered only while the
             Tasks tab is active, a task-open handler exists (the primary pane),
             AND a board container resolved (fail-closed: a workspace channel with
             no real workspace id mounts nothing). A card opens detail in the side
