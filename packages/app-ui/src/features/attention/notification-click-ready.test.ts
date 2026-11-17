@@ -75,7 +75,11 @@ function alert(overrides: Partial<MessageAlert> = {}): MessageAlert {
   };
 }
 type Jump = Parameters<typeof useNotificationToasts>[1];
-async function harness(initial: NotificationDto[] = [], firstRows?: Promise<NotificationDto[]>) {
+async function harness(
+  initial: NotificationDto[] = [],
+  firstRows?: Promise<NotificationDto[]>,
+  retainedBridge?: AndroidNotificationBridge,
+) {
   let rows = initial;
   let first = firstRows;
   let nativeClick!: () => void;
@@ -83,7 +87,7 @@ async function harness(initial: NotificationDto[] = [], firstRows?: Promise<Noti
   let reference: Promise<unknown> | undefined;
   let delayedClicks: Promise<{ clicks: Array<{ id: string; token: string }> }> | undefined;
   let serial = 0;
-  const bridge: AndroidNotificationBridge = {
+  const bridge: AndroidNotificationBridge = retainedBridge ?? {
     notificationSession: vi.fn(async () => ({ session: "session-a" })),
     notificationShow: vi.fn(async () => ({ status: "posted" })),
     notificationDismiss: vi.fn(async () => ({ status: "dismissed" })),
@@ -591,6 +595,88 @@ it.each(["mention", "direct"] as const)(
       });
     } finally {
       await h.close();
+    }
+  },
+);
+
+it.each([
+  { workspaceId: null, threadRootId: null, channelId: "dm" },
+  { workspaceId: "workspace", threadRootId: "thread", channelId: "channel" },
+])(
+  "restores a retained native ticket into a new JS owner without a row or WS replay ($channelId)",
+  async (coords) => {
+    // Native process lifetime is separate from both JS owner lifetimes. Java controls
+    // exercise the actual Ticket owner; this bridge fixture only models that boundary.
+    type Target = NonNullable<
+      Parameters<AndroidNotificationBridge["notificationShow"]>[0]["clickTarget"]
+    >;
+    let receive: () => void = () => {};
+    let token = 0;
+    const tickets = new Map<string, { id: string; token: string; clickTarget?: Target }>();
+    let pending: Array<{ id: string; token: string; clickTarget?: Target }> = [];
+    const bridge: AndroidNotificationBridge = {
+      notificationSession: vi.fn(async () => ({ session: "same-login" })),
+      notificationShow: vi.fn(async (input) => {
+        if (input.notificationId)
+          tickets.set(input.notificationId, {
+            id: input.notificationId,
+            token: String(++token),
+            clickTarget: input.clickTarget,
+          });
+        return { status: "posted" };
+      }),
+      notificationDismiss: vi.fn(async () => ({ status: "dismissed" })),
+      notificationTakeClicks: vi.fn(async () => {
+        const batch = pending;
+        pending = [];
+        return { clicks: batch };
+      }),
+      addListener: vi.fn(async (_event, fn) => {
+        receive = fn;
+        return {
+          remove: async () => {
+            if (receive === fn) receive = () => {};
+          },
+        };
+      }),
+    };
+    const old = await harness([], undefined, bridge);
+    const oldJump = vi.fn();
+    await old.render(oldJump);
+    await old.alert(
+      alert({
+        conversation_id: coords.channelId,
+        workspace_id: coords.workspaceId,
+        thread_root_id: coords.threadRootId,
+        reason: "direct",
+      }),
+    );
+    const ticket = tickets.get("alert:message")!;
+    expect(ticket.clickTarget).toEqual({ ...coords, messageId: "message" });
+    await old.close(); // Only JS is rebuilt, not the process notification session/ticket.
+    const next = await harness([], undefined, bridge);
+    const jump = vi.fn();
+    try {
+      tickets.delete(ticket.id);
+      pending.push(ticket);
+      receive();
+      await next.settle();
+      expect(jump).not.toHaveBeenCalled();
+      await next.render(jump);
+      await next.settle();
+      expect(jump).toHaveBeenCalledExactlyOnceWith({
+        ...coords,
+        workspaceId: coords.workspaceId ?? undefined,
+        messageId: "message",
+      });
+      pending.push(ticket);
+      receive();
+      await next.settle();
+      expect(jump).toHaveBeenCalledOnce();
+      expect(oldJump).not.toHaveBeenCalled();
+      expect(next.request.mock.calls.some(([v]) => v.path.endsWith("/ref"))).toBe(false);
+    } finally {
+      await next.close();
     }
   },
 );

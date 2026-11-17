@@ -125,7 +125,7 @@ beforeEach(() => {
   h.visible = true;
   h.duplicate = false;
   h.scrollError = null;
-  h.scrollToKey.mockClear();
+  h.scrollToKey.mockReset().mockReturnValue(true);
   h.scrollToBottom.mockClear();
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   callbacks = new Map();
@@ -405,6 +405,71 @@ describe("system event jump lifecycle with controlled MessageScroller/geometry",
     expect(container.querySelectorAll("[data-day-separator]")).toHaveLength(2);
     await render(messages, { jumpToMessageId: null, hasMoreBefore: true });
     expect(container.querySelectorAll("[data-day-separator]")).toHaveLength(1);
+  });
+  it("waits for a published ordinary row before flashing or completing", async () => {
+    const messages = [{ ...event("e"), from_kind: "user" as const, metadata: null }],
+      done = vi.fn();
+    h.scrollToKey.mockReturnValueOnce(false).mockReturnValue(true);
+    await render(messages, { onJumped: done });
+    expect(container.querySelector(".msg-jump-flash")).toBeNull();
+    await act(async () => vi.advanceTimersByTime(3000));
+    expect(done).not.toHaveBeenCalled();
+    await frames();
+    expect(h.scrollToKey).toHaveBeenCalledTimes(2);
+    expect(container.querySelector("#msg-e")!.classList.contains("msg-jump-flash")).toBe(true);
+    await act(async () => vi.advanceTimersByTime(2999));
+    expect(done).not.toHaveBeenCalled();
+    await act(async () => vi.advanceTimersByTime(1));
+    expect(done).toHaveBeenCalledOnce();
+  });
+  it("bounds an unpublished ordinary jump and retains its failure until a new attempt", async () => {
+    const messages = [{ ...event("e"), from_kind: "user" as const, metadata: null }],
+      done = vi.fn();
+    h.scrollToKey.mockReturnValue(false);
+    await render(messages, { onJumped: done });
+    await frames(60);
+    expect(state().messageJumpError).toMatch(/not published/);
+    expect(container.querySelector(".msg-jump-flash")).toBeNull();
+    expect(done).toHaveBeenCalledOnce();
+    const tries = h.scrollToKey.mock.calls.length;
+    await render([...messages], { onJumped: done });
+    await frames();
+    expect(h.scrollToKey).toHaveBeenCalledTimes(tries);
+    h.scrollToKey.mockReturnValue(true);
+    await render(messages, { onJumped: done, jumpAttemptId: 2 });
+    expect(container.querySelector(".msg-jump-flash")).not.toBeNull();
+  });
+  it("invalidates delayed ordinary publication after cancellation, a new attempt or hiding", async () => {
+    const messages = [{ ...event("e"), from_kind: "user" as const, metadata: null }],
+      done = vi.fn();
+    h.scrollToKey.mockReturnValue(false);
+    await render(messages, { onJumped: done });
+    const old = [...callbacks.values()][0]!;
+    await render(messages, { onJumped: done, jumpAttemptId: 2 });
+    const tries = h.scrollToKey.mock.calls.length;
+    await act(async () => old(1));
+    expect(h.scrollToKey).toHaveBeenCalledTimes(tries);
+    const hidden = [...callbacks.values()].at(-1)!;
+    await render(messages, { onJumped: done, surfaceActive: false });
+    await act(async () => hidden(2));
+    await render(messages, { onJumped: done, jumpToMessageId: null });
+    await frames(60);
+    await act(async () => vi.advanceTimersByTime(3000));
+    expect(done).not.toHaveBeenCalled();
+    expect(container.querySelector(".msg-jump-flash")).toBeNull();
+  });
+  it("does not complete a pending ordinary scroll after unmount", async () => {
+    const messages = [{ ...event("e"), from_kind: "user" as const, metadata: null }],
+      done = vi.fn();
+    h.scrollToKey.mockReturnValue(false);
+    await render(messages, { onJumped: done });
+    const stale = [...callbacks.values()][0]!;
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    h.scrollToKey.mockReturnValue(true);
+    await act(async () => stale(1));
+    await act(async () => vi.advanceTimersByTime(3000));
+    expect(done).not.toHaveBeenCalled();
   });
   it("keeps the ordinary message flash path and suppresses hidden-surface completion", async () => {
     const ordinary = { ...event("e"), from_kind: "user" as const, metadata: null },

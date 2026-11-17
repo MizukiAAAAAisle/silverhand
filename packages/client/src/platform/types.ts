@@ -54,6 +54,15 @@ export interface ShellCapability {
   respondContextualClose(reqId: string, outcome: "closed-panel" | "background-app"): void;
 }
 
+/** Optional in-process handoff for a notification whose JS presentation owner was rebuilt.
+ * Platforms retain it only with the successfully posted, current-session notification. */
+export interface NotificationClickTarget {
+  channelId: string;
+  messageId: string;
+  threadRootId: string | null;
+  workspaceId: string | null;
+}
+
 export interface NotificationCapability {
   showSystemNotification(opts: {
     title: string;
@@ -64,8 +73,11 @@ export interface NotificationCapability {
     groupId?: string;
     force?: boolean;
     notificationId?: string;
+    clickTarget?: NotificationClickTarget;
   }): Promise<void>;
-  onNotificationClicked(handler: (notificationId: string) => void): () => void;
+  onNotificationClicked(
+    handler: (notificationId: string, clickTarget?: NotificationClickTarget) => void,
+  ): () => void;
   dismissSystemNotifications(notificationIds: string[]): Promise<void>;
   setBadgeCount(count: number): Promise<void>;
 }

@@ -83,6 +83,44 @@ public final class NotificationStateTest {
             state.click(next,item.tag,item.token);
         }
         require(state.takeClicks(next).size() == 32);
+        System.out.println("control=retained-click-target-current-session");
+        var target = new NotificationState.ClickTarget("channel", "message", "thread", "workspace");
+        var retained = state.prepare(next, "alert:message", target);
+        post(state, retained); // The JS owner may now be destroyed; this process-owned ticket remains.
+        require(state.click(next, retained.tag, retained.token) == retained);
+        var recovered = state.takeClicks(next).get(0);
+        require(recovered.clickTarget == target && recovered.clickTarget.threadRootId.equals("thread") &&
+            recovered.clickTarget.workspaceId.equals("workspace") && recovered.clickTarget.channelId.equals("channel"));
+        require(state.takeClicks(next).isEmpty() && state.click(next, retained.tag, retained.token) == null);
+        System.out.println("control=target-only-successful-post");
+        var unposted = state.prepare(next, "alert:message", target);
+        require(state.click(next, unposted.tag, unposted.token) == null);
+        try { state.post(unposted, () -> { throw new IllegalStateException("OS post refused"); }); }
+        catch (IllegalStateException expected) { }
+        require(state.click(next, unposted.tag, unposted.token) == null);
+        System.out.println("control=dm-and-legacy-target-payloads");
+        var dmTarget = new NotificationState.ClickTarget("direct", "dm", null, null);
+        var dm = state.prepare(next, "alert:dm", dmTarget); post(state, dm);
+        state.click(next, dm.tag, dm.token);
+        require(state.takeClicks(next).get(0).clickTarget.workspaceId == null && dm.clickTarget.threadRootId == null);
+        var legacy = state.prepare(next, "legacy"); post(state, legacy); state.click(next, legacy.tag, legacy.token);
+        require(state.takeClicks(next).get(0).clickTarget == null);
+        System.out.println("control=invalid-target-and-id-refused");
+        try { state.prepare(next, "alert:other", target); throw new AssertionError(); }
+        catch (IllegalArgumentException expected) { }
+        try { new NotificationState.ClickTarget("", "message", null, null); throw new AssertionError(); }
+        catch (IllegalArgumentException expected) { }
+        try { new NotificationState.ClickTarget("c", "message", "", null); throw new AssertionError(); }
+        catch (IllegalArgumentException expected) { }
+        System.out.println("control=dismiss-delete-reset-drop-targets");
+        var drop = state.prepare(next, "alert:message", target); post(state, drop);
+        state.click(next, drop.tag, drop.token); state.dismiss(next, "alert:message");
+        require(state.takeClicks(next).isEmpty());
+        drop = state.prepare(next, "alert:message", target); post(state, drop);
+        state.deleted(next, drop.tag, drop.token); require(state.click(next, drop.tag, drop.token) == null);
+        drop = state.prepare(next, "alert:message", target); post(state, drop); state.reset();
+        require(state.click(next, drop.tag, drop.token) == null);
+        try { state.takeClicks(next); throw new AssertionError(); } catch (IllegalStateException expected) { }
         System.out.println("Notification identity controls passed: exact tags, replacement, one-shot clicks, anonymous, Activity owner, reset, dismiss, bounded queue");
     }
 }

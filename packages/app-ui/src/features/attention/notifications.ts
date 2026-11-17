@@ -1,3 +1,4 @@
+import type { NotificationClickTarget } from "@silverhand/client";
 import { getPlatform } from "@/platform";
 import { useCallback, useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -195,6 +196,8 @@ export function useNotificationToasts(
     for (const [id, pending] of pendingClicks.current) {
       if (pending.target) {
         forgetClick(id);
+        if (pending.target.workspaceId)
+          recordChannelWorkspace(pending.target.channelId, pending.target.workspaceId);
         onJumpRef.current(pending.target);
         continue;
       }
@@ -254,12 +257,30 @@ export function useNotificationToasts(
   }, []);
 
   const handleClickById = useCallback(
-    (notificationId: string): void => {
+    (notificationId: string, clickTarget?: NotificationClickTarget): void => {
       if (!clicksMounted.current || pendingClicks.current.has(notificationId)) return;
       if (pendingClicks.current.size >= 16) forgetClick(pendingClicks.current.keys().next().value!);
       pendingClicks.current.set(notificationId, {
         timeout: setTimeout(() => forgetClick(notificationId), 10_000),
         resolving: false,
+        target:
+          clickTarget &&
+          notificationId === `alert:${clickTarget.messageId}` &&
+          typeof clickTarget.channelId === "string" &&
+          clickTarget.channelId.trim() &&
+          typeof clickTarget.messageId === "string" &&
+          clickTarget.messageId.trim() &&
+          (clickTarget.threadRootId === null ||
+            (typeof clickTarget.threadRootId === "string" && clickTarget.threadRootId.trim())) &&
+          (clickTarget.workspaceId === null ||
+            (typeof clickTarget.workspaceId === "string" && clickTarget.workspaceId.trim()))
+            ? {
+                channelId: clickTarget.channelId,
+                messageId: clickTarget.messageId,
+                threadRootId: clickTarget.threadRootId,
+                workspaceId: clickTarget.workspaceId ?? undefined,
+              }
+            : undefined,
       });
       flushClicks();
     },
@@ -335,6 +356,12 @@ export function useNotificationToasts(
         ...alertNotice(alert),
         force: urgent,
         notificationId: id,
+        clickTarget: {
+          channelId: alert.conversation_id,
+          messageId: alert.message_id,
+          threadRootId: alert.thread_root_id,
+          workspaceId: alert.workspace_id,
+        },
       });
     }
 

@@ -15,6 +15,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
+import org.json.JSONObject
 
 /** One process owner across Activity replacements; never retains an Activity or JS listener. */
 internal class SystemNotifications private constructor(private val context: Context) {
@@ -91,7 +92,18 @@ internal class SystemNotifications private constructor(private val context: Cont
         val title = input.getString("title") ?: error("Notification title missing")
         val id = input.getString("notificationId")
         require(id == null || id.isNotBlank()) { "Notification identity is empty" }
-        val ticket = state.prepare(session, id)
+        val coordinates = if (input.has("clickTarget") && !input.isNull("clickTarget")) {
+            val value = input.optJSONObject("clickTarget") ?: error("Invalid notification click target")
+            fun coordinate(key: String, nullable: Boolean = false): String? {
+                val field = value.opt(key)
+                if (nullable && field === JSONObject.NULL) return null
+                require(field is String) { "Invalid notification click coordinate" }
+                return field
+            }
+            NotificationState.ClickTarget(coordinate("channelId"), coordinate("messageId"),
+                coordinate("threadRootId", true), coordinate("workspaceId", true))
+        } else null
+        val ticket = state.prepare(session, id, coordinates)
         val text = listOfNotNull(input.getString("subtitle"), input.getString("body"))
             .filter { it.isNotBlank() }.joinToString("\n")
         try {
@@ -133,6 +145,14 @@ internal class SystemNotifications private constructor(private val context: Cont
         cancelIntents(state.deleted(parts[0], parts[2], parts[1]))
     }
     fun takeClicks(session: String): JSArray = JSArray().apply {
-        for (ticket in state.takeClicks(session)) put(JSObject().put("id", ticket.notificationId).put("token", ticket.token))
+        for (ticket in state.takeClicks(session)) {
+            val click = JSObject().put("id", ticket.notificationId).put("token", ticket.token)
+            ticket.clickTarget?.let { target ->
+                click.put("clickTarget", JSObject().put("channelId", target.channelId).put("messageId", target.messageId)
+                    .put("threadRootId", target.threadRootId ?: JSONObject.NULL)
+                    .put("workspaceId", target.workspaceId ?: JSONObject.NULL))
+            }
+            put(click)
+        }
     }
 }

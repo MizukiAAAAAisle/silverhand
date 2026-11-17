@@ -11,10 +11,21 @@ import java.util.UUID;
  * Android's full string tag is the identity; neither hashes nor group/title identify a notice.
  * The caller serializes this state on the main thread. */
 final class NotificationState {
+    static final class ClickTarget {
+        final String channelId, messageId, threadRootId, workspaceId;
+        ClickTarget(String channelId, String messageId, String threadRootId, String workspaceId) {
+            if (channelId == null || channelId.trim().isEmpty() || messageId == null || messageId.trim().isEmpty() ||
+                (threadRootId != null && threadRootId.trim().isEmpty()) || (workspaceId != null && workspaceId.trim().isEmpty()))
+                throw new IllegalArgumentException("Invalid notification click coordinates");
+            this.channelId=channelId; this.messageId=messageId; this.threadRootId=threadRootId; this.workspaceId=workspaceId;
+        }
+    }
     static final class Ticket {
         final String session, tag, token, notificationId;
-        Ticket(String session, String tag, String token, String notificationId) {
+        final ClickTarget clickTarget;
+        Ticket(String session, String tag, String token, String notificationId, ClickTarget clickTarget) {
             this.session = session; this.tag = tag; this.token = token; this.notificationId = notificationId;
+            this.clickTarget = clickTarget;
         }
     }
 
@@ -26,10 +37,13 @@ final class NotificationState {
     boolean current(String value) { return session.equals(value); }
     String tag(String id) { return "silverhand:" + session + ":id:" + id; }
 
-    Ticket prepare(String owner, String id) {
+    Ticket prepare(String owner, String id) { return prepare(owner, id, null); }
+    Ticket prepare(String owner, String id, ClickTarget target) {
+        if (target != null && !Objects.equals(id, "alert:" + target.messageId))
+            throw new IllegalArgumentException("Notification id does not match click target");
         if (!current(owner)) throw new IllegalStateException("Notification session expired");
         String tag = id == null ? "silverhand:" + session + ":anonymous:" + UUID.randomUUID() : tag(id);
-        return new Ticket(session, tag, UUID.randomUUID().toString(), id);
+        return new Ticket(session, tag, UUID.randomUUID().toString(), id, target);
     }
 
     Ticket post(Ticket ticket, Runnable enqueue) {
@@ -67,6 +81,7 @@ final class NotificationState {
 
     Ticket dismiss(String owner, String id) {
         if (!current(owner)) throw new IllegalStateException("Notification session expired");
+        pendingClicks.values().removeIf(ticket -> Objects.equals(ticket.notificationId, id));
         return issued.remove(tag(id));
     }
 

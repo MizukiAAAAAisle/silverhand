@@ -349,6 +349,11 @@ export function MessageList({
   activeJumpOwner.current = surfaceActive ? jumpOwner : null;
   const systemLocateBudget = useRef({ owner: jumpOwner, frames: 0 });
   const failedSystemOwner = useRef<string | null>(null);
+  const ordinaryLocateBudget = useRef({ owner: jumpOwner, frames: 0 });
+  const [ordinaryJumpError, setOrdinaryJumpError] = useState<{
+    owner: string;
+    error: string;
+  } | null>(null);
   const [systemLocate, setSystemLocate] = useState<{
     owner: string;
     messageId: string;
@@ -450,10 +455,17 @@ export function MessageList({
     }
     const target = items[jumpTargetIdx];
     if (!target) return;
+    // System members have their own DOM/visibility locate loop below. Ordinary
+    // rows wait for successful publication there before starting their flash.
+    if (
+      target.kind !== "cluster" &&
+      !(isCommittedMessage(target.message) && target.message.from_kind === "system")
+    )
+      return;
     const key = `${jumpOwner}:${itemKey(target)}`;
     if (lastJumpScrollKeyRef.current === key) return;
-    lastJumpScrollKeyRef.current = key;
-    scrollerRef.current?.scrollToKey(itemKey(target), "center");
+    if (scrollerRef.current?.scrollToKey(itemKey(target), "center"))
+      lastJumpScrollKeyRef.current = key;
   }, [channelId, items, itemKey, jumpTargetIdx, jumpToMessageId, jumpOwner]);
 
   // The reset's latest window is spent by its first real mount, after the
@@ -584,9 +596,55 @@ export function MessageList({
         isCommittedMessage(target.message) &&
         target.message.from_kind === "system");
     if (!system) {
-      setShowScrollBottom(true);
-      setFlashedMessageId(jumpToMessageId);
-      return; // Ordinary messages retain their declarative positioning path.
+      if (ordinaryJumpError?.owner === owner) return;
+      const key = `${owner}:${itemKey(target!)}`;
+      if (lastJumpScrollKeyRef.current === key) return;
+      if (ordinaryLocateBudget.current.owner !== owner)
+        ordinaryLocateBudget.current = { owner, frames: 0 };
+      let cancelled = false;
+      let frame = 0;
+      const fail = (error: unknown): void => {
+        if (cancelled || activeJumpOwner.current !== owner) return;
+        setFlashedMessageId(null);
+        setOrdinaryJumpError({ owner, error: String(error) });
+        // Release a failed jump without publishing a successful flash.
+        try {
+          onJumped?.();
+        } catch (secondary) {
+          setOrdinaryJumpError({
+            owner,
+            error: `${String(error)}; release failed: ${String(secondary)}`,
+          });
+        }
+      };
+      const position = (): void => {
+        if (cancelled || activeJumpOwner.current !== owner) return;
+        try {
+          if (scrollerRef.current?.scrollToKey(itemKey(target!), "center")) {
+            lastJumpScrollKeyRef.current = key;
+            setShowScrollBottom(true);
+            setFlashedMessageId(jumpToMessageId);
+            return;
+          }
+          // The scroller publishes its first-paint window in later frames.
+          // Keep the same finite budget across list rerenders for this owner.
+          if (++ordinaryLocateBudget.current.frames >= 60)
+            throw new Error("Message row was not published for scrolling");
+          frame = requestAnimationFrame(position);
+        } catch (error) {
+          fail(error);
+        }
+      };
+      position();
+      return () => {
+        cancelled = true;
+        try {
+          cancelAnimationFrame(frame);
+        } catch (error) {
+          if (activeJumpOwner.current === owner)
+            setOrdinaryJumpError({ owner, error: String(error) });
+        }
+      };
     }
     if (isLoading) return;
     setSystemLocate({ owner, messageId: jumpToMessageId, status: "locating" });
@@ -700,6 +758,8 @@ export function MessageList({
     isFetchingEarlier,
     onJumped,
     channelId,
+    itemKey,
+    ordinaryJumpError,
   ]);
 
   // One-shot flash lifecycle. The flash visual is declarative — the row
@@ -859,6 +919,9 @@ export function MessageList({
     <div
       data-message-list
       className="relative min-h-0 min-w-0 flex-1 flex flex-col"
+      data-message-jump-error={
+        ordinaryJumpError?.owner === jumpOwner ? ordinaryJumpError.error : undefined
+      }
       data-system-jump-state={systemLocate?.status}
       data-system-jump-message-id={systemLocate?.messageId}
       data-system-jump-owner={systemLocate?.owner}
